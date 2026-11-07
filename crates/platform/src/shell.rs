@@ -27,6 +27,18 @@ pub fn pick_folder(owner: isize, title: &str) -> Option<std::path::PathBuf> {
 }
 
 /// Is Windows set to dark mode for apps (HKCU ...\Themes\Personalize\AppsUseLightTheme = 0)?
+/// Two-letter code of the Windows display language ("id", "en", …; "en" when not known).
+pub fn ui_language() -> String {
+    // SAFETY: no arguments.
+    let lang = unsafe { windows::Win32::Globalization::GetUserDefaultUILanguage() } & 0x3ff;
+    // ponytail: only the languages Kakangkung has tables for; a full LCID map when there are more.
+    match lang {
+        0x21 => "id",
+        _ => "en",
+    }
+    .to_string()
+}
+
 pub fn dark_mode() -> bool {
     use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
     let (key, value) = (

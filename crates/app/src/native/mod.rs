@@ -48,8 +48,9 @@ pub(crate) fn data_path(page: &str) -> Option<&str> {
     }
 }
 
-pub(crate) fn title(page: &str) -> &'static str {
-    match page {
+/// The tab title of a built-in page, in the interface language.
+pub(crate) fn title(page: &str) -> String {
+    crate::i18n::tr(match page {
         "settings" => "Settings",
         "history" => "History",
         "bookmarks" => "Bookmarks",
@@ -62,7 +63,8 @@ pub(crate) fn title(page: &str) -> &'static str {
         "sync" => "Sync",
         "welcome" => "Welcome",
         _ => "",
-    }
+    })
+    .into_owned()
 }
 
 /// What a control asks the browser to do.

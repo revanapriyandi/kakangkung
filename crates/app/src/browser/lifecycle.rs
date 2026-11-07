@@ -248,7 +248,7 @@ impl Browser {
                 let v = &mut self.tabs[i].view;
                 v.discarded = false;
                 v.loading = false;
-                v.title = crate::native::title(page).into();
+                v.title = crate::native::title(page);
                 // Counts as a finished load (bookmark star, self-test).
                 let _ = self.proxy.send_event(Msg::Load { id, url: v.url.clone(), done: true });
             }
@@ -267,7 +267,7 @@ impl Browser {
         let native = crate::native::page_of(&url).is_some();
         if native && self.native.tab == id && self.tabs[i].webview.is_none() {
             // Still a native page: show it again (anchor, fresh data) under its own title.
-            self.tabs[i].view.title = crate::native::page_of(&url).map(crate::native::title).unwrap_or_default().into();
+            self.tabs[i].view.title = crate::native::page_of(&url).map(crate::native::title).unwrap_or_default();
             self.show_native(id);
             return;
         }

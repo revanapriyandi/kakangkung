@@ -3,6 +3,8 @@
 use std::time::Instant;
 
 use platform::menu::MenuItem;
+
+use crate::i18n::tr;
 use platform::popup::PopupRow;
 use serde_json::{json, Value as Json};
 use storage::Store;
@@ -409,10 +411,10 @@ fn menu_items(rows: &[Json], ids: &mut Vec<String>) -> Vec<MenuItem> {
     let mut out: Vec<MenuItem> = vec![];
     let item = |ids: &mut Vec<String>, id: &str, label: &str, key: &str| {
         ids.push(id.to_string());
-        MenuItem::new(ids.len() as u32, label, key)
+        MenuItem::new(ids.len() as u32, &tr(label), key)
     };
     for r in rows {
-        let label = r["label"].as_str().unwrap_or("");
+        let label = &*tr(r["label"].as_str().unwrap_or(""));
         let next = if r.get("sep").is_some() {
             if matches!(out.last(), None | Some(MenuItem::Separator)) {
                 continue;
@@ -426,7 +428,7 @@ fn menu_items(rows: &[Json], ids: &mut Vec<String>) -> Vec<MenuItem> {
                 MenuItem::Separator,
                 item(ids, "fullscreen", "Full screen", "F11"),
             ];
-            MenuItem::Submenu { label: format!("Zoom  {}", r["value"].as_str().unwrap_or("")), items }
+            MenuItem::Submenu { label: tr(&format!("Zoom  {}", r["value"].as_str().unwrap_or(""))).into_owned(), items }
         } else if let Some(sub) = r.get("sub").and_then(Json::as_array) {
             MenuItem::Submenu { label: label.to_string(), items: menu_items(sub, ids) }
         } else {
@@ -469,7 +471,9 @@ fn popup_row(kind: &str, r: &Json) -> PopupRow {
         PopupRow { id: text("url"), kind: row_kind, title: if title.is_empty() { display } else { title }, detail, ..Default::default() }
     } else {
         let kind = if r["header"].as_bool() == Some(true) { "header" } else { "tab" };
-        PopupRow { id: text("id"), kind: kind.into(), title: text("label"), detail: text("key"), sub: text("sub"), close: text("close") }
+        // Headers are ours to translate; tab rows hold page titles.
+        let title = if kind == "header" { tr(&text("label")).into_owned() } else { text("label") };
+        PopupRow { id: text("id"), kind: kind.into(), title, detail: text("key"), sub: text("sub"), close: text("close") }
     }
 }
 
