@@ -123,7 +123,7 @@ pub(super) fn taskmanager_shown(b: &mut Browser) -> (bool, String) {
     (shown && procs >= 3 && ticking, format!("Task manager native={shown}: {procs} processes, refreshes every 2 s={ticking}"))
 }
 
-/// Downloads (Ctrl+J): drawn at once from this run's list.
+/// Downloads (Ctrl+J): this run's list and the kept downloads.
 pub(super) fn downloads_shown(b: &mut Browser) -> (bool, String) {
     let doc = b.page.doc();
     let shown = showing(b, "downloads");

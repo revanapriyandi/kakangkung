@@ -52,6 +52,7 @@ pub(crate) enum Stage {
     WaitHistorySearch,
     WaitBookmarks,
     WaitTools,
+    WaitDownloads,
     WaitExtensions,
     /// Visiting the remaining native pages one by one (index into `native::TOUR`).
     Tour(usize),
@@ -550,6 +551,10 @@ impl SelfTest {
                 let (ok, detail) = native::taskmanager_shown(b);
                 self.add_native(ok, detail);
                 b.act(Action::Downloads);
+                self.stage = Stage::WaitDownloads;
+                self.poll_at = Some(Instant::now() + Duration::from_millis(1000));
+            }
+            (Stage::WaitDownloads, Observed::Script) => {
                 let (ok, detail) = native::downloads_shown(b);
                 self.add_native(ok, detail);
                 b.open_after_active(&format!("{}extensions", ui::INTERNAL));
