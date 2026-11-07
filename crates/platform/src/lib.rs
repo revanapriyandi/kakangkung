@@ -4,6 +4,7 @@
 
 mod completion;
 mod downloads;
+mod favicon;
 mod extensions;
 mod hash;
 mod hooks;
