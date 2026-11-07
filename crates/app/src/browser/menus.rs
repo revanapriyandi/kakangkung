@@ -198,6 +198,10 @@ impl Browser {
         if id == "update-restart" {
             return !self.restart_to_update();
         }
+        if let Some(what) = id.strip_prefix("group:") {
+            self.group_action(what);
+            return !self.tabs.is_empty();
+        }
         if let Some(what) = id.strip_prefix("tab:") {
             self.tab_action(what);
             return !self.tabs.is_empty();
@@ -429,7 +433,10 @@ fn menu_items(rows: &[Json], ids: &mut Vec<String>) -> Vec<MenuItem> {
             match r["id"].as_str().unwrap_or("") {
                 // Information line (site info, profile): shown, not clickable.
                 "" => MenuItem::Item { id: u32::MAX, label: label.to_string(), shortcut: String::new(), enabled: false, checked: false },
-                id => item(ids, id, label, r["key"].as_str().unwrap_or("")),
+                id => match item(ids, id, label, r["key"].as_str().unwrap_or("")) {
+                    MenuItem::Item { id, label, shortcut, enabled, .. } if r["checked"] == true => MenuItem::Item { id, label, shortcut, enabled, checked: true },
+                    other => other,
+                },
             }
         };
         out.push(next);
