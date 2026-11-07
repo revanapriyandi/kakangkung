@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint and test (Windows x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins the stable MSVC toolchain; rustup installs it on first use.
+      - name: Rust toolchain
+        run: rustup show active-toolchain
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Unit tests
+        run: cargo test --workspace --locked
+
+  self-test:
+    name: Self-test (drives the real browser)
+    runs-on: windows-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Run the self-test
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'selftest.json'
+          $env:KAKANGKUNG_SHOT_DIR = Join-Path $env:RUNNER_TEMP 'shots'
+          New-Item -ItemType Directory -Force $env:KAKANGKUNG_SHOT_DIR | Out-Null
+          Start-Process -FilePath target\release\kakangkung.exe -ArgumentList "--self-test `"$out`"" -Wait
+          $r = Get-Content $out -Raw | ConvertFrom-Json
+          $r.steps | ForEach-Object { '{0,-5} {1}: {2}' -f ($(if ($_.passed) { 'PASS' } else { 'FAIL' })), $_.step, $_.detail }
+          $failed = @($r.steps | Where-Object { -not $_.passed })
+          if ($failed.Count) { throw "$($failed.Count) self-test step(s) failed" }
+
+      - name: Screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: self-test-screenshots
+          path: ${{ runner.temp }}/shots
+          if-no-files-found: ignore

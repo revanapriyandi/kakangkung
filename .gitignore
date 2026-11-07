@@ -1,0 +1,17 @@
+# Build output
+/target/
+/dist/
+**/target/
+
+# Local notes and captures that are not part of the project
+/MECHANICS.md
+/mechanics.json
+/shots/
+/bench/results/
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+.DS_Store

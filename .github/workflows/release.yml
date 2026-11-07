@@ -1,0 +1,109 @@
+name: Release
+
+# A tag "v1.2.3" builds every supported platform, makes the installers and portable zips,
+# writes SHA256SUMS.txt and publishes the GitHub release that the built-in updater reads.
+# "Run workflow" (manual) builds the same files as a dry run and keeps them as artifacts.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to stamp on a dry-run build (empty = the one in Cargo.toml)
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            target: x86_64-pc-windows-msvc
+          - arch: arm64
+            target: aarch64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        shell: pwsh
+        run: |
+          $cargo = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ('${{ github.ref_type }}' -eq 'tag') {
+            $v = '${{ github.ref_name }}'.TrimStart('v')
+            if ($v -ne $cargo) { throw "Tag v$v does not match the version in Cargo.toml ($cargo)" }
+          } elseif ('${{ inputs.version }}') { $v = '${{ inputs.version }}' } else { $v = $cargo }
+          "VERSION=$v" | Out-File -Append $env:GITHUB_ENV
+          "Building Kakangkung $v for ${{ matrix.arch }}"
+
+      - name: Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Portable zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path target\${{ matrix.target }}\release\kakangkung.exe, LICENSE, README.md `
+            -DestinationPath "dist\Kakangkung-$env:VERSION-${{ matrix.arch }}.zip"
+
+      - name: Installer
+        shell: pwsh
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          & $iscc "/DAppVersion=$env:VERSION" "/DArch=${{ matrix.arch }}" `
+            "/DBinDir=..\target\${{ matrix.target }}\release" "/DOutDir=..\dist" installer\kakangkung.iss
+          if ($LASTEXITCODE) { throw "Inno Setup failed ($LASTEXITCODE)" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kakangkung-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: kakangkung-*
+          merge-multiple: true
+          path: dist
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: GitHub release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" dist/* \
+            --repo "${{ github.repository }}" \
+            --title "Kakangkung ${{ github.ref_name }}" \
+            --generate-notes --verify-tag
+
+      - name: Dry-run files
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: kakangkung-release-dry-run
+          path: dist/*

@@ -1,0 +1,13 @@
+[package]
+name = "servo-engine"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Kakangkung's light engine: Servo in its own window, for measuring and as the second engine."
+
+# Its own workspace: Servo is a very large build, so `cargo build` in the main workspace never
+# pulls it in. Build it from this folder.
+[workspace]
+
+[dependencies]
+servo = "=0.8.0"

@@ -1,0 +1,31 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+default-members = ["crates/app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+wry = { version = "=0.57.1", default-features = false, features = ["os-webview", "devtools"] }
+tao = { version = "=0.37.2", default-features = false, features = ["rwh_06"] }
+webview2-com = "=0.39.1"
+windows = "=0.62.2"
+rusqlite = { version = "=0.41.1", features = ["bundled"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+toml = "=1.2.1"
+serde_json = "=1.0.154"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true
+opt-level = 3
+
+# Debug builds: optimise the libraries (WebView2 bindings, JSON, windowing) so even a plain
+# `cargo build` runs smoothly; our own crates stay quick to compile.
+[profile.dev.package."*"]
+opt-level = 2

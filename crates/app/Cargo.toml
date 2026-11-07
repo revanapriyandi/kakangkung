@@ -1,0 +1,22 @@
+[package]
+name = "app"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "kakangkung"
+path = "src/main.rs"
+
+[dependencies]
+platform = { path = "../platform" }
+tabs = { path = "../tabs" }
+storage = { path = "../storage" }
+memory = { path = "../memory" }
+serde.workspace = true
+serde_json.workspace = true
+ui = { path = "../ui" }
+wry.workspace = true
+tao.workspace = true
+
+[build-dependencies]
+ui = { path = "../ui" }

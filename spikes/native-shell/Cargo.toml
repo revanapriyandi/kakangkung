@@ -1,0 +1,17 @@
+[package]
+name = "native-shell-spike"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Spike: Slint native browser frame + WebView2 page + native menu over the page, with memory numbers."
+publish = false
+
+# Its own workspace so the main build is untouched while the native UI is evaluated.
+[workspace]
+
+[dependencies]
+slint = { version = "=1.18.1", default-features = false, features = ["std", "backend-winit", "renderer-software", "software-renderer-systemfonts", "accessibility", "compat-1-2", "raw-window-handle-06"] }
+raw-window-handle = "0.6"
+wry = { version = "=0.57.1", default-features = false, features = ["os-webview"] }
+windows = { version = "=0.62.2", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_Graphics_Gdi"] }
+platform = { path = "../../crates/platform" }
