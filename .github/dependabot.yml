@@ -1,10 +1,7 @@
+# Crate versions are pinned on purpose (`=` in Cargo.toml) and moved by hand after reading their
+# changelogs; Dependabot keeps the GitHub Actions up to date.
 version: 2
 updates:
-  - package-ecosystem: cargo
-    directory: /
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
   - package-ecosystem: github-actions
     directory: /
     schedule:
