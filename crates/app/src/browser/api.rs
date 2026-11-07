@@ -365,6 +365,15 @@ impl Browser {
                     Err(e) => json!({ "error": e }),
                 })
             }
+            // Downloads kept from before, shaped like this run's (see `page_host::live_downloads`).
+            "downloads" => self.db_reply(respond, |s| match s.downloads(500) {
+                Ok(list) => Json::Array(
+                    list.into_iter()
+                        .map(|d| json!({ "id": format!("s{}", d.id), "url": d.url, "path": d.path, "received": d.size, "total": d.size, "state": if d.done { "Done" } else { "Stopped" }, "started": d.started }))
+                        .collect(),
+                ),
+                Err(e) => json!({ "error": e }),
+            }),
             "bookmarks" => self.db_reply(respond, |s| s.bookmarks().map(|b| json!(b)).unwrap_or_else(|e| json!({ "error": e }))),
             "bookmarks/remove" => {
                 let p = self.proxy.clone();

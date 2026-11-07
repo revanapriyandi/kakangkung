@@ -17,7 +17,22 @@ const MIGRATIONS: &[&str] = &[
      CREATE INDEX history_last ON history(last_visit DESC);
      CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)",
     "CREATE TABLE bookmarks(url TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', added INTEGER NOT NULL)",
+    "CREATE TABLE downloads(id INTEGER PRIMARY KEY, url TEXT NOT NULL, path TEXT NOT NULL, size INTEGER NOT NULL, done INTEGER NOT NULL, started INTEGER NOT NULL)",
 ];
+
+/// A finished download kept for the Downloads page after a restart.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PastDownload {
+    pub id: i64,
+    pub url: String,
+    pub path: String,
+    /// Bytes received.
+    pub size: i64,
+    /// Completed (else cancelled or failed).
+    pub done: bool,
+    /// Unix ms when it started.
+    pub started: i64,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Bookmark {
@@ -184,6 +199,31 @@ impl Store {
         Ok(rows.into_iter().map(|r| Bookmark { url: r[0].text(), title: r[1].text(), added: r[2].int() }).collect())
     }
 
+    /// Keep finished downloads (their `id` is ignored; the database gives one).
+    pub fn add_downloads(&self, list: &[PastDownload]) -> Result<usize, String> {
+        self.db.run_many(
+            "INSERT INTO downloads(url, path, size, done, started) VALUES(?1, ?2, ?3, ?4, ?5)",
+            list.iter().map(|d| vec![d.url.as_str().into(), d.path.as_str().into(), d.size.into(), i64::from(d.done).into(), d.started.into()]),
+        )
+    }
+
+    /// Newest first.
+    pub fn downloads(&self, limit: i64) -> Result<Vec<PastDownload>, String> {
+        let rows = self.db.query("SELECT id, url, path, size, done, started FROM downloads ORDER BY started DESC, id DESC LIMIT ?", &[limit.into()])?;
+        Ok(rows
+            .into_iter()
+            .map(|r| PastDownload { id: r[0].int(), url: r[1].text(), path: r[2].text(), size: r[3].int(), done: r[4].int() != 0, started: r[5].int() })
+            .collect())
+    }
+
+    /// Take one download off the list (the file stays); `None` takes them all.
+    pub fn forget_downloads(&self, id: Option<i64>) -> Result<(), String> {
+        match id {
+            Some(id) => self.db.run("DELETE FROM downloads WHERE id = ?", &[id.into()]),
+            None => self.db.run("DELETE FROM downloads", &[]),
+        }
+    }
+
     /// Most visited pages, one per URL, for the new-tab shortcuts.
     pub fn top_sites(&self, limit: i64) -> Result<Vec<Visit>, String> {
         self.history_where("1", &[], "visit_count DESC, last_visit DESC", limit)
@@ -315,6 +355,20 @@ mod tests {
             let _ = std::fs::remove_file(format!("{}{ext}", p.display()));
         }
         (Store::open(&p).expect("open"), p)
+    }
+
+    #[test]
+    fn downloads_are_kept_newest_first_and_forgotten() {
+        let (s, _) = temp_store("d");
+        let d = |url: &str, started| PastDownload { id: 0, url: url.into(), path: format!("C:/dl/{started}.zip"), size: 10, done: true, started };
+        assert_eq!(s.add_downloads(&[d("https://a.example/", 1000), d("https://b.example/", 2000)]).unwrap(), 2);
+        let list = s.downloads(10).unwrap();
+        assert_eq!(list.iter().map(|d| d.url.as_str()).collect::<Vec<_>>(), ["https://b.example/", "https://a.example/"]);
+        assert!(list[0].done && list[0].size == 10);
+        s.forget_downloads(Some(list[0].id)).unwrap();
+        assert_eq!(s.downloads(10).unwrap().len(), 1);
+        s.forget_downloads(None).unwrap();
+        assert!(s.downloads(10).unwrap().is_empty());
     }
 
     #[test]
