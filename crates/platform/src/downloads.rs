@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use webview2_com::Microsoft::Web::WebView2::Win32::{
-    ICoreWebView2DownloadOperation, ICoreWebView2_4, COREWEBVIEW2_DOWNLOAD_STATE, COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED,
+    ICoreWebView2DownloadOperation, ICoreWebView2_13, ICoreWebView2_4, COREWEBVIEW2_DOWNLOAD_STATE, COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED,
     COREWEBVIEW2_DOWNLOAD_STATE_INTERRUPTED,
 };
 use webview2_com::{take_pwstr, BytesReceivedChangedEventHandler, DownloadStartingEventHandler, StateChangedEventHandler};
@@ -36,6 +36,8 @@ pub struct DownloadInfo {
     pub can_resume: bool,
     /// Unix ms when it started.
     pub started: i64,
+    /// From an Incognito window: never written to disk.
+    pub private: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +54,7 @@ struct Item {
     op: ICoreWebView2DownloadOperation,
     paused: bool,
     started: i64,
+    private: bool,
 }
 
 thread_local! {
@@ -67,6 +70,16 @@ fn now_ms() -> i64 {
 /// the registration token for [`unwatch`].
 pub(crate) fn watch(wv: &WebView, on_change: Rc<dyn Fn()>) -> Option<i64> {
     let core4 = wv.webview().cast::<ICoreWebView2_4>().ok()?;
+    let mut private = BOOL(0);
+    if let Ok(core13) = wv.webview().cast::<ICoreWebView2_13>() {
+        // SAFETY: plain COM calls; `private` is a writable local.
+        unsafe {
+            if let Ok(profile) = core13.Profile() {
+                let _ = profile.IsInPrivateModeEnabled(&mut private);
+            }
+        }
+    }
+    let private = private.as_bool();
     let handler = DownloadStartingEventHandler::create(Box::new(move |_, args| {
         let Some(args) = args else { return Ok(()) };
         // SAFETY: plain COM calls on the live event args and the operation they hand over.
@@ -97,7 +110,7 @@ pub(crate) fn watch(wv: &WebView, on_change: Rc<dyn Fn()>) -> Option<i64> {
                 }
             }
         }
-        LIST.with(|l| l.borrow_mut().push(Item { id, op, paused: false, started: now_ms() }));
+        LIST.with(|l| l.borrow_mut().push(Item { id, op, paused: false, started: now_ms(), private }));
         on_change();
         Ok(())
     }));
@@ -143,12 +156,30 @@ fn info(item: &Item) -> DownloadInfo {
         _ if item.paused => DownloadState::Paused,
         _ => DownloadState::InProgress,
     };
-    DownloadInfo { id: item.id, url, path, received, total, state, can_resume: can_resume.as_bool(), started: item.started }
+    DownloadInfo { id: item.id, url, path, received, total, state, can_resume: can_resume.as_bool(), started: item.started, private: item.private }
 }
 
 /// Every download of this run, newest first.
 pub fn downloads() -> Vec<DownloadInfo> {
     LIST.with(|l| l.borrow().iter().rev().map(info).collect())
+}
+
+/// Take the downloads that ended (done, cancelled or failed) off this list, except Incognito
+/// ones, for the caller to keep on disk.
+pub fn take_finished() -> Vec<DownloadInfo> {
+    LIST.with(|l| {
+        let mut list = l.borrow_mut();
+        let mut finished = vec![];
+        list.retain(|item| {
+            let d = info(item);
+            let ended = matches!(d.state, DownloadState::Done | DownloadState::Stopped) && !d.private;
+            if ended {
+                finished.push(d);
+            }
+            !ended
+        });
+        finished
+    })
 }
 
 pub fn download_action(id: u64, action: DownloadAction) -> crate::Result<()> {
