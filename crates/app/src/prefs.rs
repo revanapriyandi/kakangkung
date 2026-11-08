@@ -67,6 +67,7 @@ pub(crate) const SETTABLE: &[(&str, &[&str], &str)] = &[
     // Privacy and security, autofill
     ("privacy.tracking", &["0", "1", "2", "3"], "2"),
     ("privacy.safe_browsing", ON_OFF, "1"),
+    ("privacy.adblock", ON_OFF, "1"),
     ("privacy.https_first", ON_OFF, "1"),
     ("privacy.passwords", ON_OFF, "1"),
     ("privacy.autofill", ON_OFF, "1"),
@@ -249,6 +250,7 @@ impl Settings {
                 script: v("site.javascript") == "allow",
                 blocked: PERMISSION_KINDS.iter().filter(|(k, _)| v(k) == "block").fold(0, |m, (_, kind)| m | 1 << kind),
                 ask_downloads: on("downloads.ask"),
+                adblock: on("privacy.adblock"),
             },
             https_first: on("privacy.https_first"),
             clear_on_exit: on("privacy.clear_on_exit"),
@@ -428,6 +430,7 @@ mod tests {
         let d = Settings::read(|_| None);
         assert!(s.clear_history && s.clear_cookies && !s.clear_cache && s.mute_sites && s.preferred_language == "id");
         assert!(d.protection.script && d.protection.blocked == 0 && d.clear_since(1).is_none());
+        assert!(d.protection.adblock, "the ad blocker is on unless switched off");
         assert!(s.block_images && s.protection.ask_downloads && !s.show_downloads_done);
         assert!(d.clear_cache && !d.mute_sites && d.preferred_language == "auto" && !d.block_images && !d.protection.ask_downloads);
     }

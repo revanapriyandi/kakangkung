@@ -62,6 +62,8 @@ with ⋮ > *Restart to update*. Details: [docs/INSTALL.md](docs/INSTALL.md),
 - **Sign in with Google**: bookmarks, history, open tabs and settings sync between your PCs through
   a hidden app folder in your Google Drive — see [docs/GOOGLE_SIGNIN.md](docs/GOOGLE_SIGNIN.md).
   Google's own sign-in works on websites, including sign-in pop-ups.
+- **Built-in ad blocker** (on by default, *Settings > Privacy and security > Block ads*): requests
+  to known ad networks never leave the browser. Tracking prevention handles trackers.
 - **Incognito windows**, **import** of history, bookmarks and extensions from Chrome, Edge, Brave
   and Firefox.
 - **Every feature has a setting** — see [docs/SETTINGS.md](docs/SETTINGS.md) — including light/dark

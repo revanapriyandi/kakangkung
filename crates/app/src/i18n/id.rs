@@ -369,6 +369,8 @@ pub(super) const TEXT: &[(&str, &str)] = &[
     ("Tracking prevention", "Pencegahan pelacakan"),
     ("Blocks trackers from sites you haven't visited; Strict may break some sites", "Memblokir pelacak dari situs yang belum Anda kunjungi; Ketat dapat merusak beberapa situs"),
     ("Safe Browsing", "Penjelajahan Aman"),
+    ("Block ads", "Blokir iklan"),
+    ("Built-in ad blocker: requests to known ad networks are refused; switch off if a site breaks", "Pemblokir iklan bawaan: permintaan ke jaringan iklan yang dikenal ditolak; matikan jika sebuah situs bermasalah"),
     ("Microsoft Defender SmartScreen warns about dangerous sites and downloads", "Microsoft Defender SmartScreen memperingatkan situs dan download berbahaya"),
     ("Always use secure connections", "Selalu gunakan koneksi aman"),
     ("HTTPS-First: typed http:// addresses open over https://", "HTTPS-First: alamat http:// yang diketik dibuka lewat https://"),

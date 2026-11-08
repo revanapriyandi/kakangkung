@@ -18,6 +18,9 @@ pub(crate) fn html(body: Cow<'static, [u8]>, status: u16) -> Response<Cow<'stati
 pub(crate) const INTERNAL_CSP: &str = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; \
     img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'";
 
+/// The ad-network host the self-test's ad-blocker step asks for (see `selftest`).
+pub(crate) const SELFTEST_AD: &str = "https://securepubads.g.doubleclick.net";
+
 pub(crate) fn reply(body: Cow<'static, [u8]>, status: u16, content_type: &str) -> Response<Cow<'static, [u8]>> {
     Response::builder()
         .status(status)
@@ -66,7 +69,15 @@ impl Reply {
 /// session token for its `/api` script. Every page people see is native (`crate::native`).
 pub(crate) fn builtin_page(path: &str, token: &str) -> Response<Cow<'static, [u8]>> {
     match path {
-        "/selftest" => html(format!("<!doctype html><meta name=kakangkung-token content=\"{token}\"><title>{APP} self-test</title>").into_bytes().into(), 200),
+        "/selftest" => {
+            let mut r = html(format!("<!doctype html><meta name=kakangkung-token content=\"{token}\"><title>{APP} self-test</title>").into_bytes().into(), 200);
+            // The ad-blocker step loads an image from an ad network, so this page may ask for it.
+            let csp = INTERNAL_CSP.replace("img-src 'self' data:", &format!("img-src 'self' data: {SELFTEST_AD}"));
+            if let Ok(v) = csp.parse() {
+                r.headers_mut().insert("Content-Security-Policy", v);
+            }
+            r
+        }
         _ => html(b"<!doctype html><title>Not found</title>".as_slice().into(), 404),
     }
 }
