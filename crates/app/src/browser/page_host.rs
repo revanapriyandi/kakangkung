@@ -134,7 +134,11 @@ impl Browser {
         }
         let data = &self.native.data;
         let mut doc = match page {
-            "newtab" => native::newtab_doc(&self.search.1),
+            "newtab" => {
+                let doc = native::newtab_doc(&self.search.1, data);
+                self.load_site_icons(&doc);
+                doc
+            }
             "incognito" => native::incognito_doc(),
             "signin" => native::signin_doc(data, &self.native.inputs),
             "sync" => native::sync_doc(data),
@@ -145,6 +149,7 @@ impl Browser {
             "downloads" => native::downloads_doc(&self.downloads_list()),
             "extensions" => native::extensions_doc(&self.native.data),
             "taskmanager" => native::taskmanager_doc(&self.native.data),
+            "passwords" => native::passwords_doc(&self.native.data),
             _ => return,
         };
         // Opening the browser on the New Tab page: the logo drops in, bouncing.
@@ -164,9 +169,29 @@ impl Browser {
     /// `page\t<kind>\t<id>\t<value>` from the page window.
     pub(crate) fn on_page_command(&mut self, kind: &str, id: &str, value: &str) {
         let Some(page) = self.native_page() else { return };
+        // The New Tab page's search box works like the address bar: typing shows suggestions
+        // under it, ↑ ↓ walk them, Enter goes, Escape or leaving it closes them.
+        if page == "newtab" && id == "fakebox" {
+            match (kind, value) {
+                ("input", text) => {
+                    self.omnibox.in_page = true;
+                    self.on_omnibox_change(text);
+                }
+                ("text", _) => {
+                    self.omnibox.in_page = true;
+                    self.on_omnibox_key("enter");
+                }
+                ("key", "blur") if self.omnibox.in_page => self.close_suggestions(),
+                ("key", key) if self.omnibox.in_page => {
+                    self.on_omnibox_key(key);
+                }
+                _ => {}
+            }
+            return;
+        }
         match native::step(page, kind, id, value) {
             Some(Step::Call { path, body, done, confirm }) => {
-                if confirm.is_some_and(|q| !platform::confirm(self.window.hwnd(), APP, q)) {
+                if confirm.is_some_and(|q| !platform::confirm(self.window.hwnd(), APP, &crate::i18n::tr(q))) {
                     return;
                 }
                 let reply = self.reply_to(&path, &done);
@@ -275,7 +300,15 @@ impl Browser {
                 }
                 Ok(())
             }
-            // The person asked to open the file they downloaded; Windows opens it with its app.
+            // A PDF, picture, video or text Kakangkung shows itself opens in a tab next to this one.
+            "open" if ui::viewable_file(&path) && std::path::Path::new(&path).is_file() => match ui::file_url(&path) {
+                Some(url) => {
+                    self.open_after_active(&url);
+                    Ok(())
+                }
+                None => Err("cannot open that file".into()),
+            },
+            // Anything else: Windows opens it with its app.
             "open" if !path.is_empty() => std::process::Command::new("explorer.exe").arg(&path).spawn().map(|_| ()).map_err(|e| e.to_string()),
             "show" if !path.is_empty() => std::process::Command::new("explorer.exe").arg(format!("/select,{path}")).spawn().map(|_| ()).map_err(|e| e.to_string()),
             _ => Ok(()),
@@ -330,4 +363,60 @@ impl Browser {
         self.refresh_native(page);
         self.native.refresh_at
     }
+}
+
+/// Largest site icon fetched for a New Tab tile.
+const MAX_SITE_ICON: usize = 512 * 1024;
+
+impl Browser {
+    /// The New Tab tiles' icons: from disk when fetched before, else fetched once from the site
+    /// itself (its apple-touch-icon, else its favicon.ico) and kept in "Site icons".
+    fn load_site_icons(&mut self, doc: &platform::page::PageDoc) {
+        let dir = storage::data_dir().join("Site icons");
+        for row in doc.sections.iter().flat_map(|s| s.cards.iter().flatten()) {
+            let platform::page::Control::Link { id } = &row.control else { continue };
+            let Some(url) = id.strip_prefix("visit:") else { continue };
+            let host = row.sub.clone();
+            if host.is_empty() || platform::favicon_loaded(&format!("site:{host}")) || !self.site_icons_asked.insert(host.clone()) {
+                continue;
+            }
+            let on_disk = ["png", "ico"].iter().map(|ext| dir.join(format!("{host}.{ext}"))).find(|p| p.is_file());
+            if let Some(path) = on_disk {
+                platform::load_icon_file_as(&path, &format!("site:{host}"));
+                continue;
+            }
+            let (origin, dir, p) = (format!("https://{}", ui::host(url)), dir.clone(), self.proxy.clone());
+            std::thread::spawn(move || {
+                let path = fetch_site_icon(&origin, &dir, &host);
+                let _ = p.send_event(crate::msg::Msg::SiteIcon { host, path });
+            });
+        }
+    }
+
+    /// A tile's icon arrived: show it.
+    pub(crate) fn on_site_icon(&mut self, host: &str, path: Option<std::path::PathBuf>) {
+        if let Some(path) = path {
+            if platform::load_icon_file_as(&path, &format!("site:{host}")) && self.native_page() == Some("newtab") {
+                self.draw_native();
+            }
+        }
+    }
+}
+
+/// Fetch `origin`'s icon into `dir/<host>.png|ico`; `None` when the site has none.
+fn fetch_site_icon(origin: &str, dir: &std::path::Path, host: &str) -> Option<std::path::PathBuf> {
+    for (file, ext) in [("apple-touch-icon.png", "png"), ("favicon.ico", "ico")] {
+        let Ok(bytes) = platform::http::download(&format!("{origin}/{file}"), 10_000, MAX_SITE_ICON) else { continue };
+        // Only real images: a site may answer with an HTML page.
+        let image = bytes.starts_with(b"\x89PNG") || bytes.starts_with(&[0, 0, 1, 0]);
+        if !image {
+            continue;
+        }
+        let _ = std::fs::create_dir_all(dir);
+        let path = dir.join(format!("{host}.{ext}"));
+        if std::fs::write(&path, &bytes).is_ok() {
+            return Some(path);
+        }
+    }
+    None
 }

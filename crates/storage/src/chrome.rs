@@ -57,6 +57,17 @@ const KNOWN: [(&str, &str, &str, &str, bool); 8] = [
     ("firefox", "Mozilla Firefox", "APPDATA", "Mozilla\\Firefox\\Profiles", false),
 ];
 
+/// Where a browser exports its saved passwords to a CSV file: (program, page). Chrome-family
+/// browsers lock new passwords to themselves, so this is how they come over.
+pub fn password_export_page(id: &str) -> Option<(&'static str, &'static str)> {
+    match id {
+        "chrome" => Some(("chrome.exe", "chrome://password-manager/settings")),
+        "edge" => Some(("msedge.exe", "edge://settings/passwords")),
+        "brave" => Some(("brave.exe", "brave://password-manager/settings")),
+        _ => None,
+    }
+}
+
 /// Every supported browser that has data for this Windows user.
 pub fn browsers() -> Vec<Browser> {
     KNOWN
@@ -218,6 +229,46 @@ pub fn read_bookmarks(file: &Path) -> Result<Vec<crate::Bookmark>, String> {
     }
     out.sort_by_key(|b| b.added);
     Ok(out)
+}
+
+/// Saved passwords of a Chromium-family profile (`Login Data`, read from a copy). They are
+/// sealed with the browser's key from "Local State", itself sealed with DPAPI for this Windows
+/// user. Chrome 127+ seals new ones with a key only Chrome can reach ("v20", app-bound): those
+/// are counted as locked. Returns (logins, locked).
+pub fn read_logins(user_data: &Path, profile: &Path) -> Result<(Vec<crate::passwords::Credential>, usize), String> {
+    let file = profile.join("Login Data");
+    if !file.is_file() {
+        return Ok((vec![], 0));
+    }
+    let key = std::fs::read_to_string(user_data.join("Local State"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<Json>(&s).ok())
+        .and_then(|v| v["os_crypt"]["encrypted_key"].as_str().and_then(platform::base64_decode))
+        .and_then(|k| k.strip_prefix(b"DPAPI").map(<[u8]>::to_vec))
+        .and_then(|k| platform::unprotect(&k).ok());
+    let copy = std::env::temp_dir().join(format!("kakangkung-logins-{}.db", std::process::id()));
+    std::fs::copy(&file, &copy).map_err(|e| format!("could not read the saved passwords ({e})"))?;
+    let rows = Db::open(&copy, true).and_then(|db| {
+        db.query("SELECT origin_url, username_value, hex(password_value) FROM logins WHERE blacklisted_by_user = 0", &[])
+    });
+    let _ = std::fs::remove_file(&copy);
+    let (mut out, mut locked) = (vec![], 0);
+    for r in rows? {
+        let hex = r[2].text();
+        let blob: Vec<u8> = (0..hex.len() / 2).filter_map(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).ok()).collect();
+        let password = match blob.get(..3) {
+            Some(b"v10" | b"v11") => key.as_deref().filter(|_| blob.len() > 15).and_then(|k| platform::aes_gcm_decrypt(k, &blob[3..15], &blob[15..])),
+            Some(b"v20") => None,
+            _ => platform::unprotect(&blob).ok(),
+        };
+        let Some(origin) = crate::passwords::origin_of(&r[0].text()) else { continue };
+        match password.and_then(|p| String::from_utf8(p).ok()) {
+            Some(password) if !password.is_empty() => out.push(crate::passwords::Credential { origin, username: r[1].text(), password }),
+            Some(_) => {}
+            None => locked += 1,
+        }
+    }
+    Ok((out, locked))
 }
 
 /// Read Chrome's `urls` table from a (copied) History database.

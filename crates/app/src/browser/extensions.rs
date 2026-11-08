@@ -3,7 +3,7 @@
 //! shown under that button (WebView2 has no extension toolbar of its own).
 
 use serde_json::json;
-use tao::platform::windows::WindowExtWindows;
+use crate::i18n::tr;
 use wry::dpi::{LogicalPosition, LogicalSize};
 use wry::{Rect, WebViewBuilder, WebViewBuilderExtWindows};
 
@@ -63,15 +63,15 @@ impl Browser {
                 None => self.store_button(tab, &ext, "ready", "Add to Kakangkung"),
             },
             "add" => {
-                // The page's button is ours, but the page could click it: the person decides here.
-                let what = if name.is_empty() { "this extension".to_string() } else { format!("\"{}\"", name.chars().take(80).collect::<String>()) };
-                let ask = format!(
-                    "Add {what} to Kakangkung?\n\nIt is downloaded from the Chrome Web Store. Depending on what it asks for, it can read and change your data on websites."
-                );
-                if !platform::confirm(self.window.hwnd(), "Add extension", &ask) {
+                // The page's button is ours, but the page could click it: like Chrome, the
+                // extension is fetched first and only added once the person has seen what it
+                // can do and agreed (`ask_install`). One at a time.
+                if self.pending_install.is_some() {
                     return;
                 }
-                self.store_button(tab, &ext, "busy", "Adding…");
+                let name: String = name.chars().take(80).collect();
+                self.pending_install = Some(PendingInstall { tab, ext: ext.clone(), name, folder: None });
+                self.store_button(tab, &ext, "busy", "Checking…");
                 let (root, version) = (self.paths.extensions.clone(), self.runtime_version());
                 std::thread::spawn(move || {
                     let result = webstore::install(&ext, &version, &root);
@@ -89,9 +89,56 @@ impl Browser {
             Ok(f) => f,
             Err(e) => {
                 eprintln!("web store install {ext}: {e}");
+                self.pending_install = None;
                 return self.store_button(tab, &ext, "ready", &failed(&e));
             }
         };
+        match self.pending_install.as_mut() {
+            Some(p) if p.ext == ext => p.folder = Some(folder),
+            _ => return,
+        }
+        self.ask_install();
+    }
+
+    /// Chrome's install dialog under the toolbar: 'Add "name"?', what the extension can do,
+    /// Add extension / Cancel. The answer comes back as a pick of the "extinstall" pop-up.
+    fn ask_install(&mut self) {
+        let Some(p) = &self.pending_install else { return };
+        let Some(folder) = p.folder.clone() else { return };
+        let (tab, ext) = (p.tab, p.ext.clone());
+        let title = if p.name.is_empty() { tr("Add this extension?").into_owned() } else { tr("Add \"{name}\"?").replace("{name}", &p.name) };
+        self.store_button(tab, &ext, "busy", "Waiting for you…");
+        let mut rows = vec![json!({ "header": true, "id": "", "label": title })];
+        let warnings = webstore::permission_warnings(&folder);
+        if warnings.is_empty() {
+            rows.push(json!({ "note": true, "label": tr("It needs no special permissions.") }));
+        } else {
+            rows.push(json!({ "note": true, "label": tr("It can:") }));
+            rows.extend(warnings.iter().map(|w| json!({ "note": true, "label": format!("•  {}", tr(w)) })));
+        }
+        rows.push(json!({ "buttons": true, "id": "add", "label": tr("Add extension"), "key": tr("Cancel"), "close": "cancel" }));
+        let scale = self.window.scale_factor();
+        let width = self.window.inner_size().width as f64 / scale;
+        let w = 440.0;
+        let data = json!({ "rows": rows }).to_string();
+        self.show_overlay("extinstall", [(width - w - 8.0).max(0.0), platform::frame::FRAME_H as f64 - 4.0, w, 0.0], &data);
+    }
+
+    /// The install dialog was answered (or closed: `add` false).
+    pub(crate) fn finish_install(&mut self, add: bool) {
+        let Some(PendingInstall { tab, ext, folder, .. }) = self.pending_install.take() else { return };
+        self.hide_overlay();
+        let Some(folder) = folder else { return };
+        if !add {
+            let _ = std::fs::remove_dir_all(&folder);
+            return self.store_button(tab, &ext, "ready", "Add to Kakangkung");
+        }
+        self.store_button(tab, &ext, "busy", "Adding…");
+        self.load_store_extension(tab, ext, folder);
+    }
+
+    fn load_store_extension(&mut self, tab: u64, ext: String, folder: std::path::PathBuf) {
+        let failed = |e: &str| format!("Couldn't add: {}", e.chars().take(90).collect::<String>());
         let Some(wv) = self.extension_host() else { return self.store_button(tab, &ext, "ready", &failed("open a tab first")) };
         let proxy = self.proxy.clone();
         platform::extension_add(wv, &folder, move |r| {
@@ -127,18 +174,22 @@ impl Browser {
             .collect();
         if rows.is_empty() {
             rows.push(json!({ "id": "", "label": "No extensions yet", "key": "" }));
+        } else {
+            // Chrome's pin buttons: a checked item per extension.
+            let pins: Vec<serde_json::Value> = list
+                .iter()
+                .filter(|e| e.enabled && !super::api::BUILTIN_EXTENSIONS.contains(&e.id.as_str()))
+                .map(|e| json!({ "id": format!("extpin:{}", e.id), "label": e.name, "key": "", "checked": self.settings.pinned_extensions.contains(&e.id) }))
+                .collect();
+            rows.push(json!({ "sep": true }));
+            rows.push(json!({ "label": "Pin to toolbar", "sub": pins }));
         }
         rows.push(json!({ "sep": true }));
         rows.push(json!({ "id": "extstore", "label": "Find extensions in the Chrome Web Store", "key": "" }));
         rows.push(json!({ "id": "extensions", "label": "Manage extensions", "key": "" }));
-        let Some(pick) = self.native_popup(rows, right, top, true) else { return };
-        if let Some(id) = pick.strip_prefix("extbubble:") {
-            self.open_bubble(id, right, top);
-        } else if pick == "extstore" {
-            self.open_tab(&format!("https://{}/category/extensions", webstore::HOST), None);
-        } else {
-            self.on_menu(&pick);
-        }
+        // The choice comes back through `on_menu` (extbubble:, extpin:, extstore, extensions).
+        self.menu_at = (right, top);
+        self.native_popup(rows, right, top, true);
     }
 
     /// Show extension `id`'s toolbar pop-up under the button at (`right`, `top`) DIPs; one
@@ -189,6 +240,80 @@ impl Browser {
         self.ext_bubble = Some(wv);
     }
 
+    /// Pin extension `id` to the toolbar, or unpin it; kept in the `PINNED_EXTENSIONS` setting.
+    pub(crate) fn toggle_pin(&mut self, id: &str) {
+        let pins = &mut self.settings.pinned_extensions;
+        match pins.iter().position(|p| p == id) {
+            Some(i) => {
+                pins.remove(i);
+            }
+            None if crate::webstore::valid_id(id) => pins.push(id.to_string()),
+            None => return,
+        }
+        let value = pins.join(",");
+        self.db(move |s| {
+            s.set_setting(crate::prefs::PINNED_EXTENSIONS, &value)?;
+            crate::profile::touch_settings(s);
+            Ok(())
+        });
+        self.render();
+    }
+
+    /// The toolbar's pinned buttons: built-in pages, then extensions (not in Incognito, where
+    /// extensions do not run). An extension's icon comes from its manifest, once per extension.
+    pub(crate) fn pinned_buttons(&self) -> Vec<platform::frame::Pinned> {
+        let pages = self.settings.pinned_pages.iter().map(|page| platform::frame::Pinned {
+            id: format!("page:{page}"),
+            glyph: crate::prefs::PINNABLE_PAGES.iter().find(|(p, _)| p == page).map_or("", |(_, g)| *g),
+            icon: String::new(),
+        });
+        let mut out: Vec<platform::frame::Pinned> = pages.collect();
+        if self.incognito {
+            return out;
+        }
+        for id in self.settings.pinned_extensions.clone() {
+            let icon = self
+                .pinned_icons
+                .borrow_mut()
+                .entry(id.clone())
+                .or_insert_with(|| crate::webstore::button_icon(&self.paths.extensions.join(&id)).and_then(|f| platform::load_icon_file(&f)).unwrap_or_default())
+                .clone();
+            out.push(platform::frame::Pinned { id: format!("ext:{id}"), glyph: "\u{EA86}", icon });
+        }
+        out
+    }
+
+    /// A pinned toolbar button was clicked; (`right`, `top`) is its lower right corner.
+    pub(crate) fn open_pinned(&mut self, id: &str, right: f64, top: f64) {
+        if let Some(ext) = id.strip_prefix("ext:") {
+            self.open_bubble(ext, right, top);
+        } else if let Some(page) = id.strip_prefix("page:") {
+            self.open_after_active(&format!("{}{page}", ui::INTERNAL));
+        }
+    }
+
+    /// Right-click on a pinned button: its menu (Unpin, through `on_menu`).
+    pub(crate) fn pinned_menu(&mut self, id: &str, x: f64, y: f64) {
+        let rows = vec![json!({ "id": format!("unpin:{id}"), "label": "Unpin from toolbar", "key": "" })];
+        self.native_popup(rows, x, y, false);
+    }
+
+    /// Unpin toolbar button `id` (`ext:<id>` or `page:<name>`).
+    pub(crate) fn unpin(&mut self, id: &str) {
+        if let Some(ext) = id.strip_prefix("ext:") {
+            self.toggle_pin(ext);
+        } else if let Some(page) = id.strip_prefix("page:") {
+            let key = format!("appearance.{page}_button");
+            self.settings.pinned_pages.retain(|p| *p != page);
+            self.db(move |s| {
+                s.set_setting(&key, "0")?;
+                crate::profile::touch_settings(s);
+                Ok(())
+            });
+            self.render();
+        }
+    }
+
     pub(crate) fn close_bubble(&mut self) {
         self.ext_bubble = None;
     }
@@ -203,4 +328,13 @@ impl Browser {
         let (right, top) = self.bubble_at;
         let _ = wv.set_bounds(Rect { position: LogicalPosition::new((right - w).max(0.0), top).into(), size: LogicalSize::new(w, h).into() });
     }
+}
+
+/// An extension from the Chrome Web Store waiting for the person's answer: fetched into
+/// `folder` (once downloaded) but not loaded.
+pub(crate) struct PendingInstall {
+    pub(crate) tab: u64,
+    pub(crate) ext: String,
+    pub(crate) name: String,
+    pub(crate) folder: Option<std::path::PathBuf>,
 }

@@ -12,6 +12,7 @@ use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICImagingFactory, WICBitmapDitherTypeNone,
     WICBitmapInterpolationModeFant, WICBitmapPaletteTypeCustom, WICDecodeMetadataCacheOnDemand,
 };
+use windows::core::Interface;
 use windows::Win32::System::Com::{CoCreateInstance, IStream, CLSCTX_INPROC_SERVER};
 
 /// Icon edge in pixels: sharp at 16 DIPs up to 200% scale.
@@ -22,6 +23,11 @@ const MAX: usize = 256;
 
 thread_local! {
     static ICONS: RefCell<HashMap<String, Rc<Vec<u8>>>> = RefCell::new(HashMap::new());
+}
+
+/// Is an icon loaded under `key`?
+pub fn loaded(key: &str) -> bool {
+    get(key).is_some()
 }
 
 /// The decoded icon at `uri` (`SIZE`² BGRA, premultiplied), if loaded.
@@ -58,13 +64,54 @@ pub(crate) fn load(core: &ICoreWebView2_15, uri: String, done: Rc<dyn Fn(String)
     }
 }
 
+/// Make the image file at `path` (an extension's toolbar icon) available to [`get`] under the
+/// key [`file_key`]`(path)`. Returns that key, or `None` when the file cannot be decoded.
+pub fn load_file(path: &std::path::Path) -> Option<String> {
+    let key = file_key(path);
+    (get(&key).is_some() || load_file_as(path, &key)).then_some(key)
+}
+
+/// Make the image file at `path` (PNG, ICO…) available to [`get`] under `key`; an icon file's
+/// largest picture is used. False when the file cannot be decoded.
+pub fn load_file_as(path: &std::path::Path, key: &str) -> bool {
+    // SAFETY: plain WIC calls; the path is a valid, NUL-terminated wide string for its duration.
+    let frame = unsafe {
+        let Ok(wic) = CoCreateInstance::<_, IWICImagingFactory>(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER) else { return false };
+        let Ok(decoder) = wic.CreateDecoderFromFilename(&windows::core::HSTRING::from(path.as_os_str()), None, windows::Win32::Foundation::GENERIC_READ, WICDecodeMetadataCacheOnDemand) else { return false };
+        let count = decoder.GetFrameCount().unwrap_or(1);
+        let size = |i: u32| decoder.GetFrame(i).ok().and_then(|f| {
+            let (mut w, mut h) = (0u32, 0u32);
+            f.GetSize(&mut w, &mut h).ok().map(|_| w * h)
+        });
+        let best = (0..count).max_by_key(|&i| size(i).unwrap_or(0)).unwrap_or(0);
+        decoder.GetFrame(best).ok()
+    };
+    let Some(px) = frame.and_then(|f| f.cast().ok()).and_then(|f| scale(&f).map_err(|e| eprintln!("icon {}: {e}", path.display())).ok()) else { return false };
+    ICONS.with(|m| m.borrow_mut().insert(key.to_string(), Rc::new(px)));
+    true
+}
+
+/// Cache key of an icon loaded from a file.
+fn file_key(path: &std::path::Path) -> String {
+    format!("file:{}", path.display())
+}
+
 fn decode(stream: &IStream) -> windows::core::Result<Vec<u8>> {
+    // SAFETY: plain WIC call on a stream WebView2 handed over.
+    let frame = unsafe {
+        let wic: IWICImagingFactory = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
+        wic.CreateDecoderFromStream(stream, std::ptr::null(), WICDecodeMetadataCacheOnDemand)?.GetFrame(0)?
+    };
+    scale(&frame.cast()?)
+}
+
+/// `SIZE`² premultiplied BGRA pixels of a decoded image.
+fn scale(frame: &windows::Win32::Graphics::Imaging::IWICBitmapSource) -> windows::core::Result<Vec<u8>> {
     // SAFETY: plain WIC calls on objects created here; `px` holds exactly SIZE² 4-byte pixels.
     unsafe {
         let wic: IWICImagingFactory = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
-        let frame = wic.CreateDecoderFromStream(stream, std::ptr::null(), WICDecodeMetadataCacheOnDemand)?.GetFrame(0)?;
         let scaler = wic.CreateBitmapScaler()?;
-        scaler.Initialize(&frame, SIZE, SIZE, WICBitmapInterpolationModeFant)?;
+        scaler.Initialize(frame, SIZE, SIZE, WICBitmapInterpolationModeFant)?;
         let bgra = wic.CreateFormatConverter()?;
         bgra.Initialize(&scaler, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeCustom)?;
         let mut px = vec![0u8; (SIZE * SIZE * 4) as usize];

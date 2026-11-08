@@ -116,7 +116,7 @@ pub(crate) fn taskmanager_doc(m: &Json) -> PageDoc {
     let commit: i64 = procs.iter().map(|p| p["commit"].as_i64().unwrap_or(0)).sum();
     let n = |k: &str| m[k].as_u64().unwrap_or(0);
     let overview = vec![
-        Row::new("Memory in use", "Private working set of every Kakangkung process", Control::Value(size(total))),
+        Row::new("Memory in use", "Every Kakangkung process, counted like the Memory column of Windows Task Manager", Control::Value(size(total))),
         Row::new("Tabs", &format!("{} running · {} frozen · {} not loaded", n("running"), n("frozen"), n("unloaded")), Control::Value((n("running") + n("frozen") + n("unloaded")).to_string())),
         Row::new("Memory Saver", m["mode"].as_str().unwrap_or(""), Control::Link { id: "open:settings/performance".into() }),
     ];

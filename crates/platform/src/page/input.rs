@@ -175,6 +175,12 @@ impl Inner {
                 place(edit, r, 12.0, visible && (focus == edit || !edit_text(edit).is_empty()));
                 placed.push(edit);
             }
+            if let (Some(edit), Some(mut r)) = (self.fakebox_edit(), self.layout.fakebox) {
+                r.top += HEADER_H - self.scroll;
+                r.bottom += HEADER_H - self.scroll;
+                place(edit, r, 52.0, focus == edit || !edit_text(edit).is_empty());
+                placed.push(edit);
+            }
             // Fields of sections the search hides.
             for (_, edit) in self.edits.iter().filter(|(_, e)| !placed.contains(e)) {
                 let _ = ShowWindow(*edit, SW_HIDE);
@@ -246,7 +252,16 @@ impl Inner {
                 }
                 self.send(format!("page\tnav\t{id}\t"));
             }
-            Target::Fakebox => self.send("page\tlink\tomnibox\t".into()),
+            Target::Fakebox => {
+                if let Some(edit) = self.fakebox_edit() {
+                    // SAFETY: our own child control.
+                    unsafe {
+                        let _ = SetFocus(Some(edit));
+                    }
+                    self.place_edits();
+                    self.repaint();
+                }
+            }
             Target::Search => {
                 // SAFETY: our own child control.
                 unsafe {
@@ -503,7 +518,8 @@ pub(super) unsafe extern "system" fn page_proc(hwnd: HWND, msg: u32, wp: WPARAM,
             WM_COMMAND if (wp.0 >> 16) as u32 == 0x0300 => {
                 let edit = HWND(lp.0 as _);
                 if let Some(id) = i.edits.iter().find(|(_, e)| *e == edit).map(|(id, _)| id.clone()) {
-                    let form = i.doc.sections.iter().flat_map(|s| s.cards.iter().flatten()).any(|r| matches!(&r.control, Control::Text { id: t, button, .. } if *t == id && button.is_empty()));
+                    let form = id == super::FAKEBOX
+                        || i.doc.sections.iter().flat_map(|s| s.cards.iter().flatten()).any(|r| matches!(&r.control, Control::Text { id: t, button, .. } if *t == id && button.is_empty()));
                     if form {
                         let cmd = format!("page\tinput\t{id}\t{}", edit_text(edit));
                         i.send(cmd);
@@ -541,6 +557,11 @@ pub(super) unsafe extern "system" fn edit_proc(hwnd: HWND, msg: u32, wp: WPARAM,
                 if let Some(cmd) = shortcut(vk) {
                     i.send(cmd);
                 }
+                if i.fakebox_edit() == Some(hwnd) && (vk == VK_UP.0 || vk == VK_DOWN.0 || vk == VK_ESCAPE.0) {
+                    let key = if vk == VK_UP.0 { "up" } else if vk == VK_DOWN.0 { "down" } else { "escape" };
+                    i.send(format!("page\tkey\t{}\t{key}", super::FAKEBOX));
+                    return LRESULT(0);
+                }
                 if vk == VK_ESCAPE.0 && hwnd == i.search {
                     drop(i);
                     let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowTextW(hwnd, w!(""));
@@ -559,6 +580,9 @@ pub(super) unsafe extern "system" fn edit_proc(hwnd: HWND, msg: u32, wp: WPARAM,
             WM_SETFOCUS | WM_KILLFOCUS => {
                 let r = DefSubclassProc(hwnd, msg, wp, lp);
                 if let Ok(mut i) = cell.try_borrow_mut() {
+                    if msg == WM_KILLFOCUS && i.fakebox_edit() == Some(hwnd) {
+                        i.send(format!("page\tkey\t{}\tblur", super::FAKEBOX));
+                    }
                     i.place_edits();
                     i.repaint();
                 }

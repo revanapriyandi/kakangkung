@@ -4,7 +4,12 @@
 //! `--screenshot <png> [url]`: start, let the page settle, save a PNG of the window, exit.
 //! `--self-test <json>`: drive the browser like a user (address bar, back, new tab, switch,
 //! suspend/resume, close), record what worked, exit.
-//! Any other argument is opened as a URL.
+//! Any other arguments are opened as URLs, one tab each (all loaded, the first selected).
+//! Like Chrome: `--user-data-dir=<folder>` uses that data folder, `--no-first-run` skips the
+//! first-run welcome tab and import (the benchmark in bench/ uses both).
+// A GUI program: no console window opens with it. Debug builds keep the console for eprintln!
+// output; release output still reaches a pipe or file when redirected.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod browser;
 mod google;
 mod i18n;
@@ -86,10 +91,22 @@ fn restore_requested() -> bool {
     std::env::args().any(|a| a == "--restore-session")
 }
 
-fn parse_args() -> Run {
-    let args: Vec<String> = std::env::args().skip(1).filter(|a| a != "--restore-session").collect();
+/// Switches that may come with any run; `parse_args` skips them.
+fn is_global(a: &str) -> bool {
+    a == "--restore-session" || a == "--no-first-run" || a.starts_with("--user-data-dir=")
+}
+
+/// The run, plus further URLs for a normal run (opened as extra tabs).
+fn parse_args() -> (Run, Vec<String>) {
+    let args: Vec<String> = std::env::args().skip(1).filter(|a| !is_global(a)).collect();
     let home = ui::NEWTAB_URL.to_string();
-    match args.as_slice() {
+    if let [url, more @ ..] = args.as_slice() {
+        if !url.starts_with("--") {
+            let resolve = |u: &String| ui::resolve_input(u, ui::DEFAULT_SEARCH);
+            return (Run::Normal(resolve(url).unwrap_or(home)), more.iter().filter_map(resolve).collect());
+        }
+    }
+    let run = match args.as_slice() {
         [flag, path, url, ..] if flag == "--screenshot" => Run::Screenshot(path.into(), url.clone()),
         [flag, path] if flag == "--screenshot" => Run::Screenshot(path.into(), home),
         [flag, path, ..] if flag == "--self-test" => Run::SelfTest(path.into()),
@@ -97,9 +114,9 @@ fn parse_args() -> Run {
             let url = rest.first().and_then(|u| ui::resolve_input(u, ui::DEFAULT_SEARCH)).unwrap_or(home);
             Run::Window { url, incognito: flag == "--incognito" }
         }
-        [url, ..] => Run::Normal(ui::resolve_input(url, ui::DEFAULT_SEARCH).unwrap_or(home)),
-        [] => Run::Normal(home),
-    }
+        _ => Run::Normal(home),
+    };
+    (run, Vec::new())
 }
 
 /// Window frame colour (matches --frame in chrome.html).
@@ -118,11 +135,16 @@ fn icon(size: u32) -> Option<Icon> {
 fn main() {
     timing("start");
     // Output files named on the command line are relative to where we were started from.
-    let run = match parse_args() {
+    let (run, more_urls) = parse_args();
+    let run = match run {
         Run::Screenshot(p, url) => Run::Screenshot(absolute(p), url),
         Run::SelfTest(p) => Run::SelfTest(absolute(p)),
         other => other,
     };
+    // An environment variable, so windows this one starts use the same folder.
+    if let Some(d) = std::env::args().find_map(|a| a.strip_prefix("--user-data-dir=").map(PathBuf::from)) {
+        std::env::set_var("KAKANGKUNG_USER_DATA_DIR", absolute(d));
+    }
     // Run from the program's own folder, so relative paths are stable and Windows never searches
     // the launch folder for DLLs.
     if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)) {
@@ -161,7 +183,7 @@ fn main() {
             .unwrap_or_else(|| std::env::temp_dir().join(format!("kakangkung-test-{}", std::process::id()))),
     };
     let first_run_marker = base.join("first-run-done");
-    let first_run = !first_run_marker.exists();
+    let first_run = !first_run_marker.exists() && !std::env::args().any(|a| a == "--no-first-run");
     if let Err(e) = std::fs::create_dir_all(&base).and_then(|_| std::fs::write(&first_run_marker, b"")) {
         eprintln!("creating {}: {e}", base.display());
     }
@@ -239,7 +261,17 @@ fn main() {
             let ids: Vec<u64> = urls.iter().map(|u| browser.open_tab_lazy(u)).collect();
             browser.activate(ids[active.min(ids.len() - 1)]);
         }
-        None => browser.open_tab(&start_url, None),
+        None => {
+            browser.open_tab(&start_url, None);
+            // Further URLs on the command line: each loads now, like Chrome; the first stays selected.
+            let first = browser.active;
+            for url in &more_urls {
+                browser.open_tab(url, None);
+            }
+            if !more_urls.is_empty() {
+                browser.activate(first);
+            }
+        }
     }
     if first_run && matches!(run, Run::Normal(_)) {
         // Like Chrome's first run: bring history and bookmarks over from Chrome automatically,
@@ -319,7 +351,7 @@ fn main() {
             Event::WindowEvent { event: WindowEvent::Moved(_), .. } => browser.hide_overlay(),
             // Tab search takes the keyboard into its own pop-up window and closes itself when it
             // loses it; every other pop-up closes when the browser window loses focus.
-            Event::WindowEvent { event: WindowEvent::Focused(false), .. } if browser.overlay_kind != "tabsearch" => browser.hide_overlay(),
+            Event::WindowEvent { event: WindowEvent::Focused(false), .. } if browser.overlay_kind != "tabsearch" && !browser.overlay_kind.starts_with("menu@") => browser.hide_overlay(),
             Event::WindowEvent { event: WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. }, .. } => {
                 browser.relayout()
             }

@@ -33,11 +33,38 @@ row with a control whose id is the key in `native/settings.rs`, and a row here.
 
 | Setting | Key | Values | Applies |
 |---|---|---|---|
+| Password Manager | — | opens the Passwords page | Live |
 | Offer to save passwords | `privacy.passwords` | **on** / off | Live |
 | Autofill addresses and forms | `privacy.autofill` | **on** / off | Live |
 | Delete saved passwords and autofill data | — | button | Live |
 
-WebView2 keeps saved passwords inside the profile and has no API to list them one by one.
+### Password manager
+
+Kakangkung has its own password manager (WebView2's own password saving stays off so nothing
+asks twice):
+
+- **Saving.** After a sign-in goes through (its password field goes away: the next page, or the
+  form replaced), a dialog asks *Save password for example.com?* (Save / Never). Closing it is
+  "not now": the key in the address bar brings it back. Never for Incognito tabs.
+- **Filling.** Clicking a login field of a site with saved logins lists them under the field;
+  picking one fills username and password. Only into the page's own origin (an http login also
+  fills on https, never the other way), top frame only.
+- **Key in the address bar.** Shown when the page has saved logins or a login waits to be saved.
+- **Storage.** `kakangkung.db`, table `passwords`; each password sealed with Windows DPAPI, so
+  only this Windows user on this PC can open it. Not synced.
+- **Passwords page** (`kakangkung.internal/passwords`, ⋮ > Passwords and autofill): search, Copy
+  and Show (Windows Hello first; a copy leaves the clipboard after 30 seconds and stays out of
+  clipboard history), Delete, Delete all.
+- **Import.** From Chrome, Edge, Brave, Vivaldi, Opera and Chromium directly (also part of the
+  browser import on the Welcome page); newer Chromium versions lock passwords to the browser
+  itself ("app-bound"), which no other program can open: *Export from it* opens that browser's
+  export page, and the CSV file it saves imports here. CSV files from Google Password Manager,
+  Firefox, Safari, Bitwarden, 1Password, LastPass, Proton Pass, Dashlane and NordPass import as
+  they are.
+- **Export.** A CSV file in Chrome's format (Windows Hello first).
+- **Other password managers.** Links to Google Password Manager and to the Chrome Web Store
+  extensions of Bitwarden, 1Password, Proton Pass, Dashlane, NordPass and LastPass. Passkeys go
+  through Windows (Windows Hello, a security key, or a phone by QR code).
 
 ## Privacy and security
 
@@ -79,6 +106,8 @@ Tabs playing sound are always kept running.
 | Home page | `appearance.home_url` | an http(s) address (**empty = new tab page**) | Live |
 | Show bookmark star | `appearance.bookmark_star` | **on** / off | Live |
 | Show Extensions button | `appearance.extensions_button` | **on** / off | Live |
+| Pinned to the toolbar: Downloads, History, Bookmarks, Task manager | `appearance.downloads_button`, `appearance.history_button`, `appearance.bookmarks_button`, `appearance.taskmanager_button` | **off** / on | Live |
+| Extensions pinned to the toolbar (extensions menu → Pin to toolbar; right-click a pinned button to unpin) | `toolbar.pinned_extensions` | comma-separated extension ids, **none** | Live |
 | Show tab search button | `appearance.tab_search_button` | **on** / off (Ctrl+Shift+A always works) | Live |
 | Always show full URLs | `appearance.full_urls` | on / **off** | Live |
 | Page zoom | `appearance.zoom` | 50 … **100** … 200 % | Live (resets per-tab zoom) |
@@ -176,8 +205,9 @@ Chrome's `chrome://settings` compared with Kakangkung. ✅ done · 🟡 next (We
 | You and Google | Sign in, sync, import | ✅ | `account.*`, `sync.*` |
 | | Customize profile (name, avatar, colour) | 🟡 | name/initial exist; colour = theme accent |
 | | Google services (search/URL improvement, metrics) | ⛔ | Google-only |
-| Autofill and passwords | Offer to save passwords, autofill addresses | ✅ | `ICoreWebView2Profile6` |
-| | Password Manager list, payment methods, addresses list | ⛔ | WebView2 does not list saved entries |
+| Autofill and passwords | Password Manager: save, fill, list, import, export | ✅ | Kakangkung's own (`storage::passwords`, DPAPI) |
+| | Autofill addresses | ✅ | `ICoreWebView2Profile6` |
+| | Payment methods, addresses list | ⛔ | WebView2 does not list saved entries |
 | Privacy and security | Delete browsing data with time range | ✅ | `ClearBrowsingDataInTimeRange` |
 | | Delete per data type (history / cookies and site data / cache) | ✅ | `ClearBrowsingDataInTimeRange` kinds |
 | | Safety check | ✅ | from settings; no leaked-password check (⛔) |

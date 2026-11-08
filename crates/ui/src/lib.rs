@@ -145,9 +145,14 @@ pub fn valid_custom_engine(t: &str) -> bool {
 /// (they run attacker-supplied code in the current origin when pasted); they become a search.
 /// Bare host names are opened over HTTPS.
 pub fn resolve_input(text: &str, search: &str) -> Option<String> {
-    let t = text.trim();
+    let t = text.trim().trim_matches('"');
     if t.is_empty() {
         return None;
+    }
+    // A file on this PC ("C:\Docs\report.pdf", "\\server\share\x.pdf"): Explorer's "Open with",
+    // a drop, or typed.
+    if let Some(url) = file_url(t) {
+        return Some(url);
     }
     if let Some(url) = site_search(t) {
         return Some(url);
@@ -182,6 +187,73 @@ pub fn resolve_input(text: &str, search: &str) -> Option<String> {
     } else {
         Some(search_for(t))
     }
+}
+
+/// `file:///C:/Docs/a%20b.pdf` for a Windows path (`C:\Docs\a b.pdf`, `\\server\share\x`);
+/// `None` for anything else.
+pub fn file_url(path: &str) -> Option<String> {
+    let b = path.as_bytes();
+    let drive = b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/');
+    let unc = path.starts_with("\\\\") && path.len() > 2;
+    if !drive && !unc {
+        return None;
+    }
+    let mut out = String::from(if unc { "file:" } else { "file:///" });
+    for c in path.chars() {
+        match c {
+            '\\' => out.push('/'),
+            ' ' | '%' | '#' | '?' | '"' | '<' | '>' | '`' | '{' | '}' => out.push_str(&format!("%{:02X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    Some(out)
+}
+
+/// What a tab of `url` is called before (or without) a page title: the file name for a file
+/// (`report.pdf`, `song.mp3`, a local file), else the site's address.
+pub fn page_name(url: &str) -> String {
+    let path = url.split(['?', '#']).next().unwrap_or("");
+    let path = path.split_once("://").map_or(path, |(_, rest)| rest.find('/').map_or("", |i| &rest[i..]));
+    let last = path.rsplit('/').next().unwrap_or("");
+    if last.contains('.') && !last.ends_with('.') {
+        let decoded = percent_decode(last);
+        if !decoded.trim().is_empty() {
+            return decoded;
+        }
+    }
+    let h = host(url);
+    if h.is_empty() { url.to_string() } else { h.to_string() }
+}
+
+/// `%20` and friends back to text (invalid sequences stay as they are).
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = |c: u8| (c as char).to_digit(16);
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2])) {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Files Kakangkung shows itself (PDF viewer, images, media, text), by extension: a download
+/// of one opens in a tab.
+pub fn viewable_file(path: &str) -> bool {
+    let ext = path.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+    matches!(
+        ext.as_str(),
+        "pdf" | "htm" | "html" | "xhtml" | "svg" | "txt" | "json" | "xml" | "csv" | "png" | "jpg" | "jpeg" | "gif" | "webp" | "avif" | "bmp" | "ico"
+            | "mp4" | "webm" | "ogg" | "ogv" | "mp3" | "wav" | "m4a" | "flac" | "opus"
+    )
 }
 
 pub fn encode_query(q: &str) -> String {
@@ -283,6 +355,8 @@ pub enum Action {
     Back,
     Forward,
     Home,
+    /// Ctrl+O: open a file from this PC (PDF, page, image, media) in a tab.
+    OpenFile,
 }
 
 /// Chrome's shortcuts on Windows. `vk` is a Win32 virtual-key code.
@@ -317,6 +391,7 @@ pub fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<Action> {
         (true, false, false, _, Some('J')) => Some(Downloads),
         (false, false, false, F11, _) => Some(Fullscreen),
         (true, false, false, _, Some('S')) => Some(SavePage),
+        (true, false, false, _, Some('O')) => Some(OpenFile),
         (false, false, false, F12, _) | (true, true, false, _, Some('I')) => Some(DevTools),
         (false, true, false, ESC, _) => Some(TaskManager),
         (true, false, false, TAB | PGDN, _) => Some(NextTab),
@@ -504,6 +579,14 @@ mod tests {
         assert_eq!(search_template("javascript:%s").1, "Google", "unsafe custom engines are refused");
         assert_eq!(search_template("http://plain.example/?q=%s").1, "Google", "https only");
         assert_eq!(resolve_input("rust", ENGINES[2].url).unwrap(), "https://duckduckgo.com/?q=rust");
+        assert_eq!(resolve_input("\"C:\\Docs\\Q3 report.pdf\"", DEFAULT_SEARCH).unwrap(), "file:///C:/Docs/Q3%20report.pdf");
+        assert_eq!(resolve_input("\\\\nas\\share\\a.pdf", DEFAULT_SEARCH).unwrap(), "file://nas/share/a.pdf");
+        assert_eq!(page_name("https://cdn.example/files/Q3%20report.pdf?dl=1"), "Q3 report.pdf");
+        assert_eq!(page_name("file:///C:/Music/song.mp3"), "song.mp3");
+        assert_eq!(page_name("https://example.com/docs/"), "example.com");
+        assert_eq!(page_name("https://example.com"), "example.com");
+        assert!(viewable_file("C:\\Downloads\\Report.PDF") && viewable_file("a.webm") && !viewable_file("setup.exe"));
+        assert_eq!(shortcut(u32::from(b'O'), true, false, false), Some(Action::OpenFile));
         assert_eq!(resolve_input("@bing  rust lang", DEFAULT_SEARCH).unwrap(), "https://www.bing.com/search?q=rust+lang");
         assert_eq!(resolve_input("@YT cats", DEFAULT_SEARCH).unwrap(), "https://www.youtube.com/results?search_query=cats");
         assert_eq!(resolve_input("@wiki Jakarta", DEFAULT_SEARCH).unwrap(), "https://en.wikipedia.org/w/index.php?search=Jakarta");

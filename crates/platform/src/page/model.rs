@@ -20,9 +20,10 @@ pub struct PageDoc {
     /// description, instead of the page filtering what it has.
     pub remote_search: bool,
     /// A start page (New Tab, Incognito): centred logo or `hero_icon`, the title, `hero_text`,
-    /// a search box with the `fakebox` placeholder ("" = none) that hands typing to the address
-    /// bar (reported as the link `omnibox`), tiles (section `start::TILES`), cards, and the
-    /// navigation as chips.
+    /// a search box with the `fakebox` placeholder ("" = none) — a real text field (id
+    /// `fakebox`: each change is `page\tinput\tfakebox\t<text>`, Enter `page\ttext\tfakebox\t<text>`,
+    /// ↑ ↓ Escape and leaving it `page\tkey\tfakebox\t<up|down|escape|blur>`) —, tiles (section
+    /// `start::TILES`), cards, and the navigation as chips.
     pub start: bool,
     pub hero_icon: String,
     pub hero_text: String,

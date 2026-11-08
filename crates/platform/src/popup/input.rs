@@ -10,7 +10,7 @@ use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateFontW, CreateSolidBrush, DeleteObject, EndPaint, GetDC, InvalidateRect, ReleaseDC, SelectObject, SetBkColor, SetBkMode, SetTextColor, TextOutW, HDC, HGDIOBJ,
     CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, FF_DONTCARE, OUT_DEFAULT_PRECIS, PAINTSTRUCT, TRANSPARENT,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_DOWN, VK_ESCAPE, VK_RETURN, VK_UP};
+use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_RETURN, VK_RIGHT, VK_UP};
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::Shell::DefSubclassProc;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -19,7 +19,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_GETFONT, WM_SETFONT,
 };
 
-use super::{Inner, CLOSE_W, FILTER_H, HEADER_ROW, PADDING, TWO_LINE_ROW};
+use super::{Inner, BUTTONS_ROW, BUTTON_GAP, CLOSE_W, FILTER_H, HEADER_ROW, MAIN_BUTTON_W, OTHER_BUTTON_W, PADDING, SEP_ROW, TWO_LINE_ROW};
+use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
 use crate::frame::style::{colorref, palette};
 use crate::frame::{edit_text, lparam_point, scale_of};
 
@@ -37,10 +38,60 @@ impl Inner {
         self.rows[k].kind == "header"
     }
 
+    /// Rows the selection skips: section titles, a dialog's text and its buttons.
+    pub(super) fn inert(&self, k: usize) -> bool {
+        matches!(self.rows[k].kind.as_str(), "header" | "note" | "buttons" | "sep")
+    }
+
+    /// Main and other button of a dialog's buttons row spanning `row` (DIPs).
+    pub(super) fn button_rects(row: D2D_RECT_F) -> (D2D_RECT_F, D2D_RECT_F) {
+        let (top, h) = (row.top + (row.bottom - row.top - 34.0) / 2.0, 34.0);
+        let main = D2D_RECT_F { left: row.right - 8.0 - MAIN_BUTTON_W, top, right: row.right - 8.0, bottom: top + h };
+        let other = D2D_RECT_F { left: main.left - BUTTON_GAP - OTHER_BUTTON_W, top, right: main.left - BUTTON_GAP, bottom: top + h };
+        (main, other)
+    }
+
+    /// The zoom row's buttons: −, the value (reset), +, full screen.
+    pub(super) fn zoom_rects(row: D2D_RECT_F) -> [D2D_RECT_F; 4] {
+        let (top, h) = (row.top + (row.bottom - row.top - 28.0) / 2.0, 28.0);
+        let at = |right: f32, w: f32| D2D_RECT_F { left: right - w, top, right, bottom: top + h };
+        let full = at(row.right - 8.0, 28.0);
+        let plus = at(full.left - 14.0, 28.0);
+        let value = at(plus.left, 52.0);
+        let minus = at(value.left, 28.0);
+        [minus, value, plus, full]
+    }
+
+    /// The command of the zoom row's button at `x`, if any.
+    pub(super) fn zoom_at(&self, x: f32) -> Option<&'static str> {
+        let row = D2D_RECT_F { left: PADDING, top: 0.0, right: self.width() - PADDING, bottom: 28.0 };
+        let rects = Self::zoom_rects(row);
+        rects.iter().position(|r| x >= r.left && x < r.right).map(|i| ["zoomout", "zoomreset", "zoomin", "fullscreen"][i])
+    }
+
+    /// Which button of a buttons row `x` is over: Some(true) = the other one, Some(false) = the main one.
+    fn button_at(&self, index: usize, x: f32) -> Option<bool> {
+        let &k = self.shown.get(index)?;
+        if self.rows[k].kind != "buttons" {
+            return None;
+        }
+        let row = D2D_RECT_F { left: PADDING, top: 0.0, right: self.width() - PADDING, bottom: BUTTONS_ROW };
+        let (main, other) = Self::button_rects(row);
+        if x >= main.left && x < main.right {
+            Some(false)
+        } else if x >= other.left && x < other.right {
+            Some(true)
+        } else {
+            None
+        }
+    }
+
     /// Height of row `k` of `rows`.
     pub(super) fn height_of(&self, k: usize) -> f32 {
         match &self.rows[k] {
             r if r.kind == "header" => HEADER_ROW,
+            r if r.kind == "buttons" => BUTTONS_ROW,
+            r if r.kind == "sep" => SEP_ROW,
             r if !r.sub.is_empty() => TWO_LINE_ROW,
             _ => self.row_h,
         }
@@ -48,7 +99,7 @@ impl Inner {
 
     /// The first pickable entry of the list on show.
     pub(super) fn first_item(&self) -> Option<usize> {
-        self.shown.iter().position(|&k| !self.is_header(k))
+        self.shown.iter().position(|&k| !self.inert(k))
     }
 
     /// The rows on show: those matching `needle`, without the folded sections' rows; a section
@@ -108,13 +159,19 @@ impl Inner {
         (rc.right - rc.left) as f32 / scale_of(self.hwnd)
     }
 
-    /// Is `x` over the × of row slot `index`?
+    /// Is `x` over the × of row slot `index` (or a dialog's other button)?
     fn on_close(&self, index: usize, x: f32) -> bool {
+        if let Some(other) = self.button_at(index, x) {
+            return other;
+        }
         self.shown.get(index).is_some_and(|&k| !self.rows[k].close.is_empty()) && x >= self.width() - PADDING - CLOSE_W
     }
 
     fn pick(&mut self, index: usize, close: bool) {
         let Some(&k) = self.shown.get(index) else { return };
+        if matches!(self.rows[k].kind.as_str(), "note" | "sep") {
+            return;
+        }
         if self.is_header(k) {
             // A section title with an id folds or unfolds its section.
             let id = self.rows[k].id.clone();
@@ -147,7 +204,7 @@ impl Inner {
         let mut s = self.selected.unwrap_or(if down { n - 1 } else { 0 });
         for _ in 0..n {
             s = if down { (s + 1) % n } else { (s + n - 1) % n };
-            if !self.is_header(self.shown[s]) {
+            if !self.inert(self.shown[s]) {
                 break;
             }
         }
@@ -232,8 +289,58 @@ pub(super) unsafe extern "system" fn popup_proc(hwnd: HWND, msg: u32, wp: WPARAM
                 i.repaint();
                 return LRESULT(0);
             }
-            // Clicking the list must not take the keyboard from the address bar.
-            WM_MOUSEACTIVATE => return LRESULT(MA_NOACTIVATE as isize),
+            // Clicking the list must not take the keyboard from the address bar (a menu has it).
+            WM_MOUSEACTIVATE if !i.menu_focus => return LRESULT(MA_NOACTIVATE as isize),
+            // A menu: arrows move, Enter picks, Escape closes; clicking elsewhere closes it.
+            WM_KEYDOWN if i.menu_focus => {
+                let key = wp.0 as u16;
+                let zoom_row = i.selected.and_then(|s| i.shown.get(s)).is_some_and(|&k| i.rows[k].kind == "zoom");
+                if zoom_row && (key == VK_LEFT.0 || key == VK_RIGHT.0) {
+                    // On the zoom row ← and → zoom out and in.
+                    let cmd = if key == VK_LEFT.0 { "zoomout" } else { "zoomin" };
+                    let kind = i.kind.clone();
+                    i.send(format!("pick\t{kind}\t{cmd}"));
+                } else if key == VK_RETURN.0 {
+                    if let Some(index) = i.selected {
+                        i.pick(index, false);
+                    }
+                } else if key == VK_RIGHT.0 {
+                    // → opens the selected row's submenu beside the menu.
+                    if let Some(index) = i.selected.filter(|&s| i.shown.get(s).is_some_and(|&k| i.rows[k].id.starts_with("submenu:"))) {
+                        i.pick(index, false);
+                    }
+                } else if i.kind == "submenu" && (key == VK_LEFT.0 || key == VK_ESCAPE.0) {
+                    // ← or Escape in a submenu: back to the menu it came from.
+                    i.send("menuback".into());
+                } else if key == VK_ESCAPE.0 {
+                    i.send("overlayclose".into());
+                } else if (key == VK_DOWN.0 || key == VK_UP.0) && i.first_item().is_some() {
+                    i.step(key == VK_DOWN.0);
+                }
+                return LRESULT(0);
+            }
+            WM_KILLFOCUS if i.menu_focus => {
+                // Opening a menu from the focused address bar makes Windows hand the keyboard
+                // back to the browser window a moment later: take it again instead of closing.
+                // ponytail: a time window, not the cause; a click on the browser within it keeps the menu open.
+                let just_opened = i.menu_opened.is_some_and(|at| at.elapsed().as_millis() < super::REFOCUS_MS);
+                let to = HWND(wp.0 as _);
+                // The keyboard went to the menu's submenu, or back from it: both stay open.
+                let sibling = !to.is_invalid() && to != hwnd && windows::Win32::UI::WindowsAndMessaging::GetWindow(to, windows::Win32::UI::WindowsAndMessaging::GW_OWNER).ok() == Some(i.owner);
+                if sibling {
+                } else if just_opened && to == i.owner {
+                    let _ = windows::Win32::UI::WindowsAndMessaging::PostMessageW(Some(hwnd), super::WM_REFOCUS, WPARAM(0), LPARAM(0));
+                } else {
+                    i.send("overlayhide".into());
+                }
+            }
+            super::WM_REFOCUS => {
+                if i.menu_focus && IsWindowVisible(hwnd).as_bool() {
+                    let _ = windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
+                    let _ = windows::Win32::UI::Input::KeyboardAndMouse::SetFocus(Some(hwnd));
+                }
+                return LRESULT(0);
+            }
             WM_PAINT => {
                 let mut ps = PAINTSTRUCT::default();
                 BeginPaint(hwnd, &mut ps);
@@ -247,6 +354,18 @@ pub(super) unsafe extern "system" fn popup_proc(hwnd: HWND, msg: u32, wp: WPARAM
                 let (x, y) = lparam_point(lp, scale);
                 let hover = i.row_at(y);
                 let on_close = hover.is_some_and(|h| i.on_close(h, x));
+                let zoom_part = |i: &Inner| i.zoom_at(i.mouse_x);
+                let before = zoom_part(&i);
+                i.mouse_x = x;
+                if before != zoom_part(&i) {
+                    i.repaint();
+                }
+                if hover != i.hover && i.kind == "menu" {
+                    // Pointing at a row with a submenu opens it beside the menu (any other row
+                    // closes it), like Chrome's menus.
+                    let id = hover.and_then(|h| i.shown.get(h)).map(|&k| i.rows[k].id.clone()).unwrap_or_default();
+                    i.send(format!("hover\tmenu\t{id}"));
+                }
                 if hover != i.hover || on_close != i.hover_close {
                     i.hover = hover;
                     i.hover_close = on_close;
@@ -260,9 +379,20 @@ pub(super) unsafe extern "system" fn popup_proc(hwnd: HWND, msg: u32, wp: WPARAM
             }
             WM_LBUTTONDOWN => {
                 let (x, y) = lparam_point(lp, scale);
-                if let Some(index) = i.row_at(y) {
-                    let close = i.on_close(index, x);
-                    i.pick(index, close);
+                if i.row_at(y).and_then(|s| i.shown.get(s)).is_some_and(|&k| i.rows[k].kind == "zoom") {
+                    // The zoom row: only its buttons do something.
+                    if let Some(cmd) = i.zoom_at(x) {
+                        let kind = i.kind.clone();
+                        i.send(format!("pick\t{kind}\t{cmd}"));
+                    }
+                } else if let Some(index) = i.row_at(y) {
+                    // A dialog's buttons row picks only on a button.
+                    let on_button = i.button_at(index, x);
+                    let buttons = i.shown.get(index).is_some_and(|&k| i.rows[k].kind == "buttons");
+                    if !buttons || on_button.is_some() {
+                        let close = i.on_close(index, x);
+                        i.pick(index, close);
+                    }
                 }
                 return LRESULT(0);
             }

@@ -2,14 +2,15 @@
 
 use std::cell::RefCell;
 
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
 use windows::Win32::Graphics::Gdi::{BeginPaint, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateFontW, CreateSolidBrush, DEFAULT_CHARSET, DeleteObject, EndPaint, FF_DONTCARE, HDC, InvalidateRect, OUT_DEFAULT_PRECIS, PAINTSTRUCT, SetBkColor, SetTextColor};
 use windows::Win32::UI::Controls::{EM_SETMARGINS, EM_SETSEL, WM_MOUSELEAVE};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_MENU, VK_SHIFT, ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_DOWN, VK_ESCAPE, VK_RETURN, VK_UP};
 use windows::Win32::UI::Shell::DefSubclassProc;
-use windows::Win32::UI::WindowsAndMessaging::{KillTimer, WM_TIMER, DefWindowProcW, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, GWLP_USERDATA, PostMessageW, SendMessageW, SetWindowLongPtrW, SetWindowTextW, WM_CHAR, WM_COMMAND, WM_CTLCOLOREDIT, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_SYSKEYDOWN, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, CREATESTRUCTW, WM_NCCREATE, WM_PAINT, WM_RBUTTONUP, WM_SETFOCUS, WM_SETFONT, WM_SIZE};
+use windows::Win32::UI::WindowsAndMessaging::{KillTimer, WM_TIMER, DefWindowProcW, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, GWLP_USERDATA, PostMessageW, SendMessageW, SetWindowLongPtrW, SetWindowTextW, WM_CHAR, WM_COMMAND, WM_CTLCOLOREDIT, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_SYSKEYDOWN, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, CREATESTRUCTW, WM_NCCREATE, WM_PAINT, WM_RBUTTONUP, WM_SETFOCUS, WM_SETFONT, WM_SIZE};
 use windows::core::{w, HSTRING};
 
 use super::style::{STRIP_H, colorref, palette};
@@ -84,10 +85,25 @@ impl Inner {
             Hit::Reload => if self.state.loading { "stop".into() } else { "reload".into() },
             Hit::Home => "home".into(),
             Hit::Star => "bookmark".into(),
+            Hit::Key => format!("pwkey\t{}\t{}", place.0.round(), (place.1 + 6.0).round()),
             Hit::Extensions => format!("extensions\t{}\t{}", place.0.round(), (place.1 + 2.0).round()),
             Hit::Profile => format!("profile\t{}\t{}", place.0.round(), (place.1 + 2.0).round()),
             Hit::Menu => format!("menu\t{}\t{}", place.0.round(), (place.1 + 2.0).round()),
             Hit::Chip => format!("siteinfo\t{}\t{}", place.2.round(), (place.1 + 6.0).round()),
+            Hit::Pinned(i) => match self.state.pinned.get(i) {
+                Some(pin) => format!("pinned\t{}\t{}\t{}", pin.id, place.0.round(), (place.1 + 2.0).round()),
+                None => return,
+            },
+            // Paint clamps the scroll to the strip.
+            Hit::ScrollLeft | Hit::ScrollRight => {
+                let page = 6.0 * super::style::TAB_MIN_W;
+                self.scroll += if hit == Hit::ScrollLeft { -page } else { page };
+                // SAFETY: repaint request for our own live window.
+                unsafe {
+                    let _ = InvalidateRect(Some(self.hwnd), None, false);
+                }
+                return;
+            }
             Hit::Tab(_) | Hit::Drag | Hit::None => return,
         };
         self.send(cmd);
@@ -129,6 +145,24 @@ pub(super) unsafe extern "system" fn frame_proc(hwnd: HWND, msg: u32, wp: WPARAM
                 }
                 let _ = InvalidateRect(Some(hwnd), None, false);
                 return LRESULT(0);
+            }
+            WM_TIMER if wp.0 == super::TIMER_SPIN => {
+                if !i.state.tabs.iter().any(|t| t.loading) {
+                    let _ = KillTimer(Some(hwnd), super::TIMER_SPIN);
+                }
+                let _ = InvalidateRect(Some(hwnd), None, false);
+                return LRESULT(0);
+            }
+            // The wheel over the tab strip scrolls it sideways when the tabs do not fit.
+            WM_MOUSEWHEEL => {
+                let mut pt = POINT { x: (lp.0 & 0xffff) as i16 as i32, y: ((lp.0 >> 16) & 0xffff) as i16 as i32 };
+                let _ = ScreenToClient(hwnd, &mut pt);
+                if (pt.y as f32 / scale) < STRIP_H {
+                    let delta = ((wp.0 >> 16) & 0xffff) as i16 as f32 / 120.0;
+                    i.scroll -= delta * 3.0 * super::style::TAB_MIN_W;
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                    return LRESULT(0);
+                }
             }
             WM_PAINT => {
                 let mut ps = PAINTSTRUCT::default();
@@ -237,6 +271,11 @@ pub(super) unsafe extern "system" fn frame_proc(hwnd: HWND, msg: u32, wp: WPARAM
                 match i.hit(x, y) {
                     Hit::Tab(id) | Hit::TabClose(id) | Hit::TabAudio(id) => i.send(format!("tabmenu\t{id}\t{}\t{}", x.round(), y.round())),
                     Hit::Group(id) => i.send(format!("groupmenu\t{id}\t{}\t{}", x.round(), y.round())),
+                    Hit::Pinned(n) => {
+                        if let Some(id) = i.state.pinned.get(n).map(|p| p.id.clone()) {
+                            i.send(format!("pinnedmenu\t{id}\t{}\t{}", x.round(), y.round()));
+                        }
+                    }
                     _ => {}
                 }
             }

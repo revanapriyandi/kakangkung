@@ -13,7 +13,7 @@ use std::cell::RefCell;
 use std::ffi::c_void;
 
 use windows::core::w;
-use windows::Win32::Foundation::{HWND, POINT};
+use windows::Win32::Foundation::{RECT, HWND, POINT};
 use windows::Win32::Graphics::Direct2D::{D2D1CreateFactory, ID2D1Factory, ID2D1HwndRenderTarget, ID2D1SolidColorBrush, D2D1_FACTORY_TYPE_SINGLE_THREADED};
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER,
@@ -24,7 +24,7 @@ use windows::Win32::Graphics::Gdi::{ClientToScreen, InvalidateRect, HBRUSH};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::Shell::SetWindowSubclass;
-use windows::Win32::UI::WindowsAndMessaging::{
+use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, 
     CreateWindowExW, DestroyWindow, SetTimer, GetWindowLongPtrW, IsWindowVisible, SetForegroundWindow, SetWindowLongPtrW, LoadCursorW, RegisterClassExW, SetWindowPos, ShowWindow,
     CS_DROPSHADOW, ES_AUTOHSCROLL, GWLP_USERDATA, GWL_EXSTYLE, HWND_TOP, IDC_ARROW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, WINDOW_EX_STYLE,
     WINDOW_STYLE, WNDCLASSEXW, WS_CHILD, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
@@ -38,7 +38,11 @@ use crate::frame::scale_of;
 pub struct PopupRow {
     /// Sent back when the row is chosen (an address, or a command id).
     pub id: String,
-    /// Icon: "search", "history", "bookmark", "url" or "tab".
+    /// Icon name ("search", "history", "settings", "check"… see `paint::icon`; "" = none), or
+    /// the row's role: "header" (a section title), "note" (a line of text, not pickable), "sep"
+    /// (a divider), "zoom" (Chrome's zoom row: `title`, then − `detail` + and full screen in
+    /// the row, picked as `zoomout`, `zoomreset`, `zoomin`, `fullscreen`) or "buttons" (a dialog's buttons: `title` is the main button, picked as `id`;
+    /// `detail` the other one, picked as `close`).
     pub kind: String,
     pub title: String,
     /// Shown after the title in the accent colour (an address), or on the right (a shortcut).
@@ -56,6 +60,12 @@ const SUGGEST_ROW: f32 = 36.0;
 const MENU_ROW: f32 = 32.0;
 const HEADER_ROW: f32 = 40.0;
 const TWO_LINE_ROW: f32 = 56.0;
+const BUTTONS_ROW: f32 = 56.0;
+const SEP_ROW: f32 = 9.0;
+/// A dialog's buttons: main and other button widths, and the gap between them.
+const MAIN_BUTTON_W: f32 = 136.0;
+const OTHER_BUTTON_W: f32 = 96.0;
+const BUTTON_GAP: f32 = 8.0;
 const PADDING: f32 = 6.0;
 const FILTER_H: f32 = 52.0;
 /// Tallest list with a filter box (tab search), before it scrolls.
@@ -66,6 +76,15 @@ const CLOSE_W: f32 = 36.0;
 const REVEAL_MS: f32 = 170.0;
 const REVEAL_FROM: f32 = 0.55;
 const TIMER_REVEAL: usize = 1;
+/// A menu taking the keyboard back right after opening (see WM_KILLFOCUS), and how long after
+/// opening that may happen.
+/// A menu ("menu"), or a submenu opened beside it ("submenu"): rows of 28, the keyboard.
+pub(super) fn is_menu(kind: &str) -> bool {
+    kind == "menu" || kind == "submenu"
+}
+
+const WM_REFOCUS: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 1;
+const REFOCUS_MS: u128 = 400;
 
 struct Inner {
     hwnd: HWND,
@@ -97,8 +116,14 @@ struct Inner {
     collapsed: Vec<String>,
     /// The pointer is over the hovered row's ×.
     hover_close: bool,
+    /// The pointer's x (DIPs) over the list, for the zoom row's buttons.
+    mouse_x: f32,
     /// Opening: when, and the full height (px) the window grows to.
     reveal: Option<(std::time::Instant, i32)>,
+    /// A menu with the keyboard (no filter box): losing it closes the menu.
+    menu_focus: bool,
+    /// When the menu on show opened.
+    menu_opened: Option<std::time::Instant>,
     /// A text field only (no list): Enter reports `input\t<kind>\t<text>`.
     input_mode: bool,
     /// Shown in the empty field, and the hint at its right.
@@ -152,8 +177,11 @@ impl Popup {
                 small: text_format(&dw, w!("Segoe UI"), 12.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING)?,
                 collapsed: vec![],
                 hover_close: false,
+                mouse_x: 0.0,
                 reveal: None,
                 input_mode: false,
+                menu_focus: false,
+                menu_opened: None,
                 placeholder: "Search Tabs".into(),
                 hint: "Ctrl+Shift+A".into(),
                 icons: text_format(&dw, icons, 14.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER)?,
@@ -219,22 +247,49 @@ impl Popup {
         i.hover = None;
         i.scroll = 0;
         i.dark = dark;
-        i.row_h = if kind == "suggest" { SUGGEST_ROW } else { MENU_ROW };
+        i.row_h = match kind {
+            "suggest" => SUGGEST_ROW,
+            // A long menu (⋮) fits a normal window whole at this height.
+            k if is_menu(k) && !filter => MENU_ROW - 4.0,
+            _ => MENU_ROW,
+        };
         i.rebuild("");
         // Tab search starts on its first entry; other lists as asked.
         i.selected = selected.or_else(|| if filter { i.first_item() } else { None });
         let list: f32 = i.shown.iter().map(|&k| i.height_of(k)).sum();
-        let list = list.min(if filter { FILTER_LIST_MAX } else { 10.0 * i.row_h });
+        // A dialog (it has buttons) is shown whole; other lists scroll past ten rows.
+        let dialog = i.rows.iter().any(|r| r.kind == "buttons");
+        // Menus are shown whole as far as the window lets them (the rest scrolls); suggestion
+        // lists stop at ten rows.
+        let room = {
+            let mut rc = RECT::default();
+            // SAFETY: plain query on the owner window.
+            let _ = unsafe { GetClientRect(i.owner, &mut rc) };
+            ((rc.bottom - rc.top) as f32 / scale - y - 2.0 * PADDING - 8.0).max(200.0)
+        };
+        let list = if dialog {
+            list
+        } else if is_menu(kind) && !filter {
+            list.min(room)
+        } else {
+            list.min(if filter { FILTER_LIST_MAX } else { 10.0 * i.row_h })
+        };
         let height = list + 2.0 * PADDING + if filter { FILTER_H } else { 0.0 };
         let mut pt = POINT { x: (x * scale).round() as i32, y: (y * scale).round() as i32 };
         // SAFETY: plain window calls on the live pop-up and its owner.
         unsafe {
             let _ = ClientToScreen(i.owner, &mut pt);
-            // Suggestions never take the keyboard; tab search does (its filter box).
+            // Suggestions never take the keyboard; tab search (its filter box) and menus do, so
+            // arrows, Enter and Escape work and a click anywhere else closes them.
+            let activate = filter || is_menu(kind);
+            i.menu_focus = is_menu(kind) && !filter;
+            if i.menu_focus && !IsWindowVisible(i.hwnd).as_bool() {
+                i.menu_opened = Some(std::time::Instant::now());
+            }
             let ex = GetWindowLongPtrW(i.hwnd, GWL_EXSTYLE);
             let no_activate = WS_EX_NOACTIVATE.0 as isize;
-            SetWindowLongPtrW(i.hwnd, GWL_EXSTYLE, if filter { ex & !no_activate } else { ex | no_activate });
-            let flags = if filter { SWP_SHOWWINDOW } else { SWP_NOACTIVATE | SWP_SHOWWINDOW };
+            SetWindowLongPtrW(i.hwnd, GWL_EXSTYLE, if activate { ex & !no_activate } else { ex | no_activate });
+            let flags = if activate { SWP_SHOWWINDOW } else { SWP_NOACTIVATE | SWP_SHOWWINDOW };
             // Opening (not a refresh while shown): it unfolds downwards from part of its height.
             let full = (height * scale) as i32;
             let opening = !IsWindowVisible(i.hwnd).as_bool() && crate::motion::enabled();
@@ -253,6 +308,12 @@ impl Popup {
             } else {
                 let _ = ShowWindow(i.filter, SW_HIDE);
                 let _ = InvalidateRect(Some(i.hwnd), None, false);
+                if activate {
+                    let popup = i.hwnd;
+                    drop(i);
+                    let _ = SetForegroundWindow(popup);
+                    let _ = SetFocus(Some(popup));
+                }
             }
         }
     }
@@ -292,6 +353,34 @@ impl Popup {
         // SAFETY: repaint request for the live pop-up.
         unsafe {
             let _ = InvalidateRect(Some(i.hwnd), None, false);
+        }
+    }
+
+    /// Where the row `id` is: (left, right, top) in DIPs of the owner's client area (a submenu
+    /// opens beside it).
+    pub fn row_box(&self, id: &str) -> Option<(f32, f32, f32)> {
+        let i = self.inner()?.borrow();
+        let slot = i.shown.iter().position(|&k| i.rows[k].id == id)?;
+        let top = i.list_top() + i.shown[i.scroll.min(slot)..slot].iter().map(|&k| i.height_of(k)).sum::<f32>();
+        let scale = scale_of(i.owner);
+        let mut rc = RECT::default();
+        // SAFETY: plain queries on our own window and its owner.
+        unsafe {
+            let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(i.hwnd, &mut rc);
+            let mut pts = [POINT { x: rc.left, y: rc.top }, POINT { x: rc.right, y: rc.bottom }];
+            windows::Win32::Graphics::Gdi::MapWindowPoints(None, Some(i.owner), &mut pts);
+            Some((pts[0].x as f32 / scale, pts[1].x as f32 / scale, pts[0].y as f32 / scale + top))
+        }
+    }
+
+    /// Give the keyboard to the pop-up on show (back from its submenu).
+    pub fn focus(&self) {
+        // SAFETY: plain calls on our own window.
+        unsafe {
+            if IsWindowVisible(self.hwnd).as_bool() {
+                let _ = SetForegroundWindow(self.hwnd);
+                let _ = SetFocus(Some(self.hwnd));
+            }
         }
     }
 

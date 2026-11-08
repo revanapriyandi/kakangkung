@@ -171,9 +171,122 @@ pub(crate) fn button_page(folder: &Path) -> Option<(String, bool)> {
         .or_else(|| page(&m["options_ui"]["page"]).or_else(|| page(&m["options_page"])).map(|p| (p, false)))
 }
 
+/// What an unpacked extension may do, in Chrome's words for its install dialog ("It can:"),
+/// from `permissions`, `host_permissions` (Manifest V2 keeps hosts in `permissions`) and the
+/// pages its content scripts run on. Permissions Chrome shows no warning for are left out.
+pub(crate) fn permission_warnings(folder: &Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(folder.join("manifest.json")) else { return vec![] };
+    let Ok(m) = serde_json::from_str::<Json>(text.trim_start_matches('\u{feff}')) else { return vec![] };
+    let strings = |v: &Json| v.as_array().map(|a| a.iter().filter_map(Json::as_str).map(str::to_string).collect::<Vec<_>>()).unwrap_or_default();
+    let perms = strings(&m["permissions"]);
+    let mut hosts: Vec<String> = strings(&m["host_permissions"]);
+    hosts.extend(perms.iter().filter(|p| p.contains("://") || *p == "<all_urls>").cloned());
+    if let Some(scripts) = m["content_scripts"].as_array() {
+        for s in scripts {
+            hosts.extend(strings(&s["matches"]));
+        }
+    }
+    let all = |h: &str| matches!(h, "<all_urls>" | "*://*/*" | "http://*/*" | "https://*/*");
+    let mut out = vec![];
+    if hosts.iter().any(|h| all(h)) {
+        out.push("Read and change all your data on all websites".to_string());
+    } else {
+        let mut sites: Vec<String> = hosts
+            .iter()
+            .filter_map(|h| h.split_once("://").map(|(_, r)| r.split('/').next().unwrap_or("").trim_start_matches("*.").to_string()))
+            .filter(|h| !h.is_empty())
+            .collect();
+        sites.sort();
+        sites.dedup();
+        match sites.len() {
+            0 => {}
+            1..=3 => out.push(format!("Read and change your data on {}", sites.join(", "))),
+            n => out.push(format!("Read and change your data on {} and {} other sites", sites[..2].join(", "), n - 2)),
+        }
+    }
+    const WARNINGS: &[(&str, &str)] = &[
+        ("debugger", "Access the page debugger backend"),
+        ("history", "Read and change your browsing history on all your signed-in devices"),
+        ("tabs", "Read your browsing history"),
+        ("webNavigation", "Read your browsing history"),
+        ("bookmarks", "Read and change your bookmarks"),
+        ("downloads", "Manage your downloads"),
+        ("management", "Manage your apps, extensions, and themes"),
+        ("nativeMessaging", "Communicate with cooperating native applications"),
+        ("privacy", "Change your privacy-related settings"),
+        ("proxy", "Read and change all your data on all websites"),
+        ("declarativeNetRequest", "Block content on any page"),
+        ("geolocation", "Detect your physical location"),
+        ("clipboardRead", "Read data you copy and paste"),
+        ("clipboardWrite", "Modify data you copy and paste"),
+        ("notifications", "Display notifications"),
+        ("contentSettings", "Change your settings that control websites' access to features such as cookies, JavaScript, plugins, geolocation, microphone, camera etc."),
+        ("topSites", "Read a list of your most frequently visited websites"),
+        ("pageCapture", "Read and change all your data on all websites"),
+    ];
+    for (perm, text) in WARNINGS {
+        if perms.iter().any(|p| p == perm) && !out.iter().any(|o| o == text) {
+            out.push(text.to_string());
+        }
+    }
+    out
+}
+
+/// The icon an installed extension shows on its toolbar button: `action.default_icon` (or the
+/// Manifest V2 names, or `icons`), the size closest to 32 px; a file inside `folder`.
+pub(crate) fn button_icon(folder: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(folder.join("manifest.json")).ok()?;
+    let m: Json = serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
+    let pick = |v: &Json| -> Option<String> {
+        if let Some(s) = v.as_str() {
+            return Some(s.to_string());
+        }
+        let sizes = v.as_object()?;
+        sizes.iter().filter_map(|(k, p)| Some((k.parse::<i32>().ok()?, p.as_str()?))).min_by_key(|(k, _)| (k - 32).abs() + if *k < 32 { 100 } else { 0 }).map(|(_, p)| p.to_string())
+    };
+    let rel = ["action", "browser_action", "page_action"].iter().find_map(|k| pick(&m[k]["default_icon"])).or_else(|| pick(&m["icons"]))?;
+    let rel = rel.trim_start_matches('/');
+    // Never a file outside the extension's folder.
+    (!rel.split(['/', '\\']).any(|p| p == "..")).then(|| folder.join(rel)).filter(|p| p.is_file())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn permission_warnings_use_chromes_words() {
+        let dir = std::env::temp_dir().join(format!("kk-perm-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let warn = |m: &str| {
+            std::fs::write(dir.join("manifest.json"), m).unwrap();
+            permission_warnings(&dir)
+        };
+        assert_eq!(warn(r#"{"permissions":["storage","declarativeNetRequest"],"host_permissions":["<all_urls>"]}"#), ["Read and change all your data on all websites", "Block content on any page"]);
+        assert_eq!(warn(r#"{"permissions":["tabs","webNavigation"],"content_scripts":[{"matches":["https://*.github.com/*"]}]}"#), ["Read and change your data on github.com", "Read your browsing history"]);
+        assert_eq!(warn(r#"{"host_permissions":["https://a.com/*","https://b.com/*","https://c.com/*","https://d.com/*"]}"#), ["Read and change your data on a.com, b.com and 2 other sites"]);
+        assert!(warn(r#"{"permissions":["storage","alarms"]}"#).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn button_icon_prefers_32_px_and_stays_inside() {
+        let dir = std::env::temp_dir().join(format!("kk-icon-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("img")).unwrap();
+        for f in ["img/16.png", "img/48.png", "img/128.png", "i.png"] {
+            std::fs::write(dir.join(f), b"x").unwrap();
+        }
+        let write = |m: &str| std::fs::write(dir.join("manifest.json"), m).unwrap();
+        write(r#"{"action":{"default_icon":{"16":"img/16.png","48":"img/48.png","128":"img/128.png"}}}"#);
+        assert_eq!(button_icon(&dir), Some(dir.join("img/48.png")));
+        write(r#"{"browser_action":{"default_icon":"/i.png"}}"#);
+        assert_eq!(button_icon(&dir), Some(dir.join("i.png")));
+        write(r#"{"icons":{"16":"img/16.png"}}"#);
+        assert_eq!(button_icon(&dir), Some(dir.join("img/16.png")));
+        write(r#"{"icons":{"16":"../evil.png"}}"#);
+        assert_eq!(button_icon(&dir), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn ids_and_urls() {

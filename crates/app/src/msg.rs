@@ -55,7 +55,19 @@ pub(crate) enum Msg {
     Load { id: u64, url: String, done: bool },
     Title { id: u64, title: String },
     Favicon { id: u64, uri: String },
+    /// A New Tab tile's icon is on disk (`None`: the site has none).
+    SiteIcon { host: String, path: Option<std::path::PathBuf> },
     Audio { id: u64, playing: bool },
+    /// `kk:pw:<what>` from the password manager's script in the page of tab `tab` at `url`.
+    Password { tab: u64, url: String, what: String },
+    /// Saved logins for the login field that got focus in tab `tab`.
+    Logins { tab: u64, origin: String, logins: Vec<storage::passwords::Login> },
+    /// A login went through that is not saved yet (`update`: a new password for a saved one).
+    PasswordAsk { tab: u64, cred: storage::passwords::Credential, update: bool },
+    /// How many logins are saved for the active page's origin (the key in the address bar).
+    SavedLogins { origin: String, n: usize },
+    /// The login picked under a field, to fill into tab `tab` while it shows `origin`.
+    PasswordFill { tab: u64, origin: String, user: String, pass: String },
     /// The tab's page started or stopped using the camera, microphone or screen capture.
     Media { id: u64, live: bool },
     Do(Action),

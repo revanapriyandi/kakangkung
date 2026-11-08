@@ -14,14 +14,50 @@ use crate::frame::layout::rect;
 use crate::frame::scale_of;
 use crate::frame::style::{color, glyph, palette, tile_color};
 
-/// Icon of a row kind.
-fn icon(kind: &str) -> &'static str {
+/// Icon of a row kind ("" = none).
+pub(super) fn icon(kind: &str) -> &'static str {
     match kind {
-        "search" => glyph::SEARCH,
+        "search" | "find" => glyph::SEARCH,
         "history" => "\u{E81C}",
         "bookmark" => glyph::STAR_ON,
+        "bookmarks" => "\u{E728}",
         "tab" => "\u{E737}",
-        _ => glyph::GLOBE,
+        "url" => glyph::GLOBE,
+        "newtab" => glyph::ADD,
+        "window" => "\u{E8A7}",
+        "incognito" => glyph::PRIVATE,
+        "passwords" => "\u{E8D7}",
+        "download" => "\u{E896}",
+        "extension" => glyph::PUZZLE,
+        "delete" => "\u{E74D}",
+        "zoom" => "\u{E8A3}",
+        "print" => "\u{E749}",
+        "tools" => "\u{E90F}",
+        "settings" => "\u{E713}",
+        "help" => "\u{E897}",
+        "exit" => "\u{E7E8}",
+        "sync" => "\u{E895}",
+        "check" => "\u{E73E}",
+        "back" => glyph::BACK,
+        "reload" => glyph::RELOAD,
+        "copy" => "\u{E8C8}",
+        "pin" => "\u{E718}",
+        "unpin" => "\u{E77A}",
+        "mute" => glyph::MUTED,
+        "volume" => glyph::VOLUME,
+        "group" => "\u{E8FD}",
+        "split" => "\u{E8A9}",
+        "close" => glyph::CLOSE,
+        "account" => "\u{E77B}",
+        "devices" => "\u{E772}",
+        "lock" => glyph::LOCK,
+        "info" => glyph::INFO,
+        "warn" => glyph::WARN,
+        "store" => "\u{E719}",
+        "update" => "\u{E777}",
+        "color" => "\u{E790}",
+        "rename" => "\u{E8AC}",
+        _ => "",
     }
 }
 
@@ -87,6 +123,8 @@ impl Inner {
             self.text_at(t, &brush, &self.hint, rect(fb.right - 104.0, fb.top, 96.0, fb.bottom - fb.top), &self.small, p.muted);
             fill(rect(0.0, FILTER_H + PADDING - 1.0, width, 1.0), 0.0, line, 1.0);
         }
+        // Text lines up after an icon column when any row of this list has an icon.
+        let icon_column = self.rows.iter().any(|r| !icon(&r.kind).is_empty());
         let mut y = self.list_top();
         for (slot, &k) in self.shown.iter().enumerate().skip(self.scroll) {
             let h = self.height_of(k);
@@ -108,15 +146,75 @@ impl Inner {
                 }
                 continue;
             }
+            if row.kind == "sep" {
+                fill(rect(r.left + 10.0, r.top + h / 2.0, r.right - r.left - 20.0, 1.0), 0.0, line, 1.0);
+                continue;
+            }
+            if row.kind == "note" {
+                // A line of a dialog: plain text, indented under its title.
+                let left = if icon_column { r.left + 38.0 } else { r.left + 16.0 };
+                self.text_at(t, &brush, &row.title, rect(left, r.top, r.right - left - 8.0, h), &self.text, p.muted);
+                continue;
+            }
+            if row.kind == "buttons" {
+                // Chrome's dialog buttons: the other one outlined, the main one filled.
+                let (main, other) = Self::button_rects(r);
+                let hovered = self.hover == Some(slot);
+                let other_hover = hovered && self.hover_close;
+                fill(other, 17.0, if other_hover { p.hover.0 } else { bg }, if other_hover { p.hover.1 } else { 1.0 });
+                // SAFETY: drawing call on a live render target between BeginDraw and EndDraw.
+                unsafe {
+                    brush.SetColor(&color(line, 1.0));
+                    t.DrawRoundedRectangle(&D2D1_ROUNDED_RECT { rect: other, radiusX: 17.0, radiusY: 17.0 }, &brush, 1.0, None);
+                }
+                self.text_at(t, &brush, &row.detail, other, &self.center, p.brand);
+                fill(main, 17.0, p.brand, if hovered && !self.hover_close { 0.88 } else { 1.0 });
+                self.text_at(t, &brush, &row.title, main, &self.center, 0xffffff);
+                continue;
+            }
+            if row.kind == "zoom" {
+                // Chrome's zoom row: label, then − 100% + and full screen, each a round button.
+                let (selected, hovered) = (self.selected == Some(slot), self.hover == Some(slot));
+                if selected {
+                    fill(r, 8.0, sel, 1.0);
+                }
+                let text_left = if icon_column { r.left + 38.0 } else { r.left + 14.0 };
+                self.text_at(t, &brush, icon("zoom"), rect(r.left + 8.0, r.top, 20.0, h), &self.icons, p.muted);
+                self.text_at(t, &brush, &row.title, rect(text_left, r.top, 120.0, h), &self.text, p.text);
+                let rects = Self::zoom_rects(r);
+                let under = if hovered { self.zoom_at(self.mouse_x) } else { None };
+                for (n, (b, cmd)) in rects.iter().zip(["zoomout", "zoomreset", "zoomin", "fullscreen"]).enumerate() {
+                    if under == Some(cmd) {
+                        fill(*b, 14.0, p.hover.0, p.hover.1 * 1.6);
+                    }
+                    let (s, f, tint) = match n {
+                        0 => ("\u{E738}", &self.icons, p.text),
+                        1 => (row.detail.as_str(), &self.center, p.text),
+                        2 => ("\u{E710}", &self.icons, p.text),
+                        _ => ("\u{E740}", &self.icons, p.muted),
+                    };
+                    self.text_at(t, &brush, s, *b, f, tint);
+                }
+                // A thin line before full screen, like Chrome's.
+                fill(rect(rects[3].left - 7.0, r.top + 8.0, 1.0, h - 16.0), 0.0, line, 1.0);
+                continue;
+            }
             let (selected, hovered) = (self.selected == Some(slot), self.hover == Some(slot));
             if selected || hovered {
                 fill(r, 8.0, if selected { sel } else { p.hover.0 }, if selected { 1.0 } else { p.hover.1 });
             }
-            let text_left = if row.sub.is_empty() { r.left + 38.0 } else { r.left + 62.0 };
+            let text_left = if !row.sub.is_empty() { r.left + 62.0 } else if icon_column { r.left + 38.0 } else { r.left + 14.0 };
             let right = r.right - if row.close.is_empty() { 8.0 } else { CLOSE_W + 4.0 };
             if row.sub.is_empty() {
-                self.text_at(t, &brush, icon(&row.kind), rect(r.left + 8.0, r.top, 20.0, h), &self.icons, p.muted);
-                let detail_w = if row.detail.is_empty() { 0.0 } else { ((width - text_left) * 0.45).min(260.0) };
+                let glyph = icon(&row.kind);
+                let tint = if row.kind == "check" { p.brand } else { p.muted };
+                self.text_at(t, &brush, glyph, rect(r.left + 8.0, r.top, 20.0, h), &self.icons, tint);
+                // Menus: a fixed column for the shortcut (or a submenu's ›), the rest for the label.
+                let detail_w = match (row.detail.is_empty(), super::is_menu(&self.kind)) {
+                    (true, _) => 0.0,
+                    (false, true) => if row.detail.chars().count() <= 1 { 16.0 } else { 104.0 },
+                    (false, false) => ((width - text_left) * 0.45).min(260.0),
+                };
                 self.text_at(t, &brush, &row.title, rect(text_left, r.top, right - text_left - detail_w - 8.0, h), &self.text, p.text);
                 if !row.detail.is_empty() {
                     let accent = if self.kind == "suggest" { p.brand } else { p.muted };

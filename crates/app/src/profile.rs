@@ -22,8 +22,7 @@ pub(crate) fn import_from_chrome(s: &Store) -> Result<String, String> {
 pub(crate) fn import_browser_default(s: &Store, b: &storage::chrome::Browser) -> Result<String, String> {
     let dir = storage::chrome::default_profile(b).ok_or("no profile")?;
     let name = b.profiles.iter().find(|p| p.dir == dir).map(|p| p.name.clone()).unwrap_or_else(|| dir.clone());
-    let (pages, marks) = s.import_browser(b, &dir)?;
-    let summary = format!("Imported {pages} pages and {marks} bookmarks from {} profile \"{name}\".", b.name);
+    let summary = s.import_browser(b, &dir)?.summary(&format!("{} profile \"{name}\"", b.name));
     s.set_setting("import.summary", &summary)?;
     Ok(summary)
 }

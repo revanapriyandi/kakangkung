@@ -67,7 +67,8 @@ pub(crate) fn client() -> Option<Client> {
 
 /// The console's client JSON: `{"installed": {"client_id": …, "client_secret": …}}`.
 fn client_from_file(text: &str) -> Option<Client> {
-    let j: Json = serde_json::from_str(text).ok()?;
+    // Notepad saves with a byte order mark; serde_json refuses one.
+    let j: Json = serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
     let c = j.get("installed").unwrap_or(&j);
     let id = c["client_id"].as_str().filter(|s| !s.is_empty())?.to_string();
     Some(Client { id, secret: c["client_secret"].as_str().unwrap_or("").to_string() })
@@ -393,6 +394,7 @@ mod tests {
         let c = client_from_file(r#"{"installed":{"client_id":"123.apps.googleusercontent.com","client_secret":"s3"}}"#).unwrap();
         assert_eq!(c, Client { id: "123.apps.googleusercontent.com".into(), secret: "s3".into() });
         assert!(client_from_file(r#"{"installed":{}}"#).is_none());
+        assert_eq!(client_from_file("\u{feff}{\"installed\":{\"client_id\":\"1.apps.googleusercontent.com\"}}").map(|c| c.id), Some("1.apps.googleusercontent.com".into()), "byte order mark");
         assert!(client_from_file("not json").is_none());
     }
 

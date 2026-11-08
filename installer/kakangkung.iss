@@ -126,6 +126,11 @@ Root: HKCU; Subkey: "Software\Kakangkung"; ValueType: string; ValueName: "Langua
 ; Left by "Make default" in Settings; removed with Kakangkung.
 Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\Kakangkung"; Flags: uninsdeletekey dontcreatekey
 Root: HKCU; Subkey: "Software\Classes\KakangkungHTML"; Flags: uninsdeletekey dontcreatekey
+; PDF files: Kakangkung is offered under "Open with" (its PDF viewer); Windows keeps the choice.
+Root: HKCU; Subkey: "Software\Classes\KakangkungPDF"; ValueType: string; ValueData: "Kakangkung PDF Document"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\KakangkungPDF\DefaultIcon"; ValueType: string; ValueData: """{app}\{#AppExe}"",0"
+Root: HKCU; Subkey: "Software\Classes\KakangkungPDF\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""
+Root: HKCU; Subkey: "Software\Classes\.pdf\OpenWithProgids"; ValueType: string; ValueName: "KakangkungPDF"; ValueData: ""; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\RegisteredApplications"; ValueType: none; ValueName: "Kakangkung"; Flags: uninsdeletevalue dontcreatekey
 
 [Run]

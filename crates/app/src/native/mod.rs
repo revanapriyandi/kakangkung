@@ -4,6 +4,7 @@
 mod account;
 mod build;
 mod lists;
+mod passwords;
 mod settings;
 mod start;
 mod tools;
@@ -12,14 +13,15 @@ mod when;
 
 pub(crate) use account::{signin_doc, sync_doc, type_on, TYPES};
 pub(crate) use lists::{bookmarks_doc, history_doc};
+pub(crate) use passwords::passwords_doc;
 pub(crate) use settings::settings_doc;
-pub(crate) use start::{incognito_doc, launch_doc, newtab_doc};
+pub(crate) use start::{incognito_doc, launch_doc, newtab_doc, top_sites};
 pub(crate) use tools::{downloads_doc, extensions_doc, taskmanager_doc};
 pub(crate) use welcome::welcome_doc;
 
 /// Every built-in page, by its path under `ui::INTERNAL` ("" is the New Tab page). Each page's
 /// data is the `/api` answer named by `data_path`.
-const NATIVE: &[&str] = &["newtab", "settings", "history", "bookmarks", "downloads", "extensions", "taskmanager", "signin", "sync", "welcome", "incognito"];
+const NATIVE: &[&str] = &["newtab", "settings", "history", "bookmarks", "downloads", "extensions", "taskmanager", "signin", "sync", "welcome", "incognito", "passwords"];
 
 /// The native page for an address (`https://kakangkung.internal/settings#privacy`), if any.
 pub(crate) fn page_of(url: &str) -> Option<&'static str> {
@@ -43,7 +45,8 @@ pub(crate) fn data_path(page: &str) -> Option<&str> {
         "taskmanager" => Some("memory"),
         "signin" => Some("account"),
         "welcome" => Some("browsers"),
-        "newtab" | "incognito" => None,
+        "newtab" => Some("topsites"),
+        "incognito" => None,
         other => Some(other),
     }
 }
@@ -62,6 +65,7 @@ pub(crate) fn title(page: &str) -> String {
         "signin" => "Account",
         "sync" => "Sync",
         "welcome" => "Welcome",
+        "passwords" => "Passwords",
         _ => "",
     })
     .into_owned()
@@ -169,6 +173,30 @@ pub(crate) fn step(page: &str, kind: &str, id: &str, value: &str) -> Option<Step
             ("button", ext) => Some(call("chrome/extension", ext.strip_prefix("addext:")?, "Extension added.")),
             _ => None,
         },
+        "passwords" => {
+            let n = |prefix: &str| id.strip_prefix(prefix).map(str::to_string);
+            match (kind, id) {
+                ("toggle", setting) => Some(call("settings/set", format!("{setting}\t{value}"), "Saved.")),
+                ("button", "pw-csv") => Some(call("passwords/import", "", "")),
+                ("button", "pw-export") => Some(ask("passwords/export", "", "", "Export your saved passwords? Anyone who can open the file can read them.")),
+                ("button", "pw-clear") => Some(ask("passwords/delete", "all", "All saved passwords deleted.", "Delete every saved password from Kakangkung?")),
+                ("button", b) if b.starts_with("pwexport:") => Some(call("passwords/open-export", &b["pwexport:".len()..], "")),
+                ("button", b) if b.starts_with("pwimport:") => {
+                    let (browser, dir) = b["pwimport:".len()..].split_once(':')?;
+                    Some(call("import/browser", format!("{browser}\t{dir}"), ""))
+                }
+                ("button", _) => {
+                    if let Some(i) = n("pw-copy:") {
+                        Some(call("passwords/copy", i, ""))
+                    } else if let Some(i) = n("pw-show:") {
+                        Some(call("passwords/show", i, ""))
+                    } else {
+                        Some(ask("passwords/delete", &n("pw-del:")?, "Password deleted.", "Delete this saved password?"))
+                    }
+                }
+                _ => None,
+            }
+        }
         "bookmarks" => match (kind, id) {
             ("link", url) => Some(Step::Visit(url.into())),
             ("button", remove) => Some(call("bookmarks/remove", remove.strip_prefix("unbookmark:")?, "Bookmark removed.")),
@@ -261,5 +289,11 @@ mod tests {
         assert_eq!(step("signin", "toggle", "type:history", "0"), Some(Step::SyncType { key: "history".into(), on: false }));
         assert_eq!(body(step("welcome", "button", "import:edge:Profile 1", "")), "import/browser edge\tProfile 1");
         assert_eq!(body(step("welcome", "button", "addext:C:\\x", "")), "chrome/extension C:\\x");
+        assert_eq!(body(step("passwords", "button", "pw-copy:7", "")), "passwords/copy 7");
+        assert!(matches!(step("passwords", "button", "pw-del:7", ""), Some(Step::Call { confirm: Some(_), ref body, .. }) if body == "7"));
+        assert_eq!(body(step("passwords", "button", "pwimport:chrome:Profile 2", "")), "import/browser chrome\tProfile 2");
+        assert_eq!(body(step("passwords", "toggle", "privacy.passwords", "0")), "settings/set privacy.passwords\t0");
+        assert_eq!(step("passwords", "button", "nonsense", ""), None);
+        assert_eq!(page_of(&format!("{}passwords", ui::INTERNAL)), Some("passwords"));
     }
 }

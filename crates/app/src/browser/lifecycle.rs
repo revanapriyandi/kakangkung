@@ -16,7 +16,10 @@ impl Browser {
         let id = self.next_id;
         self.next_id += 1;
         let muted = self.settings.mute_sites;
-        let view = TabView { id, url: url.into(), title: String::new(), loading: true, private: self.incognito, muted, ..Default::default() };
+        // Until the page has a title the tab shows its site, or the file's name (native pages set
+        // their own).
+        let title = ui::page_name(url);
+        let view = TabView { id, url: url.into(), title, loading: true, private: self.incognito, muted, ..Default::default() };
         // Created hidden and in the DISCARDED state; activation runs CreateWebview + Show.
         let tab = Tab::unloaded(view);
         let at = at.unwrap_or(self.tabs.len()).min(self.tabs.len());
@@ -88,7 +91,7 @@ impl Browser {
     fn insert_lazy(&mut self, url: &str, at: usize) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
-        let title = Some(ui::host(url)).filter(|h| !h.is_empty()).unwrap_or(url).to_string();
+        let title = ui::page_name(url);
         let view = TabView { id, url: url.into(), title, discarded: true, private: self.incognito, muted: self.settings.mute_sites, ..Default::default() };
         self.tabs.insert(at.min(self.tabs.len()), Tab::unloaded(view));
         id

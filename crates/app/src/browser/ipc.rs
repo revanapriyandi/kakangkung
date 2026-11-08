@@ -29,7 +29,20 @@ impl Browser {
             "extensions" => {
                 let right: f64 = arg.parse().unwrap_or(0.0);
                 let top: f64 = parts.next().unwrap_or("").parse().unwrap_or(0.0);
+                if self.toggles_closed(&format!("menu@{right},{top}")) {
+                    return true;
+                }
                 self.request_extensions_menu(right, top);
+            }
+            "pinned" | "pinnedmenu" => {
+                let x: f64 = parts.next().unwrap_or("").parse().unwrap_or(0.0);
+                let y: f64 = parts.next().unwrap_or("").parse().unwrap_or(0.0);
+                let arg = arg.to_string();
+                if cmd == "pinned" {
+                    self.open_pinned(&arg, x, y);
+                } else {
+                    self.pinned_menu(&arg, x, y);
+                }
             }
             "ready" => {
                 self.ui_ready = true;
@@ -94,12 +107,26 @@ impl Browser {
                 self.render();
             }
             "bookmark" => return self.act(Action::Bookmark),
+            "hover" if arg == "menu" && self.overlay_open && self.overlay_kind.starts_with("menu@") => {
+                let id = parts.next().unwrap_or("").to_string();
+                self.menu_hover(&id);
+            }
+            "menuback" => self.menu_back(),
+            "pwkey" => {
+                let right: f64 = arg.parse().unwrap_or(0.0);
+                let top: f64 = parts.next().unwrap_or("").parse().unwrap_or(0.0);
+                self.key_clicked(right, top);
+            }
             // The native address bar.
             "omnichange" => {
+                self.omnibox.in_page = false;
                 let text = msg.split_once('\t').map_or("", |(_, t)| t).to_string();
                 self.on_omnibox_change(&text);
             }
-            "omnikey" => return self.on_omnibox_key(arg),
+            "omnikey" => {
+                self.omnibox.in_page = false;
+                return self.on_omnibox_key(arg);
+            }
             "omnifocus" => self.on_omnibox_focus(),
             "omniblur" => self.on_omnibox_blur(),
             // A browser shortcut typed while the address bar has the keyboard.
@@ -127,31 +154,51 @@ impl Browser {
                 self.focus_omnibox();
             }
             "profile" => {
-                self.hide_overlay();
                 let right: f64 = arg.parse().unwrap_or(0.0);
                 let top: f64 = parts.next().unwrap_or("").parse().unwrap_or(0.0);
+                // The button of an open (or just closed) menu closes it.
+                if self.toggles_closed(&format!("menu@{right},{top}")) {
+                    return true;
+                }
+                self.hide_overlay();
                 if let Some(pick) = self.show_profile(right, top) {
                     return self.on_menu(&pick) && !self.tabs.is_empty();
                 }
             }
             "siteinfo" => {
-                self.hide_overlay();
                 let left: f64 = arg.parse().unwrap_or(0.0);
                 let top: f64 = parts.next().unwrap_or("").parse().unwrap_or(0.0);
+                // The button of an open (or just closed) menu closes it.
+                if self.toggles_closed(&format!("menu@{left},{top}")) {
+                    return true;
+                }
+                self.hide_overlay();
                 if let Some(pick) = self.show_site_info(left, top) {
                     return self.on_menu(&pick) && !self.tabs.is_empty();
                 }
             }
             "menu" => {
-                self.hide_overlay();
                 let right: f64 = arg.parse().unwrap_or(0.0);
                 let top: f64 = parts.next().unwrap_or("").parse().unwrap_or(0.0);
+                // The button of an open (or just closed) menu closes it.
+                if self.toggles_closed(&format!("menu@{right},{top}")) {
+                    return true;
+                }
+                self.hide_overlay();
                 if let Some(pick) = self.show_menu(right, top) {
                     return self.on_menu(&pick) && !self.tabs.is_empty();
                 }
             }
             "pick" => {
                 let value = parts.next().unwrap_or("").to_string();
+                if arg == "extinstall" {
+                    self.finish_install(value == "add");
+                    return true;
+                }
+                if arg == "pwsave" {
+                    self.answer_save_password(&value);
+                    return true;
+                }
                 // A tab closed with its × in tab search: the list stays open without it.
                 if arg == "menu" && value.starts_with("tab:close:") && self.overlay_kind == "tabsearch" {
                     self.on_menu(&value);
@@ -160,11 +207,15 @@ impl Browser {
                     }
                     return !self.tabs.is_empty();
                 }
-                if !(arg == "menu" && matches!(value.as_str(), "zoomin" | "zoomout" | "zoomreset")) {
+                let zoom = matches!(value.as_str(), "zoomin" | "zoomout" | "zoomreset");
+                if !(arg == "menu" && value.starts_with("submenu:")) && !zoom {
                     self.hide_overlay();
                 }
                 match arg {
+                    // A submenu's entry: the menu closed above (zoom steps keep it open).
+                    "submenu" => return self.on_menu(&value) && !self.tabs.is_empty(),
                     "suggest" => self.navigate(&value),
+                    "pwfill" => self.pick_login(&value),
                     "menu" if value.is_empty() => {}
                     "menu" => return self.on_menu(&value) && !self.tabs.is_empty(),
                     _ => {}

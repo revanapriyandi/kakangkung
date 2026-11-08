@@ -47,8 +47,19 @@
     shown = { id, state, text };
     render();
   };
+  // The store's "Switch to Chrome to install extensions" banner: wrong here, since the button
+  // installs. Found by its link to the Chrome download page (any language), hidden with the
+  // smallest box around it that is banner-sized.
+  const hideSwitchBanner = () => {
+    for (const a of document.querySelectorAll('a[href*="google.com/chrome"]')) {
+      let box = a;
+      while (box.parentElement && box.getBoundingClientRect().height < 40) box = box.parentElement;
+      if (box !== document.body && box.textContent.length < 300 && box.style.display !== "none") box.style.display = "none";
+    }
+  };
   // The store is a single-page app: its address and content change without a page load.
   setInterval(() => {
+    hideSwitchBanner();
     const id = idOf() || "";
     if (id !== shown.id) {
       shown = { id, state: "busy", text: "Add to Kakangkung" };

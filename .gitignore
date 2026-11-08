@@ -15,3 +15,9 @@
 *.swp
 Thumbs.db
 .DS_Store
+
+# Google OAuth client (docs/GOOGLE_SIGNIN.md): never committed
+google-client.json
+
+# Raw benchmark runs (bench/run.ps1); the summary goes into docs/BENCHMARKS.md
+bench/results/

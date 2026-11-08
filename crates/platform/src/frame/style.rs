@@ -66,6 +66,7 @@ pub(crate) mod glyph {
     pub const HOME: &str = "\u{E80F}";
     pub const STAR: &str = "\u{E734}";
     pub const STAR_ON: &str = "\u{E735}";
+    pub const KEY: &str = "\u{E8D7}";
     pub const PUZZLE: &str = "\u{EA86}";
     pub const MORE: &str = "\u{E712}";
     pub const ADD: &str = "\u{E710}";
@@ -82,7 +83,6 @@ pub(crate) mod glyph {
     pub const VOLUME: &str = "\u{E767}";
     pub const MUTED: &str = "\u{E74F}";
     pub const PRIVATE: &str = "\u{E727}";
-    pub const SYNC: &str = "\u{E895}";
 }
 
 #[cfg(test)]

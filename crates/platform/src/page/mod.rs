@@ -351,6 +351,47 @@ impl Page {
     }
 }
 
+/// Id of the start page's search box among the page's text fields.
+pub(super) const FAKEBOX: &str = "fakebox";
+
+impl Page {
+    /// The start page's search box (the New Tab page's): its text.
+    pub fn fakebox_text(&self) -> String {
+        self.inner().and_then(|c| c.borrow().fakebox_edit()).map(crate::frame::edit_text).unwrap_or_default()
+    }
+
+    /// Put `text` in the start page's search box, selected from character `select_from`.
+    pub fn set_fakebox_text(&self, text: &str, select_from: usize) {
+        let Some(cell) = self.inner() else { return };
+        // Held during the change: the page's EN_CHANGE then finds Inner borrowed and reports
+        // nothing, so text the browser puts in (completion, ↑ ↓) is not taken for typing.
+        let i = cell.borrow();
+        let Some(edit) = i.fakebox_edit() else { return };
+        let from = text.chars().take(select_from).map(char::len_utf16).sum::<usize>();
+        // SAFETY: plain calls on our own child control.
+        unsafe {
+            let _ = SetWindowTextW(edit, &HSTRING::from(text));
+            windows::Win32::UI::WindowsAndMessaging::SendMessageW(edit, windows::Win32::UI::Controls::EM_SETSEL, Some(windows::Win32::Foundation::WPARAM(from)), Some(windows::Win32::Foundation::LPARAM(text.encode_utf16().count() as isize)));
+        }
+    }
+
+    /// Does the start page's search box have the keyboard?
+    pub fn fakebox_has_focus(&self) -> bool {
+        // SAFETY: plain query.
+        let focus = unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetFocus() };
+        self.inner().and_then(|c| c.borrow().fakebox_edit()).is_some_and(|e| e == focus)
+    }
+
+    /// The start page's search box: x, y, width, height in DIPs of the page window.
+    pub fn fakebox_rect(&self) -> Option<(f32, f32, f32, f32)> {
+        let c = self.inner()?;
+        let i = c.borrow();
+        let r = i.layout.fakebox?;
+        let top = r.top + layout::HEADER_H - i.scroll;
+        Some((r.left, top, r.right - r.left, r.bottom - r.top))
+    }
+}
+
 /// A borderless EDIT inside the page (search box or a row's text field).
 fn new_edit(parent: HWND) -> windows::core::Result<HWND> {
     // SAFETY: child control creation on the UI thread; the subclass data is the parent's Inner,
@@ -378,10 +419,15 @@ fn new_edit(parent: HWND) -> windows::core::Result<HWND> {
 }
 
 impl Inner {
+    /// The start page's search box field, if the page has one.
+    pub(super) fn fakebox_edit(&self) -> Option<HWND> {
+        self.edits.iter().find(|(id, _)| id == FAKEBOX).map(|(_, e)| *e)
+    }
+
     /// One native text field per `Control::Text` of the page; values follow the description
     /// unless the person is typing in that field.
     fn sync_edits(&mut self) {
-        let wanted: Vec<(String, String)> = self
+        let mut wanted: Vec<(String, String)> = self
             .doc
             .sections
             .iter()
@@ -391,6 +437,10 @@ impl Inner {
                 _ => None,
             })
             .collect();
+        // The start page's search box is a real field too (its text is the person's alone).
+        if self.doc.start && !self.doc.fakebox.is_empty() {
+            wanted.push((FAKEBOX.into(), String::new()));
+        }
         // SAFETY: plain calls on our own child controls.
         unsafe {
             for (id, edit) in std::mem::take(&mut self.edits) {
@@ -412,7 +462,7 @@ impl Inner {
                         Err(_) => continue,
                     },
                 };
-                if edit != focus {
+                if edit != focus && id != FAKEBOX {
                     let _ = SetWindowTextW(edit, &HSTRING::from(value.replace('\n', "  ")));
                 }
             }

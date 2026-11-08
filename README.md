@@ -45,8 +45,11 @@ with ⋮ > *Restart to update*. Details: [docs/INSTALL.md](docs/INSTALL.md),
 
 ## Features
 
-- **Tabs** in the title bar: groups, pinning, muting, split view (two tabs side by side), drag to
-  reorder, reopen closed tabs (Ctrl+Shift+T), session restore.
+- **Tabs** in the title bar: site icons, a turning ring while loading, groups, pinning, muting,
+  split view (two tabs side by side), drag to reorder, a strip that scrolls when there are dozens
+  of tabs, reopen closed tabs (Ctrl+Shift+T), session restore.
+- **Menus and dialogs of its own**, with icons, keyboard (↑ ↓ ← → Enter Escape), dark mode and
+  animation; submenus open beside the menu, and zoom sits in the menu as − 100% +.
 - **Tab search** (⌄ at the start of the tab strip, or Ctrl+Shift+A): open tabs by recent use and
   recently closed ones.
 - **Address bar** with inline completion from history and bookmarks plus live search suggestions;
@@ -54,11 +57,25 @@ with ⋮ > *Restart to update*. Details: [docs/INSTALL.md](docs/INSTALL.md),
 - **Built-in pages**, native and laid out like Chrome's: Settings (one page per section, with
   search), History, Bookmarks, Downloads, Extensions, Task manager, Account and Sync, Welcome
   (import from other browsers).
+- **Password manager** of its own: offers to save a password after you sign in, fills it in from
+  a list under the login field, and shows a key in the address bar. Passwords are sealed with your
+  Windows account; showing, copying or exporting one asks Windows Hello. Import from Chrome, Edge,
+  Brave and other browsers, or from the CSV export of Google Password Manager, Firefox, Safari,
+  Bitwarden, 1Password, LastPass, Proton Pass, Dashlane or NordPass; export to CSV. Passkeys work
+  through Windows Hello, a security key or your phone.
+- **PDF viewer and files**: PDFs open in the tab (zoom, search, rotate, two-page view, print,
+  save, and drawing on local files), as do pictures, video, audio, JSON and text. Ctrl+O opens a
+  file from your PC, Kakangkung is offered under *Open with* for PDF files, and a downloaded PDF,
+  picture or video opens in a tab.
 - **Memory Saver** freezes tabs you have not looked at for a while; tabs playing sound, in a call
-  or pinned are left alone. The **task manager** shows the real memory of every process.
+  or pinned are left alone. The **task manager** counts memory exactly like Windows Task Manager.
+  Measured against Chrome and Edge with 1 to 100 real sites: [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 - **Extensions from the Chrome Web Store**: on an extension's page the store's button reads
-  *Add to Kakangkung*; the toolbar's extensions button lists them and opens their pop-ups.
+  *Add to Kakangkung*, and adding one asks first with what it can do, like Chrome. The toolbar's
+  extensions button lists them and opens their pop-ups; pin the ones you use to the toolbar.
   Unpacked extensions and imports from other browsers work too.
+- **New Tab page** with a working search box and shortcut tiles of your most visited sites, each
+  with its own icon.
 - **Sign in with Google**: bookmarks, history, open tabs and settings sync between your PCs through
   a hidden app folder in your Google Drive — see [docs/GOOGLE_SIGNIN.md](docs/GOOGLE_SIGNIN.md).
   Google's own sign-in works on websites, including sign-in pop-ups.

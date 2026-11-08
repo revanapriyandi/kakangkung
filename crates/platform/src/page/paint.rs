@@ -92,6 +92,28 @@ pub(super) struct Pen<'a> {
 }
 
 impl Pen<'_> {
+    /// Draw the loaded icon `key` (`platform::favicon`) into `r`; false when it is not loaded.
+    // ponytail: a bitmap per draw (a few tiny ones per frame); keep them per target if pages get icon-heavy.
+    pub fn icon(&self, r: D2D_RECT_F, key: &str) -> bool {
+        let Some(px) = crate::favicon::get(key) else { return false };
+        let size = crate::favicon::SIZE;
+        let props = windows::Win32::Graphics::Direct2D::D2D1_BITMAP_PROPERTIES {
+            pixelFormat: windows::Win32::Graphics::Direct2D::Common::D2D1_PIXEL_FORMAT {
+                format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM,
+                alphaMode: windows::Win32::Graphics::Direct2D::Common::D2D1_ALPHA_MODE_PREMULTIPLIED,
+            },
+            dpiX: 96.0,
+            dpiY: 96.0,
+        };
+        // SAFETY: `px` holds `size` rows of `size * 4` bytes; drawing between BeginDraw and EndDraw.
+        unsafe {
+            let size_u = windows::Win32::Graphics::Direct2D::Common::D2D_SIZE_U { width: size, height: size };
+            let Ok(b) = self.t.CreateBitmap(size_u, Some(px.as_ptr().cast()), size * 4, &props) else { return false };
+            self.t.DrawBitmap(&b, Some(&r), 1.0, windows::Win32::Graphics::Direct2D::D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
+        }
+        true
+    }
+
     pub fn fill(&self, r: D2D_RECT_F, radius: f32, rgb: u32, a: f32) {
         // SAFETY: drawing calls on a live render target between BeginDraw and EndDraw.
         unsafe {

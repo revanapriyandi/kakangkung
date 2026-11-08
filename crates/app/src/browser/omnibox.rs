@@ -23,9 +23,28 @@ pub(crate) struct Omnibox {
     /// Suggestion rows on show and the selected one (0 = what was typed).
     pub(crate) rows: Vec<Json>,
     pub(crate) selected: usize,
+    /// The typing is in the New Tab page's search box, not the address bar.
+    pub(crate) in_page: bool,
 }
 
 impl Browser {
+    /// Text of the box being typed in (the address bar, or the New Tab page's search box).
+    fn box_text(&self) -> String {
+        if self.omnibox.in_page { self.page.fakebox_text() } else { self.frame.omnibox_text() }
+    }
+
+    fn set_box_text(&self, text: &str, select_from: usize) {
+        if self.omnibox.in_page {
+            self.page.set_fakebox_text(text, select_from);
+        } else {
+            self.frame.set_omnibox_text(text, select_from);
+        }
+    }
+
+    fn box_has_focus(&self) -> bool {
+        if self.omnibox.in_page { self.page.fakebox_has_focus() } else { self.frame.omnibox_has_focus() }
+    }
+
     /// The text in the box changed by typing.
     pub(crate) fn on_omnibox_change(&mut self, text: &str) {
         let o = &mut self.omnibox;
@@ -50,18 +69,20 @@ impl Browser {
                 let row = &o.rows[o.selected];
                 let text = if row["kind"] == "search" { o.typed.clone() } else { row["display"].as_str().unwrap_or("").to_string() };
                 let len = text.chars().count();
-                self.frame.set_omnibox_text(&text, len);
+                self.set_box_text(&text, len);
                 self.popup.highlight(Some(self.omnibox.selected));
             }
             "enter" => {
                 let picked = (self.omnibox.selected > 0).then(|| self.omnibox.rows[self.omnibox.selected]["url"].as_str().map(String::from)).flatten();
-                let text = picked.unwrap_or_else(|| self.frame.omnibox_text());
+                let text = picked.unwrap_or_else(|| self.box_text());
                 self.close_suggestions();
                 self.omnibox.typed.clear();
+                self.omnibox.in_page = false;
                 if !text.trim().is_empty() {
                     self.navigate(&text);
                 }
             }
+            "escape" if self.omnibox.in_page => self.close_suggestions(),
             "escape" => {
                 if self.omnibox.rows.is_empty() {
                     self.show_address(false);
@@ -130,7 +151,7 @@ impl Browser {
 
     /// Rows for request `seq` are ready: complete inline and show them under the box.
     pub(crate) fn show_suggestions(&mut self, seq: u64, answer: Json) {
-        if seq != self.omnibox.seq || !self.frame.omnibox_has_focus() {
+        if seq != self.omnibox.seq || !self.box_has_focus() {
             return;
         }
         let rows = answer["rows"].as_array().cloned().unwrap_or_default();
@@ -138,9 +159,9 @@ impl Browser {
         // Inline completion: fill in the rest of the first match and leave it selected.
         if let Some(inline) = answer["inline"].as_str().filter(|i| !i.is_empty()) {
             let fits = inline.to_lowercase().starts_with(&typed.to_lowercase());
-            if fits && !self.omnibox.deleting && self.frame.omnibox_text() == typed {
+            if fits && !self.omnibox.deleting && self.box_text() == typed {
                 let rest: String = inline.chars().skip(typed.chars().count()).collect();
-                self.frame.set_omnibox_text(&format!("{typed}{rest}"), typed.chars().count());
+                self.set_box_text(&format!("{typed}{rest}"), typed.chars().count());
             }
         }
         self.omnibox.rows = rows;
@@ -149,7 +170,11 @@ impl Browser {
             self.close_suggestions();
             return;
         }
-        let (x, y, w, h) = self.frame.omnibox_rect();
+        // Under the box being typed in; the page window sits right under the frame.
+        let (x, y, w, h) = match self.page.fakebox_rect().filter(|_| self.omnibox.in_page) {
+            Some((x, y, w, h)) => (x, y + platform::frame::FRAME_H, w, h),
+            None => self.frame.omnibox_rect(),
+        };
         let height = self.omnibox.rows.len() as f64 * ROW_H + LIST_PADDING;
         let data = json!({ "rows": self.omnibox.rows, "selected": 0 }).to_string();
         self.show_overlay("suggest", [x as f64, (y + h) as f64 + 2.0, w as f64, height], &data);

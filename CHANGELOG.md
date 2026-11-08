@@ -2,6 +2,61 @@
 
 All notable changes are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+## [0.2.0] - 2026-11-08
+
+### Fixed
+- No console window opens next to Kakangkung any more (the program was built as a console app).
+- Many tabs: the tab strip scrolls (mouse wheel or the arrows at its ends) and keeps the selected
+  tab in view, instead of pushing tabs off the window where they could not be reached.
+- Tabs show the site's icon as soon as it is known, a turning ring while the page loads (it stood
+  still), and the site's address until the page has a title (it said "New Tab").
+- Confirmation questions on built-in pages are asked in the interface language.
+- A tab showing a file on its own (video, audio, PDF) is named after the file, not the site.
+- Memory Saver: a tab whose freeze WebView2 refuses is tried again later instead of being counted
+  as frozen while it keeps running.
+
+### Added
+- Several URLs on the command line open as tabs; `--user-data-dir=<folder>` and `--no-first-run`
+  work as in Chrome.
+- Memory benchmark against Chrome and Edge: `bench/run.ps1`, results in docs/BENCHMARKS.md.
+- Pin to toolbar, like Chrome: extensions from the extensions menu (*Pin to toolbar*), and
+  Downloads, History, Bookmarks and Task manager in Settings > Appearance. Nothing is pinned by
+  default; right-click a pinned button to unpin it.
+
+- Installing from the Chrome Web Store asks in Kakangkung's own dialog, like Chrome: the
+  extension's name, what it can do (from its manifest, in Chrome's words), Add extension / Cancel.
+  It is downloaded first and only added after Add; Cancel deletes it. The store's "Switch to
+  Chrome" banner is hidden.
+- Password manager of its own: offers to save a password after you sign in, lists the saved
+  logins under a login field and fills the one you pick, and shows a key in the address bar.
+  Passwords are sealed with your Windows account (DPAPI). The new Passwords page searches,
+  copies and shows them (after Windows Hello), deletes, imports from Chrome, Edge, Brave and
+  the other Chromium browsers and from CSV files of Google Password Manager, Firefox, Safari,
+  Bitwarden, 1Password, LastPass, Proton Pass, Dashlane and NordPass, and exports to CSV. It
+  links to other password managers (their Chrome Web Store extensions) and explains passkeys.
+- Files: Ctrl+O (and ⋮ > More tools > Open file…) opens a PDF, page, picture, video or any file
+  from your PC in a tab; Kakangkung is offered under Windows' *Open with* for PDF files, and
+  *Make default* in Settings also registers it for PDF, SVG and WebP. A file path on the command
+  line opens (Explorer's "Open with"). A downloaded PDF, picture, video or text file opens in a
+  tab instead of another app.
+- New Tab page: the search box is a real text field (suggestions open under it, ↑ ↓ pick, Enter
+  goes), and eight shortcut tiles show the most visited sites with their own icons (fetched once
+  from each site, kept in "Site icons"), topped up with well-known sites while history is short.
+
+### Changed
+- Every menu (⋮, profile, tab and group right-click, extensions, site info) and the install
+  dialog are Kakangkung's own pop-ups instead of Windows menus: icons, dividers, checks,
+  submenus that open in place with a way back, keyboard (↑ ↓ Enter Escape), dark mode, and the
+  opening animation. A click anywhere else closes them. Submenus (More tools) open beside
+  the menu, which stays in view: pointing at the row, clicking it or → opens one; ← or Escape
+  goes back. Zoom is one row of the menu, like Chrome's: − 100% + and full screen (← → on the
+  row zoom too).
+- The Task manager counts memory exactly like Windows Task Manager: every Kakangkung process
+  (all windows, every WebView2 process, the crash handler), each at the value of Windows Task
+  Manager's Memory column, so the two always agree.
+
 ## [0.1.1] - 2026-11-08
 
 ### Added

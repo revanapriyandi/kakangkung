@@ -8,6 +8,16 @@ use crate::browser::Browser;
 use crate::msg::Msg;
 use crate::pages::{api_json, ext_json};
 
+/// A page's title for its tab: a file shown on its own (video, audio, PDF) has none, or only
+/// its address: its file name then, like Chrome.
+fn tab_title(url: &str, title: String) -> String {
+    if title.trim().is_empty() || title == url || title == ui::host(url) {
+        ui::page_name(url)
+    } else {
+        title
+    }
+}
+
 impl Browser {
     /// Returns false when the window should close.
     pub(crate) fn on_msg(&mut self, msg: Msg) -> bool {
@@ -28,6 +38,12 @@ impl Browser {
             }
             Msg::Store { tab, cmd } => self.store_message(tab, &cmd),
             Msg::StoreUnpacked { tab, ext, result } => self.store_unpacked(tab, ext, result),
+            Msg::SiteIcon { host, path } => self.on_site_icon(&host, path),
+            Msg::Password { tab, url, what } => self.on_password_message(tab, &url, &what),
+            Msg::Logins { tab, origin, logins } => self.offer_logins(tab, &origin, logins),
+            Msg::PasswordAsk { tab, cred, update } => self.ask_save_password(tab, cred, update),
+            Msg::SavedLogins { origin, n } => self.on_saved_logins(origin, n),
+            Msg::PasswordFill { tab, origin, user, pass } => self.fill_login(tab, &origin, &user, &pass),
             Msg::StoreButton { tab, ext, state, text } => self.store_button(tab, &ext, state, &text),
             Msg::ExtMenu { list, x, y } => self.show_extensions_menu(list, x, y),
             Msg::Bubble { close, size } => self.on_bubble(close, size),
@@ -118,9 +134,8 @@ impl Browser {
                         v.title = "New Tab".into();
                     }
                     if done && !is_ntp {
-                        if let Some(t) = self.tabs[i].webview.as_ref().and_then(platform::document_title).filter(|t| !t.is_empty()) {
-                            self.tabs[i].view.title = t;
-                        }
+                        let t = self.tabs[i].webview.as_ref().and_then(platform::document_title).unwrap_or_default();
+                        self.tabs[i].view.title = tab_title(&self.tabs[i].view.url, t);
                     }
                     if done && id == self.active {
                         self.refresh_bookmark();
@@ -139,7 +154,8 @@ impl Browser {
                     let title = if self.tabs[i].view.url == ui::NEWTAB_URL {
                         "New Tab".to_string()
                     } else {
-                        self.tabs[i].webview.as_ref().and_then(platform::document_title).filter(|t| !t.is_empty()).unwrap_or(title)
+                        let t = self.tabs[i].webview.as_ref().and_then(platform::document_title).filter(|t| !t.is_empty()).unwrap_or(title);
+                        tab_title(&self.tabs[i].view.url, t)
                     };
                     let url = self.tabs[i].view.url.clone();
                     let t = title.clone();
@@ -163,6 +179,15 @@ impl Browser {
             Msg::Media { id, live } => {
                 if let Some(i) = self.index(id) {
                     self.tabs[i].view.media = live;
+                }
+            }
+            // TrySuspend can refuse (a page still loading, for one). The tab is not frozen then:
+            // back to Idle, tried again one full wait later instead of counted as frozen forever.
+            Msg::Suspended { id, ok: false } => {
+                if let Some(i) = self.index(id).filter(|&i| self.tabs[i].state == Lifecycle::Suspended) {
+                    eprintln!("tab {id}: TrySuspend refused, trying again later");
+                    self.tabs[i].state = Lifecycle::Idle;
+                    self.tabs[i].hidden_since = Some(std::time::Instant::now());
                 }
             }
             Msg::Suspended { .. } | Msg::Script(_) => {}

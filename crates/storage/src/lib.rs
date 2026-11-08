@@ -9,6 +9,7 @@ use platform::sqlite::{Db, Value};
 use serde::{Deserialize, Serialize};
 
 pub mod chrome;
+pub mod passwords;
 pub mod sync;
 
 /// Schema migrations; index + 1 = `PRAGMA user_version` after applying it.
@@ -18,6 +19,9 @@ const MIGRATIONS: &[&str] = &[
      CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)",
     "CREATE TABLE bookmarks(url TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', added INTEGER NOT NULL)",
     "CREATE TABLE downloads(id INTEGER PRIMARY KEY, url TEXT NOT NULL, path TEXT NOT NULL, size INTEGER NOT NULL, done INTEGER NOT NULL, started INTEGER NOT NULL)",
+    // Passwords are DPAPI-sealed, hex encoded (see passwords.rs).
+    "CREATE TABLE passwords(id INTEGER PRIMARY KEY, origin TEXT NOT NULL, username TEXT NOT NULL, password TEXT NOT NULL, created INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0, UNIQUE(origin, username));
+     CREATE TABLE password_never(origin TEXT PRIMARY KEY)",
 ];
 
 /// A finished download kept for the Downloads page after a restart.
@@ -39,6 +43,29 @@ pub struct Bookmark {
     pub url: String,
     pub title: String,
     pub added: i64,
+}
+
+/// What an import from another browser brought in.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Imported {
+    pub pages: usize,
+    pub bookmarks: usize,
+    /// New saved passwords.
+    pub passwords: usize,
+    /// Passwords the browser keeps locked to itself (Chrome's app-bound encryption).
+    pub locked: usize,
+}
+
+impl Imported {
+    /// "Imported 120 pages, 14 bookmarks and 30 passwords from Google Chrome.", plus why some
+    /// passwords could not come along.
+    pub fn summary(&self, from: &str) -> String {
+        let mut s = format!("Imported {} pages, {} bookmarks and {} passwords from {from}.", self.pages, self.bookmarks, self.passwords);
+        if self.locked > 0 {
+            s.push_str(&format!(" {} passwords are locked to that browser: export them there as a CSV file and import it on the Passwords page.", self.locked));
+        }
+        s
+    }
 }
 
 /// One address-bar suggestion.
@@ -322,17 +349,25 @@ impl Store {
         Ok(self.bookmarks()?.len() - before)
     }
 
-    /// Import history and bookmarks from another browser's profile. Returns (pages, new bookmarks).
-    pub fn import_browser(&self, b: &chrome::Browser, profile: &str) -> Result<(usize, usize), String> {
+    /// Import history, bookmarks and saved passwords from another browser's profile.
+    pub fn import_browser(&self, b: &chrome::Browser, profile: &str) -> Result<Imported, String> {
         let p = b.profiles.iter().find(|p| p.dir == profile).ok_or("unknown profile")?;
         if b.chromium {
             let dir = b.dir.join(&p.dir);
             let pages = self.import_chrome_history(&dir.join("History"))?;
-            let marks = chrome::read_bookmarks(&dir.join("Bookmarks")).and_then(|m| self.import_bookmarks(&m)).unwrap_or(0);
-            Ok((pages, marks))
+            let bookmarks = chrome::read_bookmarks(&dir.join("Bookmarks")).and_then(|m| self.import_bookmarks(&m)).unwrap_or(0);
+            let (passwords, locked) = match chrome::read_logins(&b.dir, &dir) {
+                Ok((logins, locked)) => (self.import_passwords(&logins)?, locked),
+                Err(e) => {
+                    eprintln!("import passwords from {}: {e}", b.name);
+                    (0, 0)
+                }
+            };
+            Ok(Imported { pages, bookmarks, passwords, locked })
         } else {
+            // ponytail: Firefox seals passwords with its own NSS key; its CSV export imports instead.
             let (visits, marks) = chrome::read_firefox(Path::new(&p.history))?;
-            Ok((self.merge(&visits)?, self.import_bookmarks(&marks)?))
+            Ok(Imported { pages: self.merge(&visits)?, bookmarks: self.import_bookmarks(&marks)?, ..Default::default() })
         }
     }
 
@@ -346,8 +381,12 @@ impl Store {
     }
 }
 
-/// Where Kakangkung keeps its data: `%LOCALAPPDATA%\Kakangkung`.
+/// Where Kakangkung keeps its data: `KAKANGKUNG_USER_DATA_DIR` (set from `--user-data-dir=` and
+/// inherited by further windows), else `%LOCALAPPDATA%\Kakangkung`.
 pub fn data_dir() -> PathBuf {
+    if let Some(d) = std::env::var_os("KAKANGKUNG_USER_DATA_DIR") {
+        return d.into();
+    }
     std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join("Kakangkung")
 }
 

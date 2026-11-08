@@ -26,6 +26,107 @@ pub fn pick_folder(owner: isize, title: &str) -> Option<std::path::PathBuf> {
     }
 }
 
+/// Windows' Open dialog for one file matching `pattern` ("*.csv"), described as `kind`.
+/// `None` when the person cancels.
+pub fn pick_file(owner: isize, title: &str, kind: &str, pattern: &str) -> Option<std::path::PathBuf> {
+    use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_INPROC_SERVER};
+    use windows::Win32::UI::Shell::{Common::COMDLG_FILTERSPEC, FileOpenDialog, IFileOpenDialog, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, SIGDN_FILESYSPATH};
+    let (title, kind, pattern) = (HSTRING::from(title), HSTRING::from(kind), HSTRING::from(pattern));
+    // SAFETY: as in `pick_folder`; the filter strings outlive the dialog.
+    unsafe {
+        let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER).ok()?;
+        let opts = dialog.GetOptions().ok()?;
+        dialog.SetOptions(opts | FOS_FILEMUSTEXIST | FOS_FORCEFILESYSTEM).ok()?;
+        let _ = dialog.SetTitle(&title);
+        let _ = dialog.SetFileTypes(&[COMDLG_FILTERSPEC { pszName: windows::core::PCWSTR(kind.as_ptr()), pszSpec: windows::core::PCWSTR(pattern.as_ptr()) }]);
+        dialog.Show(Some(HWND(owner as *mut _))).ok()?;
+        let item = dialog.GetResult().ok()?;
+        let p = item.GetDisplayName(SIGDN_FILESYSPATH).ok()?;
+        let path = p.to_string().ok().map(std::path::PathBuf::from);
+        CoTaskMemFree(Some(p.0 as *const _));
+        path
+    }
+}
+
+/// How long a copied password stays on the clipboard.
+const SECRET_ON_CLIPBOARD: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Put a secret (a password) on the clipboard, kept out of Windows' clipboard history and cloud
+/// clipboard, and take it off again after 30 seconds unless something else was copied since.
+pub fn copy_secret(text: &str) -> std::result::Result<(), String> {
+    use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL};
+    use windows::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, GetClipboardSequenceNumber, OpenClipboard, RegisterClipboardFormatW, SetClipboardData};
+    use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+    use windows::Win32::System::Ole::CF_UNICODETEXT;
+    let wide: Vec<u16> = text.encode_utf16().chain([0]).collect();
+    // SAFETY: the clipboard is opened and closed here; the memory handed to SetClipboardData is
+    // owned by the clipboard afterwards (freed by us only when handing it over failed).
+    let seq = unsafe {
+        OpenClipboard(None).map_err(|e| format!("clipboard: {e}"))?;
+        let put = (|| -> windows::core::Result<()> {
+            EmptyClipboard()?;
+            let mem = GlobalAlloc(GMEM_MOVEABLE, wide.len() * 2)?;
+            let p = GlobalLock(mem) as *mut u16;
+            std::ptr::copy_nonoverlapping(wide.as_ptr(), p, wide.len());
+            let _ = GlobalUnlock(mem);
+            if let Err(e) = SetClipboardData(u32::from(CF_UNICODETEXT.0), Some(HANDLE(mem.0))) {
+                let _ = GlobalFree(Some(mem));
+                return Err(e);
+            }
+            for name in ["ExcludeClipboardContentFromMonitorProcessing", "CanIncludeInClipboardHistory", "CanUploadToCloudClipboard"] {
+                let format = RegisterClipboardFormatW(&HSTRING::from(name));
+                let zero = GlobalAlloc(GMEM_MOVEABLE, 4)?;
+                *(GlobalLock(zero) as *mut u32) = 0;
+                let _ = GlobalUnlock(zero);
+                if SetClipboardData(format, Some(HANDLE(zero.0))).is_err() {
+                    let _ = GlobalFree(Some(HGLOBAL(zero.0)));
+                }
+            }
+            Ok(())
+        })();
+        let _ = CloseClipboard();
+        put.map_err(|e| format!("clipboard: {e}"))?;
+        GetClipboardSequenceNumber()
+    };
+    std::thread::spawn(move || {
+        std::thread::sleep(SECRET_ON_CLIPBOARD);
+        // SAFETY: as above; only emptied when the clipboard still holds what was put there.
+        unsafe {
+            if GetClipboardSequenceNumber() == seq && OpenClipboard(None).is_ok() {
+                let _ = EmptyClipboard();
+                let _ = CloseClipboard();
+            }
+        }
+    });
+    Ok(())
+}
+
+/// Ask Windows Hello (PIN, face, fingerprint) that the person at the PC is this Windows user,
+/// over window `owner`, saying `message`. `done(true)` when confirmed, or when this PC has no
+/// Windows Hello set up (the profile is this Windows user's already). Runs `done` on another
+/// thread.
+pub fn verify_user(owner: isize, message: &str, done: impl FnOnce(bool) + Send + 'static) {
+    use windows::Security::Credentials::UI::{UserConsentVerificationResult as R, UserConsentVerifier};
+    use windows::Win32::System::WinRT::IUserConsentVerifierInterop;
+    let message = HSTRING::from(message);
+    // SAFETY: plain WinRT activation and an interop call with our live top-level window.
+    let op = unsafe {
+        windows::core::factory::<UserConsentVerifier, IUserConsentVerifierInterop>()
+            .and_then(|f| f.RequestVerificationForWindowAsync::<windows_future::IAsyncOperation<R>>(HWND(owner as *mut _), &message))
+    };
+    std::thread::spawn(move || {
+        let ok = match op.and_then(|op| op.join()) {
+            Ok(R::Verified | R::DeviceNotPresent | R::NotConfiguredForUser | R::DisabledByPolicy) => true,
+            Ok(_) => false,
+            Err(e) => {
+                eprintln!("Windows Hello: {e}");
+                false
+            }
+        };
+        done(ok);
+    });
+}
+
 /// Windows' Save As dialog, starting at `suggested` (folder and file name). `None` when cancelled.
 pub fn save_file(owner: isize, suggested: &str) -> Option<std::path::PathBuf> {
     use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_INPROC_SERVER};
@@ -125,6 +226,8 @@ pub fn confirm(owner: isize, title: &str, text: &str) -> bool {
 
 /// ProgID, client key and display name under which the browser registers itself.
 const PROG_ID: &str = "KakangkungHTML";
+/// PDF files opened in Kakangkung (also offered by the installer under "Open with").
+const PDF_PROG_ID: &str = "KakangkungPDF";
 
 const CLIENT_KEY: &str = "Software\\Clients\\StartMenuInternet\\Kakangkung";
 
@@ -157,10 +260,12 @@ pub fn register_as_browser(exe: &Path) -> Result<()> {
     let exe = exe.display().to_string();
     let open = format!("\"{exe}\" \"%1\"");
     let icon = format!("\"{exe}\",0");
-    let classes = format!("Software\\Classes\\{PROG_ID}");
-    reg_set(&classes, None, "Kakangkung HTML Document")?;
-    reg_set(&format!("{classes}\\DefaultIcon"), None, &icon)?;
-    reg_set(&format!("{classes}\\shell\\open\\command"), None, &open)?;
+    for (prog_id, name) in [(PROG_ID, "Kakangkung HTML Document"), (PDF_PROG_ID, "Kakangkung PDF Document")] {
+        let classes = format!("Software\\Classes\\{prog_id}");
+        reg_set(&classes, None, name)?;
+        reg_set(&format!("{classes}\\DefaultIcon"), None, &icon)?;
+        reg_set(&format!("{classes}\\shell\\open\\command"), None, &open)?;
+    }
     reg_set(CLIENT_KEY, None, "Kakangkung")?;
     reg_set(&format!("{CLIENT_KEY}\\DefaultIcon"), None, &icon)?;
     reg_set(&format!("{CLIENT_KEY}\\shell\\open\\command"), None, &format!("\"{exe}\""))?;
@@ -171,9 +276,11 @@ pub fn register_as_browser(exe: &Path) -> Result<()> {
     for scheme in ["http", "https"] {
         reg_set(&format!("{caps}\\URLAssociations"), Some(scheme), PROG_ID)?;
     }
-    for ext in [".htm", ".html"] {
+    // The files Chrome registers for: pages, PDF (Kakangkung's PDF viewer), SVG and WebP.
+    for ext in [".htm", ".html", ".shtml", ".xht", ".xhtml", ".svg", ".webp"] {
         reg_set(&format!("{caps}\\FileAssociations"), Some(ext), PROG_ID)?;
     }
+    reg_set(&format!("{caps}\\FileAssociations"), Some(".pdf"), PDF_PROG_ID)?;
     reg_set("Software\\RegisteredApplications", Some("Kakangkung"), &caps)
 }
 

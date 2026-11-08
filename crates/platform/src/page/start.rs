@@ -155,10 +155,17 @@ impl Inner {
             let shadow = |dy: f32, a: f32| p.fill(D2D_RECT_F { top: r.top + dy, bottom: r.bottom + dy, ..r }, FAKEBOX_H / 2.0, 0x000000, a);
             shadow(4.0, if self.dark { 0.22 } else { 0.05 });
             shadow(1.0, if self.dark { 0.25 } else { 0.06 });
-            p.fill(r, FAKEBOX_H / 2.0, c.card, 1.0);
-            p.outline(r, FAKEBOX_H / 2.0, if self.hover == Some(Target::Fakebox) { c.brand } else { c.line }, 1.0);
-            p.text(glyph::SEARCH, rect(r.left + 14.0, r.top, 28.0, FAKEBOX_H), &f.icons, c.muted);
-            p.text(&self.doc.fakebox, rect(r.left + 52.0, r.top, r.right - r.left - 64.0, FAKEBOX_H), &f.title, c.muted);
+            let edit = self.fakebox_edit();
+            // SAFETY: plain query.
+            let typing = edit.is_some_and(|e| e == unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetFocus() });
+            let filled = edit.is_some_and(|e| !crate::frame::edit_text(e).is_empty());
+            p.fill(r, FAKEBOX_H / 2.0, if typing || filled { c.field } else { c.card }, 1.0);
+            let ring = if typing || self.hover == Some(Target::Fakebox) { c.brand } else { c.line };
+            p.outline(r, FAKEBOX_H / 2.0, ring, if typing { 2.0 } else { 1.0 });
+            p.text(glyph::SEARCH, rect(r.left + 14.0, r.top, 28.0, FAKEBOX_H), &f.icons, if typing { c.brand } else { c.muted });
+            if !typing && !filled {
+                p.text(&self.doc.fakebox, rect(r.left + 52.0, r.top, r.right - r.left - 64.0, FAKEBOX_H), &f.title, c.muted);
+            }
         }
         for (k, chip) in self.layout.chips.iter().enumerate() {
             let item = &self.doc.nav[k];
@@ -187,9 +194,14 @@ impl Inner {
         let name = row.sub.trim_start_matches("www.");
         let (x, y) = ((b.rect.left + b.rect.right) / 2.0, b.rect.top + 38.0);
         let badge = rect(x - 21.0, y - 21.0, 42.0, 42.0);
-        p.fill(badge, 12.0, tile_color(name), 1.0);
-        let letter = name.chars().next().map(|ch| ch.to_uppercase().to_string()).unwrap_or_else(|| "?".into());
-        p.text(&letter, badge, &f.button, 0xffffff);
+        // The site's own icon (`site:<host>`, loaded by the browser) on a light plate, like
+        // Chrome's shortcuts; a lettered badge until it is there.
+        p.fill(badge, 21.0, if self.dark { 0x34323c } else { 0xf1eff6 }, 1.0);
+        if !p.icon(rect(x - 12.0, y - 12.0, 24.0, 24.0), &format!("site:{name}")) {
+            p.fill(badge, 12.0, tile_color(name), 1.0);
+            let letter = name.chars().next().map(|ch| ch.to_uppercase().to_string()).unwrap_or_else(|| "?".into());
+            p.text(&letter, badge, &f.button, 0xffffff);
+        }
         p.text(&row.title, b.text, &f.tile, c.text);
         if rise < 1.0 {
             p.fill(inset(b.rect, 2.0), 16.0, c.bg, 1.0 - rise);

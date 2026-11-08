@@ -39,6 +39,28 @@ Google gives every app its own client id; Kakangkung cannot ship one for you.
 For a Desktop app client Google treats the "secret" as not secret (it ships inside the program);
 PKCE protects the sign-in.
 
+## Builds for other people
+
+People who install Kakangkung have no `google-client.json`: the client must be built into
+`kakangkung.exe`.
+
+- **Release workflow:** add the repository secrets `KAKANGKUNG_GOOGLE_CLIENT_ID` and
+  `KAKANGKUNG_GOOGLE_CLIENT_SECRET` (Settings → Secrets and variables → Actions, or
+  `gh secret set KAKANGKUNG_GOOGLE_CLIENT_ID`). `release.yml` passes them to `cargo build`.
+- **Local release build** from the downloaded file:
+
+  ```powershell
+  $c = (Get-Content -Raw "$env:LOCALAPPDATA\Kakangkung\google-client.json" | ConvertFrom-Json).installed
+  $env:KAKANGKUNG_GOOGLE_CLIENT_ID = $c.client_id; $env:KAKANGKUNG_GOOGLE_CLIENT_SECRET = $c.client_secret
+  cargo build --release
+  ```
+
+- **Check:** a build with the client shows **Sign in with Google** on `kakangkung://signin` in a
+  fresh profile, without the "not set up yet" note.
+- `google-client.json` is in `.gitignore`; never commit it.
+- While the consent screen is in **Testing**, only the listed test users can sign in, and they see
+  "Google hasn't verified this app". Publish the app before a public release.
+
 ## Using it
 
 Profile button → **Sign in to Kakangkung…** → choose what to sync → **Sign in with Google**.

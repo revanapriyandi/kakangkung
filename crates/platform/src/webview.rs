@@ -150,7 +150,8 @@ pub fn apply_protection(wv: &WebView, p: Protection) -> Vec<String> {
                     errors.push(format!("tracking prevention: {e}"));
                 }
                 if let Err(e) = profile.cast::<ICoreWebView2Profile6>().and_then(|p6| {
-                    p6.SetIsPasswordAutosaveEnabled(p.save_passwords)?;
+                    // Kakangkung's own password manager saves and fills; WebView2's would ask twice.
+                    p6.SetIsPasswordAutosaveEnabled(false)?;
                     p6.SetIsGeneralAutofillEnabled(p.autofill)
                 }) {
                     errors.push(format!("passwords/autofill: {e}"));

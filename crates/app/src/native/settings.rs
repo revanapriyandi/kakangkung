@@ -110,9 +110,10 @@ pub(crate) fn settings_doc(s: &Json, permissions: Option<&[Json]>) -> PageDoc {
     let sections = vec![
         you(s),
         section("autofill", "Autofill and passwords", "autofill passwords password manager forms addresses save", vec![vec![
-            v.toggle("privacy.passwords", "Offer to save passwords", "Saved in this profile on this PC"),
+            Row::new("Password Manager", "Saved passwords, import from other browsers and CSV files, export, other password managers", Control::Link { id: "open:passwords".into() }),
+            v.toggle("privacy.passwords", "Offer to save passwords", "After you sign in to a site; filled in when you click a login field"),
             v.toggle("privacy.autofill", "Autofill addresses and forms", "Fill in forms with what you typed before"),
-            Row::new("Delete saved passwords and autofill data", "WebView2 keeps them inside the profile and does not list them one by one", buttons(&[("clear-passwords", "Delete", ButtonStyle::Danger)])),
+            Row::new("Delete saved passwords and autofill data", "Every saved password and what forms remember", buttons(&[("clear-passwords", "Delete", ButtonStyle::Danger)])),
         ]]),
         privacy(&v, permissions),
         performance(&v, s["memory"].as_str().unwrap_or("")),
@@ -319,7 +320,13 @@ fn appearance(v: &Values) -> Section {
     let zooms: Vec<(&str, &str)> = zooms.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
     rows.extend([
         v.toggle("appearance.bookmark_star", "Show bookmark star", "The ☆ in the address bar"),
-        v.toggle("appearance.extensions_button", "Show Extensions button", ""),
+        v.toggle("appearance.extensions_button", "Show Extensions button", "Pin extensions to the toolbar from its menu"),
+        Row::heading("Pinned to the toolbar"),
+        v.toggle("appearance.downloads_button", "Downloads", ""),
+        v.toggle("appearance.history_button", "History", ""),
+        v.toggle("appearance.bookmarks_button", "Bookmarks", ""),
+        v.toggle("appearance.taskmanager_button", "Task manager", ""),
+        Row::heading("Address bar and zoom"),
         v.toggle("appearance.tab_search_button", "Show tab search button", "The search button at the start of the tab strip; Ctrl+Shift+A always works"),
         v.toggle("appearance.full_urls", "Always show full URLs", "Show https:// and the whole address in the address bar"),
         v.select("appearance.zoom", "Page zoom", "Default zoom of every tab", &zooms),

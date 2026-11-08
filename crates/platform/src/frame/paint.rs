@@ -8,7 +8,9 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::DirectWrite::{DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT, DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT, DWRITE_WORD_WRAPPING_NO_WRAP, IDWriteFactory, IDWriteTextFormat};
 use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, MoveWindow};
 use windows::core::{w, PCWSTR};
-use windows_numerics::Vector2;
+use windows_numerics::{Matrix3x2, Vector2};
+use windows::Win32::Graphics::Direct2D::{D2D1_ANTIALIAS_MODE_ALIASED, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE, D2D1_SWEEP_DIRECTION_CLOCKWISE, ID2D1Factory, ID2D1PathGeometry};
+use windows::Win32::Graphics::Direct2D::Common::{D2D_SIZE_F, D2D1_FIGURE_BEGIN_HOLLOW, D2D1_FIGURE_END_OPEN};
 
 use super::style::{BUTTON, CAPTION_W, TAB_SEARCH_W, FRAME_H, OMNI_H, PINNED_W, STRIP_H, TAB_H, TAB_MAX_W, TAB_MIN_W, TOOLBAR_H, color, glyph, palette};
 use super::layout::{rect, Hit};
@@ -92,24 +94,24 @@ impl Inner {
     }
 
     /// Direct2D bitmaps of the tabs' site icons that are decoded but not made yet.
-    fn make_favicons(&mut self, t: &ID2D1HwndRenderTarget, tabs: &[super::FrameTab]) {
+    fn make_favicons(&mut self, t: &ID2D1HwndRenderTarget, keys: Vec<&String>) {
         let size = crate::favicon::SIZE;
         let props = D2D1_BITMAP_PROPERTIES {
             pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
             dpiX: 96.0,
             dpiY: 96.0,
         };
-        for tab in tabs {
-            if self.gfx.favicons.contains_key(&tab.favicon) {
+        for key in keys {
+            if self.gfx.favicons.contains_key(key) {
                 continue;
             }
-            let Some(px) = crate::favicon::get(&tab.favicon) else { continue };
-            if self.gfx.favicons.len() >= 64 {
+            let Some(px) = crate::favicon::get(key) else { continue };
+            if self.gfx.favicons.len() >= 256 {
                 self.gfx.favicons.clear();
             }
             // SAFETY: `px` holds `size` rows of `size * 4` bytes; props is a valid local.
             if let Ok(b) = unsafe { t.CreateBitmap(D2D_SIZE_U { width: size, height: size }, Some(px.as_ptr().cast()), size * 4, &props) } {
-                self.gfx.favicons.insert(tab.favicon.clone(), b);
+                self.gfx.favicons.insert(key.clone(), b);
             }
         }
     }
@@ -118,7 +120,7 @@ impl Inner {
         let s = self.state.clone();
         let p = palette(s.dark, s.incognito);
         let brush = self.gfx.brush.clone().expect("brush created with the target");
-        self.make_favicons(t, &s.tabs);
+        self.make_favicons(t, s.tabs.iter().map(|t| &t.favicon).chain(s.pinned.iter().map(|p| &p.icon)).collect());
         let mut hits: Vec<(D2D_RECT_F, Hit)> = vec![];
         // SAFETY: drawing calls on a live render target between BeginDraw and EndDraw.
         unsafe {
@@ -155,17 +157,54 @@ impl Inner {
                 hits.push((r, Hit::TabSearch));
                 x += TAB_SEARCH_W;
             }
-            let mut last_group = 0u32;
-            for (tab, w) in s.tabs.iter().zip(widths) {
-                if let Some((_, g)) = s.groups.iter().find(|(first, _)| *first == tab.id) {
-                    if g.id != last_group {
-                        let label = rect(x + 4.0, 11.0, 62.0, 22.0);
-                        round(label, 8.0, g.color, 1.0);
-                        text(&g.name, rect(label.left + 8.0, label.top, 46.0, 22.0), &self.gfx.text, 0x1f1d24);
-                        hits.push((label, Hit::Group(g.id)));
-                        x += 70.0;
-                        last_group = g.id;
+            // Where each tab sits from the start of the strip (a group's label takes room before
+            // its first tab), so the strip can scroll when the tabs do not fit.
+            let mut place = Vec::with_capacity(s.tabs.len());
+            let (mut at, mut last_group) = (0.0f32, 0u32);
+            for (tab, &w) in s.tabs.iter().zip(&widths) {
+                let label = s.groups.iter().find(|(first, _)| *first == tab.id).map(|(_, g)| g).filter(|g| g.id != last_group);
+                if let Some(g) = label {
+                    last_group = g.id;
+                    at += 70.0;
+                }
+                place.push((at, w, label));
+                at += w;
+            }
+            // Room up to the new-tab button and the window buttons (as in tab_widths).
+            let strip_right = width - CAPTION_W * 3.0 - 76.0;
+            let overflow = at > strip_right - x + 0.5;
+            let (view_l, view_r) = if overflow { (x + SCROLL_W, strip_right - SCROLL_W) } else { (x, strip_right) };
+            let view_w = (view_r - view_l).max(0.0);
+            if overflow {
+                if std::mem::take(&mut self.reveal) {
+                    if let Some(&(o, w, _)) = s.tabs.iter().position(|t| t.id == s.active).and_then(|i| place.get(i)) {
+                        self.scroll = self.scroll.min(o).max(o + w - view_w);
                     }
+                }
+                self.scroll = self.scroll.clamp(0.0, (at - view_w).max(0.0));
+            } else {
+                self.scroll = 0.0;
+            }
+            let base = view_l - self.scroll;
+            // Parts of tabs scrolled out of view take no clicks.
+            let tab_hit = |hits: &mut Vec<(D2D_RECT_F, Hit)>, r: D2D_RECT_F, h: Hit| {
+                let r = D2D_RECT_F { left: r.left.max(view_l), right: r.right.min(view_r), ..r };
+                if r.right - r.left >= 4.0 {
+                    hits.push((r, h));
+                }
+            };
+            let spin_angle = (spin_start().elapsed().as_millis() % 1000) as f32 * 0.36;
+            t.PushAxisAlignedClip(&rect(view_l, 0.0, view_w, STRIP_H + 8.0), D2D1_ANTIALIAS_MODE_ALIASED);
+            for (tab, &(o, w, label)) in s.tabs.iter().zip(&place) {
+                let x = base + o;
+                if x + w < view_l || x - 70.0 > view_r {
+                    continue;
+                }
+                if let Some(g) = label {
+                    let label = rect(x - 66.0, 11.0, 62.0, 22.0);
+                    round(label, 8.0, g.color, 1.0);
+                    text(&g.name, rect(label.left + 8.0, label.top, 46.0, 22.0), &self.gfx.text, 0x1f1d24);
+                    tab_hit(&mut hits, label, Hit::Group(g.id));
                 }
                 let r = rect(x, STRIP_H - TAB_H, w, TAB_H);
                 let active = tab.id == s.active;
@@ -182,14 +221,30 @@ impl Inner {
                 }
                 let fg = if active { p.text } else { p.muted };
                 let icon_x = if tab.pinned { r.left + (w - 16.0) / 2.0 } else { r.left + 12.0 };
-                let site = self.gfx.favicons.get(&tab.favicon).filter(|_| !tab.loading && !tab.private);
-                if let Some(b) = site {
-                    t.DrawBitmap(b, Some(&rect(icon_x, r.top + (TAB_H - 16.0) / 2.0, 16.0, 16.0)), 1.0, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
-                } else {
-                    let icon = if tab.loading { glyph::SYNC } else if tab.private { glyph::PRIVATE } else { glyph::GLOBE };
-                    text(icon, rect(icon_x, r.top, 16.0, TAB_H), &self.gfx.icons_small, if tab.loading { p.brand } else { fg });
+                // The site's icon as soon as it is known, loading or not; a turning ring round
+                // it (or alone, before the icon arrives) while the page loads.
+                let site = self.gfx.favicons.get(&tab.favicon).filter(|_| !tab.private).cloned();
+                let (cx, cy) = (icon_x + 8.0, r.top + TAB_H / 2.0);
+                // A narrow selected tab shows only its close button there, like Chrome.
+                let show_icon = !(active && !tab.pinned && w < 72.0);
+                if !show_icon {
+                } else if let Some(b) = &site {
+                    let e = if tab.loading { 6.0 } else { 8.0 };
+                    t.DrawBitmap(b, Some(&rect(cx - e, cy - e, 2.0 * e, 2.0 * e)), 1.0, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
+                } else if !tab.loading {
+                    let icon = if tab.private { glyph::PRIVATE } else { glyph::GLOBE };
+                    text(icon, rect(icon_x, r.top, 16.0, TAB_H), &self.gfx.icons_small, fg);
                 }
-                hits.push((r, Hit::Tab(tab.id)));
+                if tab.loading && show_icon {
+                    let radius = if site.is_some() { 9.5 } else { 6.5 };
+                    if let Some(arc) = spinner(&self.gfx.factory, &mut self.gfx.spinners, radius) {
+                        brush.SetColor(&color(p.brand, 1.0));
+                        t.SetTransform(&(Matrix3x2::rotation(spin_angle) * Matrix3x2::translation(cx, cy)));
+                        t.DrawGeometry(&arc, &brush, if site.is_some() { 1.5 } else { 2.0 }, None);
+                        t.SetTransform(&Matrix3x2::identity());
+                    }
+                }
+                tab_hit(&mut hits, r, Hit::Tab(tab.id));
                 if !tab.pinned {
                     let mut title_right = r.right - 8.0;
                     let narrow = w < 72.0;
@@ -199,13 +254,13 @@ impl Inner {
                             round(close, 10.0, p.hover.0, p.hover.1 * 1.6);
                         }
                         text(glyph::CLOSE, close, &self.gfx.icons_small, fg);
-                        hits.push((close, Hit::TabClose(tab.id)));
+                        tab_hit(&mut hits, close, Hit::TabClose(tab.id));
                         title_right = close.left - 2.0;
                     }
                     if tab.audio || tab.muted {
                         let a = rect(title_right - 20.0, r.top + 7.0, 20.0, 20.0);
                         text(if tab.muted { glyph::MUTED } else { glyph::VOLUME }, a, &self.gfx.icons_small, if tab.muted { p.danger } else { fg });
-                        hits.push((a, Hit::TabAudio(tab.id)));
+                        tab_hit(&mut hits, a, Hit::TabAudio(tab.id));
                         title_right = a.left;
                     }
                     if !narrow {
@@ -217,8 +272,22 @@ impl Inner {
                     let a = rect(r.right - 16.0, r.top + 2.0, 14.0, 14.0);
                     text(if tab.muted { glyph::MUTED } else { glyph::VOLUME }, a, &self.gfx.icons_small, p.muted);
                 }
-                x += w;
             }
+            t.PopAxisAlignedClip();
+            if overflow {
+                // Arrows at both ends, dimmed at the end the strip cannot scroll further to.
+                for (h, g, r, can) in [
+                    (Hit::ScrollLeft, glyph::BACK, rect(view_l - SCROLL_W, STRIP_H - TAB_H + 5.0, SCROLL_W - 4.0, TAB_H - 10.0), self.scroll > 0.5),
+                    (Hit::ScrollRight, glyph::FORWARD, rect(view_r + 4.0, STRIP_H - TAB_H + 5.0, SCROLL_W - 4.0, TAB_H - 10.0), self.scroll < at - view_w - 0.5),
+                ] {
+                    if can && hovered(h) {
+                        round(r, 6.0, p.hover.0, p.hover.1);
+                    }
+                    text(g, r, &self.gfx.icons_small, if can { p.text } else { p.sep });
+                    hits.push((r, h));
+                }
+            }
+            let x = if overflow { view_r + SCROLL_W } else { (base + at).min(view_r) };
             let plus = rect(x + 6.0, 9.0, 28.0, 28.0);
             if hovered(Hit::NewTab) {
                 round(plus, 14.0, p.hover.0, p.hover.1);
@@ -292,6 +361,22 @@ impl Inner {
                 r_edge -= BUTTON + 2.0;
                 button(&mut hits, r_edge, Hit::Extensions, glyph::PUZZLE, true, p.muted);
             }
+            // Pinned buttons, the last one next to the extensions button, like Chrome.
+            for (i, pin) in s.pinned.iter().enumerate().rev() {
+                r_edge -= BUTTON + 2.0;
+                match self.gfx.favicons.get(&pin.icon) {
+                    Some(b) => {
+                        let r = rect(r_edge, y, BUTTON, BUTTON);
+                        if hovered(Hit::Pinned(i)) {
+                            round(r, BUTTON / 2.0, p.hover.0, p.hover.1);
+                        }
+                        let (cx, cy) = (r_edge + BUTTON / 2.0, y + BUTTON / 2.0);
+                        t.DrawBitmap(b, Some(&rect(cx - 9.0, cy - 9.0, 18.0, 18.0)), 1.0, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
+                        hits.push((r, Hit::Pinned(i)));
+                    }
+                    None => button(&mut hits, r_edge, Hit::Pinned(i), pin.glyph, true, p.muted),
+                }
+            }
 
             // Address bar
             let omni = rect(x + 6.0, STRIP_H + (TOOLBAR_H - OMNI_H) / 2.0, (r_edge - 8.0 - x - 6.0).max(80.0), OMNI_H);
@@ -310,14 +395,26 @@ impl Inner {
             text(chip_glyph, chip, &self.gfx.icons_small, chip_color);
             hits.push((chip, Hit::Chip));
             let mut edit_right = omni.right - 12.0;
+            // Buttons inside the pill, from its right end: the star, then the key.
+            let mut right = omni.right - 4.0;
             if s.show_star {
-                let star = rect(omni.right - 32.0, omni.top + 3.0, 28.0, 28.0);
+                let star = rect(right - 28.0, omni.top + 3.0, 28.0, 28.0);
                 if hovered(Hit::Star) {
                     round(star, 14.0, p.hover.0, p.hover.1);
                 }
                 text(if s.bookmarked { glyph::STAR_ON } else { glyph::STAR }, star, &self.gfx.icons, if s.bookmarked { p.brand } else { p.muted });
                 hits.push((star, Hit::Star));
+                right = star.left;
                 edit_right = star.left - 4.0;
+            }
+            if s.key {
+                let key = rect(right - 28.0, omni.top + 3.0, 28.0, 28.0);
+                if hovered(Hit::Key) {
+                    round(key, 14.0, p.hover.0, p.hover.1);
+                }
+                text(glyph::KEY, key, &self.gfx.icons, p.muted);
+                hits.push((key, Hit::Key));
+                edit_right = key.left - 4.0;
             }
             // The EDIT control sits inside the pill, vertically centred.
             let scale = scale_of(self.hwnd);
@@ -328,4 +425,38 @@ impl Inner {
         }
         self.hits = hits;
     }
+}
+
+/// Width of the scroll arrows at the ends of an overflowing tab strip.
+const SCROLL_W: f32 = 28.0;
+
+/// When the loading spinners started turning (they all turn together).
+fn spin_start() -> std::time::Instant {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    *START.get_or_init(std::time::Instant::now)
+}
+
+/// Three quarters of a circle of `radius` round the origin, made once per radius.
+fn spinner(factory: &ID2D1Factory, cache: &mut Vec<(f32, ID2D1PathGeometry)>, radius: f32) -> Option<ID2D1PathGeometry> {
+    if let Some((_, g)) = cache.iter().find(|(r, _)| *r == radius) {
+        return Some(g.clone());
+    }
+    // SAFETY: plain Direct2D geometry building on objects created here.
+    let g = unsafe {
+        let g = factory.CreatePathGeometry().ok()?;
+        let sink = g.Open().ok()?;
+        sink.BeginFigure(Vector2 { X: radius, Y: 0.0 }, D2D1_FIGURE_BEGIN_HOLLOW);
+        sink.AddArc(&D2D1_ARC_SEGMENT {
+            point: Vector2 { X: 0.0, Y: -radius },
+            size: D2D_SIZE_F { width: radius, height: radius },
+            rotationAngle: 0.0,
+            sweepDirection: D2D1_SWEEP_DIRECTION_CLOCKWISE,
+            arcSize: D2D1_ARC_SIZE_LARGE,
+        });
+        sink.EndFigure(D2D1_FIGURE_END_OPEN);
+        sink.Close().ok()?;
+        g
+    };
+    cache.push((radius, g.clone()));
+    Some(g)
 }

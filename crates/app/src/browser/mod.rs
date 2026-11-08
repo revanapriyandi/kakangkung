@@ -9,6 +9,7 @@ mod menus;
 mod omnibox;
 mod page_forms;
 mod page_host;
+mod passwords;
 mod tab_actions;
 mod tab_search;
 mod updater;
@@ -46,6 +47,8 @@ pub(crate) const MEDIA_WATCH_JS: &str = include_str!("../../../../assets/media-w
 
 /// Runs in every tab page, acts only on the Chrome Web Store: the "Add to Kakangkung" button.
 const STORE_JS: &str = include_str!("../../../../assets/webstore.js");
+/// The password manager's page side.
+const PASSWORDS_JS: &str = include_str!("../../../../assets/passwords.js");
 
 /// Run-wide locations.
 pub(crate) struct Paths {
@@ -92,6 +95,10 @@ pub(crate) struct Browser {
     pub(crate) ui_ready: bool,
     /// Native list pop-up above the page: address-bar suggestions and tab search.
     pub(crate) popup: platform::popup::Popup,
+    /// A menu's submenu, opened beside it.
+    pub(crate) subpopup: platform::popup::Popup,
+    /// Which submenu of the open menu is shown beside it.
+    pub(crate) menu_sub: Option<usize>,
     /// Native built-in pages (Settings, ...), shown in place of a webview.
     pub(crate) page: platform::page::Page,
     pub(crate) native: page_host::NativeState,
@@ -140,6 +147,10 @@ pub(crate) struct Browser {
     pub(crate) overlay_closed: Option<(String, Instant)>,
     /// Self-test only: native menus record their labels here instead of opening.
     pub(crate) menu_probe: Option<Vec<String>>,
+    /// The open menu: its main rows, its submenus (title, rows) and where it is (x, y, right-aligned).
+    pub(crate) menu_main: Vec<serde_json::Value>,
+    pub(crate) menu_subs: Vec<(String, Vec<serde_json::Value>)>,
+    pub(crate) menu_place: (f64, f64, bool),
     /// Self-test only: windows that would open, as (address, Incognito), instead of starting them.
     pub(crate) window_probe: Option<Vec<(String, bool)>>,
     /// Next id for a pop-up tab (handed out inside the new-window handler).
@@ -148,6 +159,14 @@ pub(crate) struct Browser {
     pub(crate) ext_bubble: Option<WebView>,
     /// Where the extensions button is (DIPs: right edge, bottom), the pop-up hangs from it.
     pub(crate) bubble_at: (f64, f64),
+    /// New Tab tile hosts whose icon was looked for (once per run).
+    pub(crate) site_icons_asked: std::collections::HashSet<String>,
+    /// A store extension waiting for the install dialog's answer.
+    pub(crate) pending_install: Option<extensions::PendingInstall>,
+    /// Loaded toolbar icon of each pinned extension ("" = none, the puzzle glyph shows).
+    pub(crate) pinned_icons: std::cell::RefCell<std::collections::HashMap<String, String>>,
+    /// The password manager's field focus and the login waiting to be saved.
+    pub(crate) passwords: passwords::PasswordState,
 }
 
 /// Accessibility focus outline, as a script that switches it on or off in a page.
@@ -213,6 +232,11 @@ impl Browser {
         })
         .map_err(|e| wry::Error::Io(std::io::Error::other(e.to_string())))?;
         let commands = proxy.clone();
+        let subpopup = platform::popup::Popup::create(window.hwnd(), move |cmd| {
+            let _ = commands.send_event(Msg::Ipc(cmd));
+        })
+        .map_err(|e| wry::Error::Io(std::io::Error::other(e.to_string())))?;
+        let commands = proxy.clone();
         let page = platform::page::Page::create(window.hwnd(), move |cmd| {
             let _ = commands.send_event(Msg::Ipc(cmd));
         })
@@ -234,6 +258,8 @@ impl Browser {
             closed: vec![],
             ui_ready: false,
             popup,
+            subpopup,
+            menu_sub: None,
             page,
             native: page_host::NativeState::default(),
             menu_at: (0.0, 0.0),
@@ -264,10 +290,17 @@ impl Browser {
             incognito: false,
             overlay_closed: None,
             menu_probe: None,
+            menu_main: vec![],
+            menu_subs: vec![],
+            menu_place: (0.0, 0.0, false),
             window_probe: None,
             next_popup: std::rc::Rc::new(std::cell::Cell::new(FIRST_POPUP_ID)),
             ext_bubble: None,
             bubble_at: (0.0, 0.0),
+            site_icons_asked: Default::default(),
+            pending_install: None,
+            pinned_icons: Default::default(),
+            passwords: Default::default(),
         })
     }
 
@@ -373,11 +406,18 @@ impl TabKit {
             .with_initialization_script(MEDIA_WATCH_JS)
             .with_initialization_script(focus_script(self.focus_highlight))
             .with_initialization_script(STORE_JS)
+            .with_initialization_script(PASSWORDS_JS)
             // Pages can only send these messages. A page claiming "live" merely keeps itself
             // from being frozen, which it could also do by playing sound; store messages count
             // only from the Chrome Web Store, and installing still asks the person first.
             .with_ipc_handler(move |req| {
                 let body = req.body().as_str();
+                // Password manager: the page's own origin comes from the browser (the message's
+                // source), never from what the page says.
+                if let Some(what) = body.strip_prefix("kk:pw:") {
+                    let _ = p4.send_event(Msg::Password { tab: id, url: req.uri().to_string(), what: what.to_string() });
+                    return;
+                }
                 if let Some(cmd) = body.strip_prefix("kk:store:") {
                     if ui::host(&req.uri().to_string()) == crate::webstore::HOST {
                         let _ = p4.send_event(Msg::Store { tab: id, cmd: cmd.to_string() });
@@ -540,6 +580,11 @@ impl Browser {
         let p = self.proxy.clone();
         self.job(Box::new(move |s| {
             let on = s.is_some_and(|s| s.is_bookmarked(&url));
+            // The password manager's key: logins saved for this site.
+            if let Some(origin) = storage::passwords::origin_of(&url) {
+                let n = s.and_then(|s| s.logins_for(&origin).ok()).map_or(0, |l| l.len());
+                let _ = p.send_event(Msg::SavedLogins { origin, n });
+            }
             let _ = p.send_event(Msg::Bookmarked { url, on });
         }));
     }
@@ -640,6 +685,12 @@ impl Browser {
             Action::Home => self.navigate(&self.settings.home_url.clone()),
             Action::Bookmarks => self.open_after_active(&format!("{}bookmarks", ui::INTERNAL)),
             Action::Downloads => self.open_after_active(&format!("{}downloads", ui::INTERNAL)),
+            Action::OpenFile => {
+                let picked = platform::pick_file(self.window.hwnd(), &crate::i18n::tr("Open file"), &crate::i18n::tr("All files"), "*.*");
+                if let Some(url) = picked.and_then(|p| ui::file_url(&p.to_string_lossy())) {
+                    self.open_after_active(&url);
+                }
+            }
             Action::SavePage => {
                 if let Some(wv) = self.active_webview() {
                     if let Err(e) = platform::save_page_as(wv) {
@@ -759,9 +810,11 @@ impl Browser {
             },
             bookmarked: self.bookmarked,
             show_star: set.bookmark_star && storage::storable(url),
+            key: self.key_shown(),
             show_home: set.home_button,
             show_extensions: set.extensions_button && !self.incognito,
             show_tab_search: set.tab_search_button,
+            pinned: self.pinned_buttons(),
             avatar: self.account_name.trim().chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default(),
             synced: self.synced,
             maximized: self.window.is_maximized(),

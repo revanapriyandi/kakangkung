@@ -7,6 +7,7 @@ use tabs::Lifecycle;
 use tao::platform::windows::WindowExtWindows;
 
 use crate::browser::Browser;
+use crate::i18n::tr;
 use crate::msg::Msg;
 use crate::pages::{api_json, ext_json, query_param, Reply};
 use crate::prefs::{all_values, mode_from_id, mode_id, reset, valid_url_setting, Prefs, Settings, LANGUAGES, SETTABLE};
@@ -25,6 +26,7 @@ impl Browser {
                 let limit = query_param(query, "limit").parse().unwrap_or(300).clamp(1, 5000);
                 self.db_reply(respond, move |s| s.history(&q, limit).map(|v| json!(v)).unwrap_or_else(|e| json!({ "error": e })));
             }
+            "topsites" => self.db_reply(respond, |s| json!(crate::native::top_sites(s.top_sites(60).unwrap_or_default()))),
             "history/delete" => self.db_reply(respond, move |s| ok(s.delete_url(&body))),
             "history/clear" => self.db_reply(respond, move |s| ok(s.clear_history())),
             "chrome" => self.job(Box::new(move |_| {
@@ -49,11 +51,12 @@ impl Browser {
                 self.db_reply(respond, move |s| {
                     let Some(b) = storage::chrome::browser(&id) else { return json!({ "error": "that browser was not found" }) };
                     match s.import_browser(&b, &dir) {
-                        Ok((pages, marks)) => json!({
-                            "pages": pages,
-                            "bookmarks": marks,
+                        Ok(n) => json!({
+                            "pages": n.pages,
+                            "bookmarks": n.bookmarks,
+                            "passwords": n.passwords,
                             "browser": b.name,
-                            "summary": format!("Imported {pages} pages and {marks} bookmarks from {}.", b.name),
+                            "summary": n.summary(b.name),
                         }),
                         Err(e) => json!({ "error": e }),
                     }
@@ -183,10 +186,7 @@ impl Browser {
                 })
             }
             "memory" => {
-                let procs: Vec<Json> = self
-                    .extension_host()
-                    .map(platform::processes)
-                    .unwrap_or_default()
+                let procs: Vec<Json> = platform::processes(self.extension_host())
                     .into_iter()
                     .map(|p| json!({ "pid": p.pid, "kind": p.kind, "ws": p.private_ws, "commit": p.commit }))
                     .collect();
@@ -341,10 +341,116 @@ impl Browser {
                     _ => respond.send(json!({ "error": "no such permission" })),
                 }
             }
-            "privacy/clear" if body.trim() == "passwords" => match self.extension_host() {
-                Some(wv) => platform::clear_passwords(wv, move |r| respond.send(ok(r))),
-                None => respond.send(json!({ "error": "open a tab first" })),
+            "privacy/clear" if body.trim() == "passwords" => {
+                self.db(|s| s.delete_password(None));
+                match self.extension_host() {
+                    Some(wv) => platform::clear_passwords(wv, move |r| respond.send(ok(r))),
+                    None => respond.send(json!({})),
+                }
+            }
+            "passwords" => {
+                let on = self.settings.protection.save_passwords;
+                self.db_reply(respond, move |s| {
+                    let browsers: Vec<Json> = storage::chrome::browsers()
+                        .iter()
+                        .filter(|b| b.chromium)
+                        .filter_map(|b| {
+                            let export = storage::chrome::password_export_page(b.id).is_some();
+                            Some(json!({ "id": b.id, "name": b.name, "profile": storage::chrome::default_profile(b)?, "export": export }))
+                        })
+                        .collect();
+                    match s.logins("") {
+                        Ok(logins) => json!({ "on": on, "logins": logins, "browsers": browsers }),
+                        Err(e) => json!({ "error": e }),
+                    }
+                })
+            }
+            // Showing or copying a password asks Windows Hello first, like Chrome on Windows.
+            "passwords/copy" | "passwords/show" => {
+                let Ok(id) = body.trim().parse::<i64>() else { return respond.send(json!({ "error": "that password is no longer saved" })) };
+                let copy = path == "passwords/copy";
+                let jobs = self.jobs.clone();
+                platform::verify_user(self.window.hwnd(), &tr("Kakangkung wants to show a saved password."), move |verified| {
+                    if !verified {
+                        return respond.send(json!({ "error": "Windows did not confirm it's you." }));
+                    }
+                    let _ = jobs.send(Box::new(move |s| {
+                        let Some(s) = s else { return respond.send(json!({ "error": "the history database could not be opened" })) };
+                        respond.send(match s.password(id, false) {
+                            Ok((l, pw)) => {
+                                let who = if l.username.is_empty() { l.origin.clone() } else { l.username.clone() };
+                                if copy {
+                                    match platform::copy_secret(&pw) {
+                                        Ok(()) => json!({ "summary": format!("Password for {who} copied. It leaves the clipboard in 30 seconds.") }),
+                                        Err(e) => json!({ "error": e }),
+                                    }
+                                } else {
+                                    json!({ "summary": format!("{who} · {pw}") })
+                                }
+                            }
+                            Err(e) => json!({ "error": e }),
+                        })
+                    }));
+                });
+            }
+            // Open the other browser on its own "Export passwords" page (`start` finds it).
+            "passwords/open-export" => match storage::chrome::password_export_page(body.trim()) {
+                Some((exe, page)) => {
+                    use std::os::windows::process::CommandExt;
+                    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+                    let r = std::process::Command::new("cmd").args(["/c", "start", "", exe, page]).creation_flags(CREATE_NO_WINDOW).spawn();
+                    respond.send(match r {
+                        Ok(_) => json!({ "summary": "Choose Export passwords there, then import the file here (From a CSV file)." }),
+                        Err(e) => json!({ "error": e.to_string() }),
+                    })
+                }
+                None => respond.send(json!({ "error": "that browser was not found" })),
             },
+            "passwords/delete" => {
+                let id = body.trim().parse::<i64>().ok();
+                if id.is_none() && body.trim() != "all" {
+                    return respond.send(json!({ "error": "that password is no longer saved" }));
+                }
+                self.db_reply(respond, move |s| ok(s.delete_password(id)))
+            }
+            "passwords/import" => match platform::pick_file(self.window.hwnd(), &tr("Choose the passwords file (CSV)"), &tr("Passwords (CSV)"), "*.csv") {
+                None => respond.send(json!({ "cancelled": true })),
+                Some(file) => self.db_reply(respond, move |s| {
+                    let text = match std::fs::read(&file) {
+                        Ok(b) => String::from_utf8_lossy(&b).into_owned(),
+                        Err(e) => return json!({ "error": format!("reading {}: {e}", file.display()) }),
+                    };
+                    let list = storage::passwords::parse_csv(&text);
+                    if list.is_empty() {
+                        return json!({ "error": "No passwords found in that file. Export a CSV file from your browser or password manager and choose it here." });
+                    }
+                    match s.import_passwords(&list) {
+                        Ok(n) => json!({ "summary": format!("New passwords imported: {n}") }),
+                        Err(e) => json!({ "error": e }),
+                    }
+                }),
+            },
+            // Export: where to, then Windows Hello, then the file (Chrome's order).
+            "passwords/export" => {
+                let downloads = std::env::var_os("USERPROFILE").map(PathBuf::from).unwrap_or_default().join("Downloads").join("Kakangkung Passwords.csv");
+                let Some(dest) = platform::save_file(self.window.hwnd(), &downloads.to_string_lossy()) else { return respond.send(json!({ "cancelled": true })) };
+                let jobs = self.jobs.clone();
+                platform::verify_user(self.window.hwnd(), &tr("Kakangkung wants to export your saved passwords."), move |verified| {
+                    if !verified {
+                        return respond.send(json!({ "error": "Windows did not confirm it's you." }));
+                    }
+                    let _ = jobs.send(Box::new(move |s| {
+                        let Some(s) = s else { return respond.send(json!({ "error": "the history database could not be opened" })) };
+                        let written = s.export_passwords().and_then(|list| {
+                            std::fs::write(&dest, storage::passwords::to_csv(&list)).map(|_| list.len()).map_err(|e| format!("writing {}: {e}", dest.display()))
+                        });
+                        respond.send(match written {
+                            Ok(_) => json!({ "summary": format!("Passwords exported to {}", dest.display()) }),
+                            Err(e) => json!({ "error": e }),
+                        })
+                    }));
+                });
+            }
             "privacy/clear" => {
                 // Within the chosen time range; "all" = the data types ticked in Settings.
                 let since = self.settings.clear_since(storage::now_ms());

@@ -24,7 +24,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::EM_SETSEL;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetFocus, SetFocus};
 use windows::Win32::UI::Shell::SetWindowSubclass;
-use windows::Win32::UI::WindowsAndMessaging::{SetTimer, CreateWindowExW, CS_DBLCLKS, DestroyWindow, ES_AUTOHSCROLL, GetWindowLongPtrW, GWLP_USERDATA, IDC_ARROW, LoadCursorW, MoveWindow, RegisterClassExW, SendMessageW, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN, WS_VISIBLE};
+use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer, CreateWindowExW, CS_DBLCLKS, DestroyWindow, ES_AUTOHSCROLL, GetWindowLongPtrW, GWLP_USERDATA, IDC_ARROW, LoadCursorW, MoveWindow, RegisterClassExW, SendMessageW, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN, WS_VISIBLE};
 use windows::core::w;
 
 use self::layout::{rect, Hit};
@@ -70,6 +70,17 @@ pub enum Chip {
     Local,
 }
 
+/// A button pinned to the toolbar: an extension or a built-in page.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Pinned {
+    /// Sent back as `pinned <id> <right> <bottom>` (tab-separated) when clicked.
+    pub id: String,
+    /// Icon-font glyph, drawn when `icon` is empty or not loaded.
+    pub glyph: &'static str,
+    /// Key of a loaded icon (`platform::load_icon_file`), "" for none.
+    pub icon: String,
+}
+
 /// Everything the frame draws.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FrameState {
@@ -89,9 +100,14 @@ pub struct FrameState {
     pub chip: Chip,
     pub bookmarked: bool,
     pub show_star: bool,
+    /// The password manager's key in the address bar: the page has saved logins, or a login
+    /// waits to be saved.
+    pub key: bool,
     pub show_home: bool,
     pub show_extensions: bool,
     pub show_tab_search: bool,
+    /// Buttons pinned to the toolbar, left to right, between the address bar and the extensions button.
+    pub pinned: Vec<Pinned>,
     /// Account initial ("" = signed out).
     pub avatar: String,
     pub synced: bool,
@@ -103,6 +119,10 @@ pub struct FrameState {
 /// Frame timer of animations, and how long a new tab takes to widen (ms at normal speed).
 pub(super) const TIMER_ANIM: usize = 1;
 pub(super) const TAB_GROW_MS: f32 = 200.0;
+/// Timer of the loading spinners, and its interval: 20 frames a second is smooth enough for a
+/// spinner and keeps the CPU-drawn frame cheap while pages load.
+pub(super) const TIMER_SPIN: usize = 2;
+const SPIN_MS: u32 = 50;
 
 struct Gfx {
     factory: ID2D1Factory,
@@ -110,6 +130,8 @@ struct Gfx {
     brush: Option<ID2D1SolidColorBrush>,
     /// Site icons made for this target, by address.
     favicons: std::collections::HashMap<String, windows::Win32::Graphics::Direct2D::ID2D1Bitmap>,
+    /// Loading spinner arcs (three quarters of a circle round the origin), by radius.
+    spinners: Vec<(f32, windows::Win32::Graphics::Direct2D::ID2D1PathGeometry)>,
     text: IDWriteTextFormat,
     text_bold: IDWriteTextFormat,
     icons: IDWriteTextFormat,
@@ -136,6 +158,10 @@ struct Inner {
     /// Tabs opened lately (they widen into place), and when.
     appear: Vec<(u64, std::time::Instant)>,
     omni_rect: D2D_RECT_F,
+    /// How far the tab strip is scrolled (DIPs) when its tabs do not fit.
+    scroll: f32,
+    /// Scroll the selected tab into view at the next paint.
+    reveal: bool,
 }
 
 /// The frame window. Dropping it destroys the window.
@@ -169,6 +195,7 @@ impl Frame {
                 target: None,
                 brush: None,
                 favicons: Default::default(),
+                spinners: vec![],
                 text: text_format(&dw, w!("Segoe UI"), 12.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING)?,
                 text_bold: text_format(&dw, w!("Segoe UI"), 12.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER)?,
                 icons: text_format(&dw, icons, 16.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER)?,
@@ -190,6 +217,8 @@ impl Frame {
                 hits: vec![],
                 omni_rect: rect(0.0, 0.0, 0.0, 0.0),
                 appear: vec![],
+                scroll: 0.0,
+                reveal: true,
             }));
             let raw = Box::into_raw(inner);
             let hwnd = CreateWindowExW(
@@ -270,6 +299,18 @@ impl Frame {
                 unsafe {
                     SetTimer(Some(i.hwnd), TIMER_ANIM, crate::motion::FRAME_MS, None);
                 }
+            }
+        }
+        if i.state.active != state.active || i.state.tabs.len() != state.tabs.len() {
+            i.reveal = true;
+        }
+        // Spinners turn while any tab loads (they stand still when animations are off).
+        // SAFETY: frame timer on our own live window.
+        unsafe {
+            if crate::motion::enabled() && state.tabs.iter().any(|t| t.loading) {
+                SetTimer(Some(i.hwnd), TIMER_SPIN, SPIN_MS, None);
+            } else {
+                let _ = KillTimer(Some(i.hwnd), TIMER_SPIN);
             }
         }
         i.state = state;

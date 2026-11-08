@@ -49,7 +49,12 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      # The Google OAuth client ("Sign in with Google") is built into kakangkung.exe from these
+      # secrets (see docs/GOOGLE_SIGNIN.md); without them the build has no Google sign-in.
       - name: Build
+        env:
+          KAKANGKUNG_GOOGLE_CLIENT_ID: ${{ secrets.KAKANGKUNG_GOOGLE_CLIENT_ID }}
+          KAKANGKUNG_GOOGLE_CLIENT_SECRET: ${{ secrets.KAKANGKUNG_GOOGLE_CLIENT_SECRET }}
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       # Signs kakangkung.exe, Setup and the uninstaller when the SIGN_PFX_BASE64 and

@@ -33,6 +33,24 @@ pub(crate) const LANGUAGES: &[&str] = &[
     "vi", "zh-CN", "zh-TW",
 ];
 
+/// Built-in pages that can be pinned to the toolbar (setting `appearance.<page>_button`) and
+/// their icon-font glyph.
+pub(crate) const PINNABLE_PAGES: &[(&str, &str)] = &[("downloads", "\u{E896}"), ("history", "\u{E81C}"), ("bookmarks", "\u{E728}"), ("taskmanager", "\u{E9D9}")];
+
+/// Setting holding the extension ids pinned to the toolbar, comma-separated.
+pub(crate) const PINNED_EXTENSIONS: &str = "toolbar.pinned_extensions";
+
+/// Extension ids of the `PINNED_EXTENSIONS` setting: valid ids only, each once.
+pub(crate) fn pinned_list(v: &str) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    for id in v.split(',').map(str::trim).filter(|id| crate::webstore::valid_id(id)) {
+        if !out.iter().any(|o| o == id) {
+            out.push(id.to_string());
+        }
+    }
+    out
+}
+
 /// Every setting with a fixed set of values: key, allowed values (first = default unless named).
 pub(crate) const SETTABLE: &[(&str, &[&str], &str)] = &[
     // Appearance
@@ -43,6 +61,11 @@ pub(crate) const SETTABLE: &[(&str, &[&str], &str)] = &[
     ("appearance.home_button", OFF_ON, "0"),
     ("appearance.bookmark_star", ON_OFF, "1"),
     ("appearance.extensions_button", ON_OFF, "1"),
+    // Built-in pages pinned to the toolbar (Chrome's "Pin to toolbar"); none by default.
+    ("appearance.downloads_button", OFF_ON, "0"),
+    ("appearance.history_button", OFF_ON, "0"),
+    ("appearance.bookmarks_button", OFF_ON, "0"),
+    ("appearance.taskmanager_button", OFF_ON, "0"),
     ("appearance.tab_search_button", ON_OFF, "1"),
     ("appearance.full_urls", OFF_ON, "0"),
     ("appearance.zoom", ZOOMS, "100"),
@@ -215,6 +238,10 @@ pub(crate) struct Settings {
     pub(crate) home_button: bool,
     pub(crate) bookmark_star: bool,
     pub(crate) extensions_button: bool,
+    /// Built-in pages pinned to the toolbar, in toolbar order ("downloads", "history", ...).
+    pub(crate) pinned_pages: Vec<&'static str>,
+    /// Extension ids pinned to the toolbar from the extensions menu, in toolbar order.
+    pub(crate) pinned_extensions: Vec<String>,
     pub(crate) tab_search_button: bool,
     /// Clicking a tab's speaker icon mutes it.
     pub(crate) speaker_mutes: bool,
@@ -290,6 +317,8 @@ impl Settings {
             home_button: on("appearance.home_button"),
             bookmark_star: on("appearance.bookmark_star"),
             extensions_button: on("appearance.extensions_button"),
+            pinned_pages: PINNABLE_PAGES.iter().map(|(page, _)| *page).filter(|page| on(&format!("appearance.{page}_button"))).collect(),
+            pinned_extensions: get(PINNED_EXTENSIONS).map(|v| pinned_list(&v)).unwrap_or_default(),
             tab_search_button: on("appearance.tab_search_button"),
             speaker_mutes: on("tabs.speaker_mutes"),
         }

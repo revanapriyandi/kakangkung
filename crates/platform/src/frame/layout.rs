@@ -13,6 +13,11 @@ pub(super) enum Hit {
     Group(u32),
     NewTab,
     TabSearch,
+    /// Arrows at the ends of a tab strip with more tabs than fit.
+    ScrollLeft,
+    ScrollRight,
+    /// A button pinned to the toolbar (index into `FrameState::pinned`).
+    Pinned(usize),
     Min,
     Max,
     Close,
@@ -22,6 +27,7 @@ pub(super) enum Hit {
     Home,
     Chip,
     Star,
+    Key,
     Extensions,
     Profile,
     Menu,
