@@ -261,6 +261,12 @@ impl Browser {
                 r.map(|_| json!({})).unwrap_or_else(|e| json!({ "error": e }))
             }),
             "system/proxy" => respond.send(ok(open_windows_settings("ms-settings:network-proxy"))),
+            // Windows' certificate manager, the same dialog Chrome opens.
+            "system/certs" => respond.send(ok(std::process::Command::new("rundll32.exe")
+                .arg("cryptui.dll,CryptUIStartCertMgr")
+                .spawn()
+                .map(|_| ())
+                .map_err(|e| e.to_string()))),
             "settings/startup" => {
                 let v = match body.trim() {
                     "continue" => "continue",
@@ -351,7 +357,7 @@ impl Browser {
                     }
                 }
                 if all && !s.clear_history {
-                    return respond.send(json!({ "ok": true }));
+                    return respond.send(json!({}));
                 }
                 self.db_reply(respond, move |s| {
                     ok(match since {

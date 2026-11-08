@@ -108,6 +108,8 @@ pub struct Protection {
     /// Bit `1 << kind` set = every request for that `COREWEBVIEW2_PERMISSION_KIND` is denied
     /// without asking (Site settings > "Don't allow sites to ..."). Saved per-site choices still win.
     pub blocked: u32,
+    /// Show a Save As dialog for every download (Chrome's "Ask where to save each file").
+    pub ask_downloads: bool,
 }
 
 thread_local! {
@@ -130,6 +132,7 @@ pub fn apply_protection(wv: &WebView, p: Protection) -> Vec<String> {
     };
     let mut errors = vec![];
     BLOCKED.with(|b| b.set(p.blocked));
+    crate::downloads::set_ask(p.ask_downloads);
     let level = match p.tracking {
         0 => COREWEBVIEW2_TRACKING_PREVENTION_LEVEL_NONE,
         1 => COREWEBVIEW2_TRACKING_PREVENTION_LEVEL_BASIC,

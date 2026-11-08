@@ -81,6 +81,8 @@ pub(crate) struct Browser {
     pub(crate) env: Option<platform::Environment>,
     /// Browser-process switches, applied when the environment is created.
     pub(crate) browser_args: String,
+    /// Finished downloads already seen ("Show downloads when they're done" opens the page for new ones).
+    pub(crate) done_downloads: Vec<u64>,
     pub(crate) omnibox: omnibox::Omnibox,
     pub(crate) proxy: EventLoopProxy<Msg>,
     pub(crate) tabs: Vec<Tab>,
@@ -192,8 +194,7 @@ impl Browser {
         proxy: EventLoopProxy<Msg>,
         jobs: mpsc::Sender<Job>,
         paths: Paths,
-        hardware_acceleration: bool,
-        lang: Option<String>,
+        extra_args: &str,
     ) -> wry::Result<Self> {
         timing("window created");
         let ctx = WebContext::new(Some(data_dir));
@@ -217,16 +218,14 @@ impl Browser {
         })
         .map_err(|e| wry::Error::Io(std::io::Error::other(e.to_string())))?;
         timing("native frame created");
-        let mut browser_args = if hardware_acceleration { BROWSER_ARGS.to_string() } else { format!("{BROWSER_ARGS} --disable-gpu") };
-        if let Some(l) = lang {
-            browser_args += &format!(" --lang={l}");
-        }
+        let browser_args = format!("{BROWSER_ARGS}{extra_args}");
         Ok(Self {
             window,
             frame,
             ctx,
             env: None,
             browser_args,
+            done_downloads: vec![],
             omnibox: omnibox::Omnibox::default(),
             proxy,
             tabs: vec![],

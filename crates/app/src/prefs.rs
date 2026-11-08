@@ -86,6 +86,10 @@ pub(crate) const SETTABLE: &[(&str, &[&str], &str)] = &[
     ("site.sensors", ASK_BLOCK, "ask"),
     ("site.midi", ASK_BLOCK, "ask"),
     ("site.sound", &["allow", "mute"], "allow"),
+    ("site.images", &["allow", "block"], "allow"),
+    // Downloads
+    ("downloads.ask", OFF_ON, "0"),
+    ("downloads.show_done", OFF_ON, "0"),
     // Performance
     ("performance.protect_media", ON_OFF, "1"),
     ("performance.protect_pinned", ON_OFF, "1"),
@@ -165,6 +169,10 @@ pub(crate) struct Settings {
     pub(crate) clear_cache: bool,
     /// Sound site setting "Don't allow sites to play sound": new tabs start muted.
     pub(crate) mute_sites: bool,
+    /// Site settings > Images "Don't allow sites to show images" (a start-up switch).
+    pub(crate) block_images: bool,
+    /// Open the Downloads page when a download finishes.
+    pub(crate) show_downloads_done: bool,
     /// Language sites are asked for (Accept-Language), "auto" = Windows' language.
     pub(crate) preferred_language: String,
     /// Hosts Memory Saver never freezes ("Always keep these sites active").
@@ -240,6 +248,7 @@ impl Settings {
                 autofill: on("privacy.autofill"),
                 script: v("site.javascript") == "allow",
                 blocked: PERMISSION_KINDS.iter().filter(|(k, _)| v(k) == "block").fold(0, |m, (_, kind)| m | 1 << kind),
+                ask_downloads: on("downloads.ask"),
             },
             https_first: on("privacy.https_first"),
             clear_on_exit: on("privacy.clear_on_exit"),
@@ -248,6 +257,8 @@ impl Settings {
             clear_cookies: on("privacy.clear_cookies"),
             clear_cache: on("privacy.clear_cache"),
             mute_sites: v("site.sound") == "mute",
+            block_images: v("site.images") == "block",
+            show_downloads_done: on("downloads.show_done"),
             preferred_language: v("languages.preferred"),
             keep_active: url("performance.keep_active").unwrap_or_default().lines().map(|u| ui::host(u).to_string()).collect(),
             home_url: url("appearance.home_url").unwrap_or_else(|| new_tab_url.clone()),
@@ -401,6 +412,11 @@ mod tests {
             "site.javascript" => Some("block".into()),
             "site.camera" | "site.notifications" => Some("block".into()),
             "privacy.clear_range" => Some("hour".into()),
+            "privacy.clear_cache" => Some("0".into()),
+            "site.sound" => Some("mute".into()),
+            "site.images" => Some("block".into()),
+            "downloads.ask" => Some("1".into()),
+            "languages.preferred" => Some("id".into()),
             "performance.keep_active" => Some("https://mail.example.com\nhttps://music.test".into()),
             _ => None,
         });
@@ -410,6 +426,9 @@ mod tests {
         assert!(s.kept_active("https://mail.example.com/inbox") && s.kept_active("https://a.music.test/"));
         assert!(!s.kept_active("https://example.com/") && !s.kept_active("https://evilmusic.test/"));
         let d = Settings::read(|_| None);
+        assert!(s.clear_history && s.clear_cookies && !s.clear_cache && s.mute_sites && s.preferred_language == "id");
         assert!(d.protection.script && d.protection.blocked == 0 && d.clear_since(1).is_none());
+        assert!(s.block_images && s.protection.ask_downloads && !s.show_downloads_done);
+        assert!(d.clear_cache && !d.mute_sites && d.preferred_language == "auto" && !d.block_images && !d.protection.ask_downloads);
     }
 }

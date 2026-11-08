@@ -26,6 +26,34 @@ pub fn pick_folder(owner: isize, title: &str) -> Option<std::path::PathBuf> {
     }
 }
 
+/// Windows' Save As dialog, starting at `suggested` (folder and file name). `None` when cancelled.
+pub fn save_file(owner: isize, suggested: &str) -> Option<std::path::PathBuf> {
+    use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_INPROC_SERVER};
+    use windows::Win32::UI::Shell::{FileSaveDialog, IFileSaveDialog, IShellItem, SHCreateItemFromParsingName, SIGDN_FILESYSPATH};
+    let suggested = Path::new(suggested);
+    // SAFETY: as in `pick_folder`; the strings outlive the calls that borrow them.
+    unsafe {
+        let dialog: IFileSaveDialog = CoCreateInstance(&FileSaveDialog, None, CLSCTX_INPROC_SERVER).ok()?;
+        if let Some(name) = suggested.file_name() {
+            let _ = dialog.SetFileName(&HSTRING::from(name));
+        }
+        if let Some(ext) = suggested.extension() {
+            let _ = dialog.SetDefaultExtension(&HSTRING::from(ext));
+        }
+        if let Some(dir) = suggested.parent().filter(|d| d.is_dir()) {
+            if let Ok(item) = SHCreateItemFromParsingName::<_, _, IShellItem>(&HSTRING::from(dir.as_os_str()), None) {
+                let _ = dialog.SetFolder(&item);
+            }
+        }
+        dialog.Show(Some(HWND(owner as *mut _))).ok()?;
+        let item = dialog.GetResult().ok()?;
+        let p = item.GetDisplayName(SIGDN_FILESYSPATH).ok()?;
+        let path = p.to_string().ok().map(std::path::PathBuf::from);
+        CoTaskMemFree(Some(p.0 as *const _));
+        path
+    }
+}
+
 /// Is Windows set to dark mode for apps (HKCU ...\Themes\Personalize\AppsUseLightTheme = 0)?
 /// Two-letter code of the Windows display language ("id", "en", …; "en" when not known).
 pub fn ui_language() -> String {

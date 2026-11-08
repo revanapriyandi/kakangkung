@@ -1,7 +1,7 @@
 //! Downloads of this browser window: WebView2 reports each one (`DownloadStarting`); the list
 //! and the operations (pause, resume, cancel) live here, on the UI thread, for the Downloads page.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use webview2_com::Microsoft::Web::WebView2::Win32::{
@@ -9,7 +9,10 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_DOWNLOAD_STATE_INTERRUPTED,
 };
 use webview2_com::{take_pwstr, BytesReceivedChangedEventHandler, DownloadStartingEventHandler, StateChangedEventHandler};
-use windows::core::{Interface, BOOL, PWSTR};
+use windows::core::{Interface, BOOL, HSTRING, PWSTR};
+use windows::Win32::Foundation::HWND;
+use windows::Win32::UI::Input::KeyboardAndMouse::GetActiveWindow;
+use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
 use wry::{WebView, WebViewExtWindows};
 
 /// Where a download is.
@@ -60,6 +63,27 @@ struct Item {
 thread_local! {
     static LIST: RefCell<Vec<Item>> = const { RefCell::new(Vec::new()) };
     static NEXT: RefCell<u64> = const { RefCell::new(1) };
+    static ASK: Cell<bool> = const { Cell::new(false) };
+    static LATER: RefCell<Vec<Box<dyn FnOnce()>>> = const { RefCell::new(Vec::new()) };
+}
+
+pub(crate) fn set_ask(ask: bool) {
+    ASK.with(|a| a.set(ask));
+}
+
+/// Run `f` from the message loop, after the current WebView2 event handler has returned
+/// (modal UI inside a handler would re-enter WebView2).
+fn later(f: Box<dyn FnOnce()>) {
+    unsafe extern "system" fn run(_: HWND, _: u32, id: usize, _: u32) {
+        // SAFETY: `id` is the thread timer SetTimer returned below.
+        let _ = unsafe { KillTimer(None, id) };
+        for f in LATER.with(|l| std::mem::take(&mut *l.borrow_mut())) {
+            f();
+        }
+    }
+    LATER.with(|l| l.borrow_mut().push(f));
+    // SAFETY: a thread timer (no window) with a plain callback; fires once, killed in `run`.
+    unsafe { SetTimer(None, 0, 0, Some(run)) };
 }
 
 fn now_ms() -> i64 {
@@ -84,6 +108,29 @@ pub(crate) fn watch(wv: &WebView, on_change: Rc<dyn Fn()>) -> Option<i64> {
         let Some(args) = args else { return Ok(()) };
         // SAFETY: plain COM calls on the live event args and the operation they hand over.
         let op = unsafe { args.DownloadOperation()? };
+        if ASK.with(Cell::get) {
+            // SAFETY: plain COM calls on the live event args; the deferral keeps them valid until
+            // Complete, which runs once the dialog closes.
+            let deferral = unsafe { args.GetDeferral()? };
+            let mut suggested = PWSTR::null();
+            let suggested = unsafe { args.ResultFilePath(&mut suggested).map(|_| take_pwstr(suggested)).unwrap_or_default() };
+            let args = args.clone();
+            later(Box::new(move || {
+                // SAFETY: the active window belongs to this thread; args and deferral are live (see above).
+                let owner = unsafe { GetActiveWindow() }.0 as isize;
+                unsafe {
+                    match crate::shell::save_file(owner, &suggested) {
+                        Some(path) => {
+                            let _ = args.SetResultFilePath(&HSTRING::from(path.as_os_str()));
+                        }
+                        None => {
+                            let _ = args.SetCancel(true);
+                        }
+                    }
+                    let _ = deferral.Complete();
+                }
+            }));
+        }
         let id = NEXT.with(|n| {
             let mut n = n.borrow_mut();
             *n += 1;

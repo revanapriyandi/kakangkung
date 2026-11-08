@@ -288,7 +288,9 @@ impl Browser {
     /// A download moved on: redraw the Downloads page soon (not for every chunk of bytes).
     pub(crate) fn downloads_changed(&mut self) {
         // Finished ones move to disk so the list survives a restart (Incognito ones stay here).
-        let finished: Vec<storage::PastDownload> = platform::take_finished()
+        let taken = platform::take_finished();
+        let any_done = taken.iter().any(|d| d.state == platform::DownloadState::Done);
+        let finished: Vec<storage::PastDownload> = taken
             .into_iter()
             .map(|d| storage::PastDownload { id: 0, url: d.url, path: d.path, size: d.received, done: d.state == platform::DownloadState::Done, started: d.started })
             .collect();
@@ -298,6 +300,16 @@ impl Browser {
                     eprintln!("downloads: {e}");
                 }
             }));
+        }
+        if self.settings.show_downloads_done {
+            // Taken ones finished just now; Incognito ones stay in the list until the window closes.
+            let done: Vec<u64> = platform::downloads().iter().filter(|d| d.state == platform::DownloadState::Done).map(|d| d.id).collect();
+            let new = any_done || done.iter().any(|id| !self.done_downloads.contains(id));
+            self.done_downloads = done;
+            let page = format!("{}downloads", ui::INTERNAL);
+            if new && !self.tabs.iter().any(|t| t.view.url == page) {
+                self.act(ui::Action::Downloads);
+            }
         }
         if self.native.page == "downloads" && self.native.tab != 0 && self.native.refresh_at.is_none() {
             self.native.refresh_at = Some(Instant::now() + DOWNLOADS_EVERY);

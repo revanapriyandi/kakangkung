@@ -126,12 +126,15 @@ pub(crate) fn settings_doc(s: &Json, permissions: Option<&[Json]>) -> PageDoc {
             Row::new("Default browser", sub, control)
         }]]),
         startup(&v, s["startup"].as_str().unwrap_or("newtab")),
-        section("languages", "Languages", "languages language translate", vec![vec![
+        section("languages", "Languages", "languages language translate preferred accept website", vec![vec![
             v.select("languages.ui", "Interface language", "Menus and built-in pages; more languages are welcome on GitHub", UI_LANGS),
+            v.select("languages.preferred", "Preferred language for websites", "Sites show pages in this language when they can; takes effect after you restart Kakangkung", LANG_NAMES),
             v.select("languages.translate_to", "Translate pages into", "Used by ⋮ > Translate page (Google Translate)", LANG_NAMES),
         ]]),
-        section("downloads", "Downloads", "downloads location folder save", vec![vec![
+        section("downloads", "Downloads", "downloads location folder save ask where done", vec![vec![
             Row::new("Location", &text("downloads"), buttons(&[("dl-pick", "Change", ButtonStyle::Normal)])),
+            v.toggle("downloads.ask", "Ask where to save each file before downloading", ""),
+            v.toggle("downloads.show_done", "Show downloads when they're done", "Opens the Downloads page"),
             Row::new("Show downloads", "Ctrl+J", Control::None),
         ]]),
         section("accessibility", "Accessibility", "accessibility focus highlight keyboard animations motion zoom", vec![vec![
@@ -237,6 +240,8 @@ fn privacy(v: &Values, permissions: Option<&[Json]>) -> Section {
     }
     site.push(Row::heading("Default behaviour"));
     site.push(v.select("site.javascript", "JavaScript", "Applies from the next page load", &[("allow", "Sites can use JavaScript"), ("block", "Don't allow sites to use JavaScript")]));
+    site.push(v.select("site.images", "Images", "Takes effect after you restart Kakangkung", &[("allow", "Sites can show images"), ("block", "Don't allow sites to show images")]));
+    site.push(v.select("site.sound", "Sound", "New tabs; unmute one with right-click on the tab", &[("allow", "Sites can play sound"), ("mute", "Mute sites that play sound")]));
     for (key, title, what) in [
         ("site.location", "Location", "see your location"),
         ("site.camera", "Camera", "use your camera"),
@@ -255,17 +260,20 @@ fn privacy(v: &Values, permissions: Option<&[Json]>) -> Section {
     let mut rows = vec![
         safety_check(v),
         Row::heading("Browsing data"),
-        v.select("privacy.clear_range", "Time range", "Used by the two Clear buttons below", &[("hour", "Last hour"), ("day", "Last 24 hours"), ("week", "Last 7 days"), ("month", "Last 4 weeks"), ("all", "All time")]),
-        Row::new("Clear browsing history", "Pages you visited in Kakangkung", buttons(&[("clear-history", "Clear", ButtonStyle::Danger)])),
-        Row::new("Clear all browsing data", "History, cookies, cached files and site data", buttons(&[("clear-all", "Clear", ButtonStyle::Danger)])),
+        v.select("privacy.clear_range", "Time range", "", &[("hour", "Last hour"), ("day", "Last 24 hours"), ("week", "Last 7 days"), ("month", "Last 4 weeks"), ("all", "All time")]),
+        v.toggle("privacy.clear_history", "Browsing history", "Pages you visited in Kakangkung").indented(),
+        v.toggle("privacy.clear_cookies", "Cookies and other site data", "Signs you out of most sites").indented(),
+        v.toggle("privacy.clear_cache", "Cached images and files", "Some sites may load more slowly next time").indented(),
+        Row::new("Delete browsing data", "What is switched on above, within the time range", buttons(&[("clear-all", "Delete data", ButtonStyle::Danger)])),
         v.toggle("privacy.clear_on_exit", "Clear browsing data when you exit", "History, cookies, cache and site data are removed when Kakangkung closes"),
         Row::heading("Security"),
         v.toggle("privacy.safe_browsing", "Safe Browsing", "Microsoft Defender SmartScreen warns about dangerous sites and downloads"),
         v.toggle("privacy.https_first", "Always use secure connections", "HTTPS-First: typed http:// addresses open over https://"),
         v.select("privacy.tracking", "Tracking prevention", "Blocks trackers from sites you haven't visited; Strict may break some sites", &[("0", "Off"), ("1", "Basic"), ("2", "Balanced (recommended)"), ("3", "Strict")]),
+        Row::new("Manage certificates", "Windows certificate store", buttons(&[("certs", "Open", ButtonStyle::Normal)])),
     ];
     rows.extend(site);
-    section("privacy", "Privacy and security", "privacy security safety check clear browsing data time range history cookies cache safe browsing https tracking site settings permissions javascript camera microphone location notifications clipboard downloads sensors midi", vec![rows])
+    section("privacy", "Privacy and security", "privacy security safety check clear delete browsing data time range history cookies cache cached images sound mute certificates safe browsing https tracking site settings permissions javascript camera microphone location notifications clipboard downloads sensors midi", vec![rows])
 }
 
 /// Chrome's Safety check, from the settings alone: which protections are switched off.

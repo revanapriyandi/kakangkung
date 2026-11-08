@@ -44,15 +44,18 @@ WebView2 keeps saved passwords inside the profile and has no API to list them on
 | Setting | Key | Values | Applies |
 |---|---|---|---|
 | Safety check | — | lists protections that are off (Safe Browsing, HTTPS-First, updates, tracking prevention) | Live |
-| Time range | `privacy.clear_range` | last hour / 24 hours / 7 days / 4 weeks / **all time** | Live (used by both Clear buttons) |
-| Clear browsing history | — | button | Live |
-| Clear all browsing data | — | button (history, cookies, cache, site data) | Live |
+| Time range | `privacy.clear_range` | last hour / 24 hours / 7 days / 4 weeks / **all time** | Live |
+| Browsing history · Cookies and other site data · Cached images and files | `privacy.clear_history`, `privacy.clear_cookies`, `privacy.clear_cache` | **on** / off each — what Delete data removes | Live |
+| Delete browsing data | — | button (the types above, within the time range; passwords and autofill stay) | Live |
 | Clear browsing data when you exit | `privacy.clear_on_exit` | on / **off** | On exit (and again at the next start) |
 | Safe Browsing (SmartScreen) | `privacy.safe_browsing` | **on** / off | Live |
 | Always use secure connections (HTTPS-First) | `privacy.https_first` | **on** / off | Live |
 | Tracking prevention | `privacy.tracking` | off / basic / **balanced** / strict | Live |
+| Manage certificates | — | button: Windows' certificate manager (`CryptUIStartCertMgr`) | — |
 | Site permissions | — | list with Reset (camera, microphone, location, notifications, …) | Live |
 | JavaScript | `site.javascript` | **allow** / block | Next page load |
+| Images | `site.images` | **allow** / block (`--blink-settings=imagesEnabled=false`) | Restart |
+| Sound | `site.sound` | **allow** / mute (new tabs start muted; right-click a tab to unmute) | New tabs |
 | Location, Camera, Microphone, Notifications, Clipboard, Automatic downloads, Motion sensors, MIDI devices | `site.location`, `site.camera`, `site.microphone`, `site.notifications`, `site.clipboard`, `site.automatic_downloads`, `site.sensors`, `site.midi` | **ask** / block (denied without a prompt; a per-site choice you saved still wins) | Live |
 
 ## Performance
@@ -108,6 +111,7 @@ Switched-off features disappear from the ⋮ menu and the tab right-click menu.
 | Setting | Key | Values | Applies |
 |---|---|---|---|
 | Search engine | `search.engine` | **Google** / Bing / DuckDuckGo / Yahoo! / Ecosia / Brave / custom `https://…%s` | Live |
+| Site search | — | type `@keyword words`: an engine id (`@bing`), `@youtube`/`@yt`, `@wikipedia`, `@github`, `@maps`, `@ddg`; a keyword may be shortened (`@wiki`) | Live |
 | Search suggestions | `search.suggestions` | **on** / off | Live |
 | Suggestions from history and bookmarks | `search.history_suggestions` | **on** / off (also inline completion) | Live |
 
@@ -129,6 +133,7 @@ shows whether Kakangkung is the default.
 | Setting | Key | Values | Applies |
 |---|---|---|---|
 | Interface language | `languages.ui` | **Windows language** / English / Bahasa Indonesia | Live |
+| Preferred language for websites | `languages.preferred` | **Windows' language** / Indonesian / English / … (`--lang`, sets Accept-Language) | Restart |
 | Translate pages into | `languages.translate_to` | **the browser's language** / Indonesian / English / … (21 languages) | Live |
 
 ## Downloads
@@ -136,6 +141,8 @@ shows whether Kakangkung is the default.
 | Setting | Key | Values | Applies |
 |---|---|---|---|
 | Location | `downloads.folder` | a folder (**Downloads**) | Live |
+| Ask where to save each file before downloading | `downloads.ask` | on / **off** (Save As dialog; cancel = no download) | Live |
+| Show downloads when they're done | `downloads.show_done` | on / **off** (opens the Downloads page unless a tab already shows it) | Live |
 
 ## Accessibility
 
@@ -171,19 +178,19 @@ Chrome's `chrome://settings` compared with Kakangkung. ✅ done · 🟡 next (We
 | Autofill and passwords | Offer to save passwords, autofill addresses | ✅ | `ICoreWebView2Profile6` |
 | | Password Manager list, payment methods, addresses list | ⛔ | WebView2 does not list saved entries |
 | Privacy and security | Delete browsing data with time range | ✅ | `ClearBrowsingDataInTimeRange` |
-| | Delete per data type (cookies only, cache only …) | 🟡 | same API takes `COREWEBVIEW2_BROWSING_DATA_KINDS` |
+| | Delete per data type (history / cookies and site data / cache) | ✅ | `ClearBrowsingDataInTimeRange` kinds |
 | | Safety check | ✅ | from settings; no leaked-password check (⛔) |
 | | Privacy Guide | ⛔ | a walkthrough of Google services |
 | | Third-party cookies (allow / block in Incognito / block) | ⛔ | no WebView2 switch; Strict tracking prevention is the closest |
 | | Safe Browsing (no / standard / enhanced) | ✅ on/off | SmartScreen has no "enhanced" |
 | | Always use secure connections | ✅ | `privacy.https_first` |
 | | Use secure DNS (DoH) | ⛔ | profile-wide DNS is not exposed |
-| | Manage certificates | 🟡 | open `certmgr.msc` (Windows store) |
+| | Manage certificates | ✅ | Windows certificate manager |
 | | Site settings: Location, Camera, Mic, Notifications, Clipboard, Auto downloads, Sensors, MIDI | ✅ | `PermissionRequested` → deny |
 | | Site settings: JavaScript | ✅ | `ICoreWebView2Settings::IsScriptEnabled` |
 | | Site settings: Pop-ups and redirects | 🟡 | needs "user-initiated" from `NewWindowRequested` (not in wry) |
-| | Site settings: Images | 🟡 | `WebResourceRequested` filter on image context |
-| | Site settings: Sound (mute sites) | 🟡 | `set_muted` on new tabs |
+| | Site settings: Images | ✅ all sites, restart | live / per-site needs a `WebResourceRequested` filter 🟡 |
+| | Site settings: Sound (mute sites) | ✅ | new tabs start muted |
 | | Site settings: per-site exceptions list | ✅ view + reset | adding an exception needs `SetPermissionState` UI |
 | Performance | Memory Saver (moderate / balanced / maximum) | ✅ | `memory.mode` |
 | | Always keep these sites active | ✅ | `performance.keep_active` |
@@ -196,15 +203,15 @@ Chrome's `chrome://settings` compared with Kakangkung. ✅ done · 🟡 next (We
 | | Font size, custom fonts | 🟡 | injected CSS default font size; minimum font size |
 | | Pressing Tab highlights links | 🟡 | initialization script |
 | Search engine | Default engine, custom engine | ✅ | |
-| | Manage search engines and site search (`@yt` shortcuts) | 🟡 | keyword table in the omnibox |
+| | Site search (`@yt` shortcuts) | ✅ built-in keywords | user-defined keywords 🟡 |
 | Default browser | Make default | ✅ | |
 | On startup | New Tab / continue / specific pages | ✅ | |
 | Languages | Translate target | ✅ | |
-| | Preferred website languages (Accept-Language) | 🟡 | `ICoreWebView2EnvironmentOptions::Language` at start-up (restart) |
+| | Preferred website language (Accept-Language) | ✅ one language | `--lang` at start-up (restart); an ordered list 🟡 |
 | | Spell check | ⛔ | WebView2 has no spell-check languages API |
 | Downloads | Location | ✅ | |
-| | Ask where to save each file | 🟡 | `DownloadStarting` + deferral + save dialog |
-| | Show downloads when done | 🟡 | open the Downloads pop-up on `COMPLETED` |
+| | Ask where to save each file | ✅ | `DownloadStarting` + deferral + Save As dialog |
+| | Show downloads when done | ✅ | opens the Downloads page (Kakangkung has no downloads bubble) |
 | Accessibility | Focus highlight | ✅ | |
 | | Live Caption | ⛔ | Chrome's on-device model |
 | | Caret browsing (F7) | 🟡 | injected caret script |

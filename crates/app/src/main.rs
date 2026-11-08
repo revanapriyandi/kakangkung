@@ -176,10 +176,21 @@ fn main() {
     let (jobs, storage_thread) = spawn_storage(base.join("kakangkung.db"));
     let paths = Paths { extensions: base.join("Extensions") };
     // Hardware acceleration is a browser-process switch: read before the first webview exists.
-    // So is the language sites are asked for (Accept-Language follows `--lang`).
-    let gpu = prefs.as_ref().is_none_or(|p| p.settings.hardware_acceleration);
-    let lang = prefs.as_ref().map(|p| p.settings.preferred_language.clone()).filter(|l| l != "auto");
-    let mut browser = match Browser::new(window, base.join("Profile"), proxy.clone(), jobs, paths, gpu, lang) {
+    // So are the language sites are asked for (Accept-Language follows `--lang`) and images.
+    let mut args = String::new();
+    if let Some(s) = prefs.as_ref().map(|p| &p.settings) {
+        if !s.hardware_acceleration {
+            args += " --disable-gpu";
+        }
+        if s.preferred_language != "auto" {
+            args += &format!(" --lang={}", s.preferred_language);
+        }
+        // ponytail: start-up switch (restart); live per-site blocking needs a WebResourceRequested filter.
+        if s.block_images {
+            args += " --blink-settings=imagesEnabled=false";
+        }
+    }
+    let mut browser = match Browser::new(window, base.join("Profile"), proxy.clone(), jobs, paths, &args) {
         Ok(b) => b,
         Err(e) => {
             eprintln!("creating the WebView2 UI failed (is the WebView2 Runtime installed?): {e}");

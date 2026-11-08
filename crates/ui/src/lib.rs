@@ -111,6 +111,29 @@ pub fn search_template(setting: &str) -> (String, String) {
     (ENGINES[0].url.into(), ENGINES[0].name.into())
 }
 
+/// Site search shortcuts beside the engines' own ids: `@yt cats` searches YouTube.
+pub const SITE_SEARCH: &[(&str, &str)] = &[
+    ("youtube", "https://www.youtube.com/results?search_query=%s"),
+    ("yt", "https://www.youtube.com/results?search_query=%s"),
+    ("wikipedia", "https://en.wikipedia.org/w/index.php?search=%s"),
+    ("github", "https://github.com/search?q=%s"),
+    ("maps", "https://www.google.com/maps/search/%s"),
+    ("ddg", ENGINES[2].url),
+];
+
+/// `@keyword words` -> that engine or site's search for the words (Chrome's site search).
+/// The keyword may be shortened (`@wiki`); the first match wins.
+// ponytail: built-in keywords only; a user-editable list when someone asks for their own sites.
+fn site_search(t: &str) -> Option<String> {
+    let (key, q) = t.strip_prefix('@')?.split_once(char::is_whitespace)?;
+    let (key, q) = (key.to_ascii_lowercase(), q.trim());
+    if key.is_empty() || q.is_empty() {
+        return None;
+    }
+    let url = ENGINES.iter().map(|e| (e.id, e.url)).chain(SITE_SEARCH.iter().copied()).find(|(k, _)| k.starts_with(&key))?.1;
+    Some(url.replace("%s", &encode_query(q)))
+}
+
 /// A custom engine must be an https URL that contains `%s` exactly once.
 pub fn valid_custom_engine(t: &str) -> bool {
     t.starts_with("https://") && t.matches("%s").count() == 1 && !t.contains(char::is_whitespace) && t.len() > 12
@@ -125,6 +148,9 @@ pub fn resolve_input(text: &str, search: &str) -> Option<String> {
     let t = text.trim();
     if t.is_empty() {
         return None;
+    }
+    if let Some(url) = site_search(t) {
+        return Some(url);
     }
     let lower = t.to_ascii_lowercase();
     let search_for = |q: &str| search.replace("%s", &encode_query(q));
@@ -478,6 +504,11 @@ mod tests {
         assert_eq!(search_template("javascript:%s").1, "Google", "unsafe custom engines are refused");
         assert_eq!(search_template("http://plain.example/?q=%s").1, "Google", "https only");
         assert_eq!(resolve_input("rust", ENGINES[2].url).unwrap(), "https://duckduckgo.com/?q=rust");
+        assert_eq!(resolve_input("@bing  rust lang", DEFAULT_SEARCH).unwrap(), "https://www.bing.com/search?q=rust+lang");
+        assert_eq!(resolve_input("@YT cats", DEFAULT_SEARCH).unwrap(), "https://www.youtube.com/results?search_query=cats");
+        assert_eq!(resolve_input("@wiki Jakarta", DEFAULT_SEARCH).unwrap(), "https://en.wikipedia.org/w/index.php?search=Jakarta");
+        assert_eq!(resolve_input("@nope x", DEFAULT_SEARCH).unwrap(), "https://www.google.com/search?q=%40nope+x&ie=UTF-8", "unknown keyword = a search");
+        assert_eq!(resolve_input("@bing", DEFAULT_SEARCH).unwrap(), "https://www.google.com/search?q=%40bing&ie=UTF-8");
         assert_eq!(suggest_url("", "a b").unwrap(), "https://www.google.com/complete/search?client=chrome&q=a+b");
         assert_eq!(suggest_url("https://kagi.com/search?q=%s", "x"), None);
         assert_eq!(parse_suggestions(br#"["rust",["rust lang","rust game"]]"#, 8), ["rust lang", "rust game"]);
