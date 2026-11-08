@@ -2,6 +2,7 @@
 
 mod api;
 mod events;
+mod groups;
 mod ipc;
 mod menus;
 mod omnibox;

@@ -99,6 +99,11 @@ struct Inner {
     hover_close: bool,
     /// Opening: when, and the full height (px) the window grows to.
     reveal: Option<(std::time::Instant, i32)>,
+    /// A text field only (no list): Enter reports `input\t<kind>\t<text>`.
+    input_mode: bool,
+    /// Shown in the empty field, and the hint at its right.
+    placeholder: String,
+    hint: String,
     on_command: Box<dyn FnMut(String)>,
 }
 
@@ -148,6 +153,9 @@ impl Popup {
                 collapsed: vec![],
                 hover_close: false,
                 reveal: None,
+                input_mode: false,
+                placeholder: "Search Tabs".into(),
+                hint: "Ctrl+Shift+A".into(),
                 icons: text_format(&dw, icons, 14.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER)?,
                 icons_small: text_format(&dw, icons, 10.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER)?,
                 center: text_format(&dw, w!("Segoe UI"), 11.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER)?,
@@ -205,6 +213,9 @@ impl Popup {
         let scale = scale_of(i.owner);
         i.kind = kind.to_string();
         i.rows = rows;
+        i.input_mode = false;
+        i.placeholder = "Search Tabs".into();
+        i.hint = "Ctrl+Shift+A".into();
         i.hover = None;
         i.scroll = 0;
         i.dark = dark;
@@ -243,6 +254,33 @@ impl Popup {
                 let _ = ShowWindow(i.filter, SW_HIDE);
                 let _ = InvalidateRect(Some(i.hwnd), None, false);
             }
+        }
+    }
+
+    /// A one-line text field at `x, y` (DIPs in the owner's client area), `width` DIPs wide,
+    /// holding `text` (selected) with `placeholder` when empty. It takes the keyboard; Enter
+    /// reports `input\t<kind>\t<text>`, Escape or a click elsewhere closes it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn show_input(&self, kind: &str, x: f32, y: f32, width: f32, text: &str, placeholder: &str, dark: bool) {
+        self.show(kind, x, y, width, vec![], None, true, dark);
+        let Some(cell) = self.inner() else { return };
+        let mut i = cell.borrow_mut();
+        i.input_mode = true;
+        i.placeholder = placeholder.into();
+        i.hint = "Enter".into();
+        let scale = scale_of(i.owner);
+        let height = ((FILTER_H + 2.0 * PADDING - 6.0) * scale) as i32;
+        let (hwnd, edit) = (i.hwnd, i.filter);
+        i.reveal = None;
+        drop(i);
+        // SAFETY: plain calls on our own live windows.
+        unsafe {
+            let mut rc = windows::Win32::Foundation::RECT::default();
+            let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(hwnd, &mut rc);
+            let _ = SetWindowPos(hwnd, None, 0, 0, rc.right - rc.left, height, windows::Win32::UI::WindowsAndMessaging::SWP_NOMOVE | windows::Win32::UI::WindowsAndMessaging::SWP_NOZORDER);
+            let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowTextW(edit, &windows::core::HSTRING::from(text));
+            windows::Win32::UI::WindowsAndMessaging::SendMessageW(edit, windows::Win32::UI::Controls::EM_SETSEL, Some(windows::Win32::Foundation::WPARAM(0)), Some(windows::Win32::Foundation::LPARAM(-1)));
+            let _ = InvalidateRect(Some(hwnd), None, false);
         }
     }
 

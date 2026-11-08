@@ -308,7 +308,10 @@ pub(super) unsafe extern "system" fn filter_proc(hwnd: HWND, msg: u32, wp: WPARA
                 let Ok(mut i) = cell.try_borrow_mut() else { return DefSubclassProc(hwnd, msg, wp, lp) };
                 let key = wp.0 as u16;
                 if key == VK_RETURN.0 {
-                    if let Some(index) = i.selected {
+                    if i.input_mode {
+                        let cmd = format!("input\t{}\t{}", i.kind, edit_text(hwnd));
+                        i.send(cmd);
+                    } else if let Some(index) = i.selected {
                         i.pick(index, false);
                     }
                 } else if key == VK_ESCAPE.0 {
@@ -333,7 +336,8 @@ pub(super) unsafe extern "system" fn filter_proc(hwnd: HWND, msg: u32, wp: WPARA
                     let old = SelectObject(hdc, HGDIOBJ(font.0 as _));
                     SetBkMode(hdc, TRANSPARENT);
                     SetTextColor(hdc, colorref(palette(dark, false).muted));
-                    let text: Vec<u16> = "Search Tabs".encode_utf16().collect();
+                    let placeholder = cell.try_borrow().map(|i| i.placeholder.clone()).unwrap_or_default();
+                    let text: Vec<u16> = placeholder.encode_utf16().collect();
                     let _ = TextOutW(hdc, 2, 0, &text);
                     SelectObject(hdc, old);
                     ReleaseDC(Some(hwnd), hdc);
