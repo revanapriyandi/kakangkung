@@ -671,7 +671,7 @@ impl SelfTest {
                 "engine": rows.iter().skip(1).filter(|r| r["kind"] == "search").map(|r| r["title"].clone()).collect::<Vec<_>>(),
             });
             send(serde_json::to_string(&r.to_string()).unwrap_or_default());
-        } else if matches!(self.stage, Stage::WaitNative | Stage::WaitNativeSave | Stage::WaitHistory | Stage::WaitHistorySearch | Stage::WaitBookmarks | Stage::WaitTools | Stage::WaitExtensions | Stage::Tour(_) | Stage::WaitTopClick | Stage::WaitTabSearch) {
+        } else if matches!(self.stage, Stage::WaitNative | Stage::WaitNativeSave | Stage::WaitHistory | Stage::WaitHistorySearch | Stage::WaitBookmarks | Stage::WaitTools | Stage::WaitDownloads | Stage::WaitExtensions | Stage::Tour(_) | Stage::WaitTopClick | Stage::WaitTabSearch) {
             send(String::new());
         } else if let Some(wv) = b.active_webview() {
             let _ = wv.evaluate_script_with_callback("window.__kakangkungTest || ''", send);
@@ -701,6 +701,10 @@ impl SelfTest {
             if !self.steps.iter().any(|s| s.0 == step) {
                 self.steps.push((step, false, why.to_string()));
             }
+        }
+        // Stopped before the last step (time-out): say so, or the steps that ran read as all passed.
+        if !self.steps.iter().any(|s| s.0 == "tabstrip") {
+            self.steps.push(("tabstrip", false, why.to_string()));
         }
         let body: Vec<String> = self
             .steps
