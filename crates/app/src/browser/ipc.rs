@@ -72,6 +72,21 @@ impl Browser {
                 }
                 self.render();
             }
+            "groupmenu" => {
+                let x: f64 = parts.next().unwrap_or("").parse().unwrap_or(0.0);
+                let y: f64 = parts.next().unwrap_or("").parse().unwrap_or(0.0);
+                if let Some(pick) = self.show_group_menu(id as u32, x, y) {
+                    return self.on_menu(&pick) && !self.tabs.is_empty();
+                }
+            }
+            // A one-line field of the pop-up was confirmed: input, kind, text.
+            "input" => {
+                let text = msg.splitn(3, '\t').nth(2).unwrap_or("").to_string();
+                self.hide_overlay();
+                if let Some(gid) = arg.strip_prefix("grouprename:") {
+                    return self.on_ipc(&format!("groupname\t{gid}\t{text}"));
+                }
+            }
             "groupcollapse" => {
                 if let Some(g) = self.groups.iter_mut().find(|g| g.id as u64 == id) {
                     g.collapsed = !g.collapsed;

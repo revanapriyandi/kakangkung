@@ -43,13 +43,14 @@ pub(crate) fn data_path(page: &str) -> Option<&str> {
         "taskmanager" => Some("memory"),
         "signin" => Some("account"),
         "welcome" => Some("browsers"),
-        "newtab" | "incognito" | "downloads" => None,
+        "newtab" | "incognito" => None,
         other => Some(other),
     }
 }
 
-pub(crate) fn title(page: &str) -> &'static str {
-    match page {
+/// The tab title of a built-in page, in the interface language.
+pub(crate) fn title(page: &str) -> String {
+    crate::i18n::tr(match page {
         "settings" => "Settings",
         "history" => "History",
         "bookmarks" => "Bookmarks",
@@ -62,7 +63,8 @@ pub(crate) fn title(page: &str) -> &'static str {
         "sync" => "Sync",
         "welcome" => "Welcome",
         _ => "",
-    }
+    })
+    .into_owned()
 }
 
 /// What a control asks the browser to do.
@@ -81,7 +83,8 @@ pub(crate) enum Step {
     /// Search the page's data again with these words.
     Search(String),
     /// Something done to a download of this run (`clear` empties the list of finished ones).
-    Download { id: u64, what: String },
+    /// `id`: a download of this run, or `s<n>` for one kept from before.
+    Download { id: String, what: String },
     /// The start page's search box: typing goes to the address bar.
     FocusOmnibox,
     /// A form field changed (kept until the form is sent).
@@ -123,10 +126,10 @@ pub(crate) fn step(page: &str, kind: &str, id: &str, value: &str) -> Option<Step
         "downloads" => match (kind, id) {
             ("button", d) => {
                 let (what, n) = d.strip_prefix("dl-")?.split_once(':')?;
-                Some(Step::Download { id: n.parse().ok()?, what: what.into() })
+                Some(Step::Download { id: n.into(), what: what.into() })
             }
             ("nav", "folder") => Some(call("downloads/open", "", "")),
-            ("nav", "clear") => Some(Step::Download { id: 0, what: "clear".into() }),
+            ("nav", "clear") => Some(Step::Download { id: String::new(), what: "clear".into() }),
             _ => None,
         },
         "extensions" => match (kind, id) {
@@ -251,7 +254,7 @@ mod tests {
         assert_eq!(step("history", "search", "", " rust "), Some(Step::Search("rust".into())));
         assert_eq!(body(step("bookmarks", "button", "unbookmark:https://a.example/", "")), "bookmarks/remove https://a.example/");
         assert_eq!(step("bookmarks", "nav", "open:history", ""), Some(Step::Open("history".into())));
-        assert_eq!(step("downloads", "button", "dl-pause:7", ""), Some(Step::Download { id: 7, what: "pause".into() }));
+        assert_eq!(step("downloads", "button", "dl-pause:7", ""), Some(Step::Download { id: "7".into(), what: "pause".into() }));
         assert_eq!(body(step("extensions", "toggle", "ext:abc", "0")), "extensions/enable abc\t0");
         assert_eq!(body(step("extensions", "button", "ext-remove:abc", "")), "extensions/remove abc");
         assert_eq!(step("newtab", "link", "omnibox", ""), Some(Step::FocusOmnibox));

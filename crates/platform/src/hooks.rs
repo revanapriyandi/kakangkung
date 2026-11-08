@@ -49,7 +49,7 @@ fn key_down() -> fn(i32) -> bool {
 pub fn hook(
     wv: &WebView,
     mut on_key: impl FnMut(Key) -> bool + 'static,
-    mut on_favicon: impl FnMut(String) + 'static,
+    on_favicon: impl Fn(String) + 'static,
     mut on_audio: impl FnMut(bool) + 'static,
     on_download: impl Fn() + 'static,
 ) -> Hooks {
@@ -89,11 +89,12 @@ pub fn hook(
 
     if let Ok(core15) = wv.webview().cast::<ICoreWebView2_15>() {
         let reader = core15.clone();
+        let on_favicon: std::rc::Rc<dyn Fn(String)> = std::rc::Rc::new(on_favicon);
         let fav = FaviconChangedEventHandler::create(Box::new(move |_, _| {
             let mut uri = PWSTR::null();
             // SAFETY: WebView2 allocates `uri` with CoTaskMemAlloc; take_pwstr copies and frees it.
             unsafe { reader.FaviconUri(&mut uri)? };
-            on_favicon(take_pwstr(uri));
+            crate::favicon::load(&reader, take_pwstr(uri), on_favicon.clone());
             Ok(())
         }));
         let mut token = 0i64;

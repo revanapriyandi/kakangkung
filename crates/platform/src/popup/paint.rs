@@ -82,8 +82,9 @@ impl Inner {
             // Tab search's box: a search icon, the native field, its shortcut on the right.
             let fb = rect(PADDING, PADDING, width - 2.0 * PADDING, FILTER_H - 8.0);
             fill(fb, 10.0, if self.dark { 0x2a2930 } else { 0xffffff }, 1.0);
-            self.text_at(t, &brush, glyph::SEARCH, rect(fb.left + 10.0, fb.top, 26.0, fb.bottom - fb.top), &self.icons, p.muted);
-            self.text_at(t, &brush, "Ctrl+Shift+A", rect(fb.right - 104.0, fb.top, 96.0, fb.bottom - fb.top), &self.small, p.muted);
+            let icon = if self.input_mode { "\u{E70F}" } else { glyph::SEARCH };
+            self.text_at(t, &brush, icon, rect(fb.left + 10.0, fb.top, 26.0, fb.bottom - fb.top), &self.icons, p.muted);
+            self.text_at(t, &brush, &self.hint, rect(fb.right - 104.0, fb.top, 96.0, fb.bottom - fb.top), &self.small, p.muted);
             fill(rect(0.0, FILTER_H + PADDING - 1.0, width, 1.0), 0.0, line, 1.0);
         }
         let mut y = self.list_top();

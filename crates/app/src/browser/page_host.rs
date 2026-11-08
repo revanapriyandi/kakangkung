@@ -43,14 +43,14 @@ const LOGO_BOUNCE_WINDOW: Duration = Duration::from_secs(3);
 /// Downloads redraw at most this often while bytes arrive.
 const DOWNLOADS_EVERY: Duration = Duration::from_millis(250);
 
-/// This run's downloads as the Downloads page reads them.
-fn downloads_json() -> Json {
-    Json::Array(
-        platform::downloads()
-            .into_iter()
-            .map(|d| json!({ "id": d.id, "url": d.url, "path": d.path, "received": d.received, "total": d.total, "state": format!("{:?}", d.state), "started": d.started }))
-            .collect(),
-    )
+/// This run's downloads of Incognito windows (`private`) or the others, as the Downloads page
+/// reads them.
+fn live_downloads(private: bool) -> Vec<Json> {
+    platform::downloads()
+        .into_iter()
+        .filter(|d| d.private == private)
+        .map(|d| json!({ "id": d.id.to_string(), "url": d.url, "path": d.path, "received": d.received, "total": d.total, "state": format!("{:?}", d.state), "started": d.started }))
+        .collect()
 }
 
 impl Browser {
@@ -111,9 +111,10 @@ impl Browser {
     /// Ask for the page's data again; it is redrawn when the answer arrives.
     pub(crate) fn refresh_native(&mut self, page: &str) {
         self.native.refresh_at = None;
-        let Some(path) = native::data_path(page) else {
-            // Downloads are kept on this thread by `platform`; New Tab and Incognito need no data.
-            self.native.data = if page == "downloads" { downloads_json() } else { Json::Null };
+        // Incognito windows list only their own downloads, which are never kept on disk.
+        let path = native::data_path(page).filter(|_| !(page == "downloads" && self.incognito));
+        let Some(path) = path else {
+            self.native.data = if page == "downloads" { json!([]) } else { Json::Null };
             self.draw_native();
             return;
         };
@@ -141,7 +142,7 @@ impl Browser {
             "settings" => native::settings_doc(&self.native.data, self.native.permissions.as_deref()),
             "history" => native::history_doc(&self.native.data, &self.native.query),
             "bookmarks" => native::bookmarks_doc(&self.native.data),
-            "downloads" => native::downloads_doc(&self.native.data),
+            "downloads" => native::downloads_doc(&self.downloads_list()),
             "extensions" => native::extensions_doc(&self.native.data),
             "taskmanager" => native::taskmanager_doc(&self.native.data),
             _ => return,
@@ -151,6 +152,7 @@ impl Browser {
             doc.logo_bounce = platform::page::Bounce::Once;
         }
         doc.toast = std::mem::take(&mut self.native.toast);
+        crate::i18n::translate_doc(&mut doc);
         // Incognito pages are always dark, like Chrome's.
         let dark = self.dark_ui() || self.incognito || page == "incognito";
         self.page.set_doc(doc, dark);
@@ -232,18 +234,44 @@ impl Browser {
         self.refresh_native(page);
     }
 
-    fn download_step(&mut self, id: u64, what: &str) {
+    /// Downloads of this run, then the kept ones, newest first.
+    fn downloads_list(&self) -> Json {
+        let mut list = live_downloads(self.incognito);
+        list.extend(self.native.data.as_array().into_iter().flatten().cloned());
+        list.sort_by_key(|d| std::cmp::Reverse(d["started"].as_i64().unwrap_or(0)));
+        Json::Array(list)
+    }
+
+    /// Take kept downloads off the list on the storage thread: one (`Some(id)`) or all.
+    fn forget_kept(&self, id: Option<i64>) {
+        self.job(Box::new(move |s| {
+            if let Some(Err(e)) = s.map(|s| s.forget_downloads(id)) {
+                eprintln!("downloads: {e}");
+            }
+        }));
+    }
+
+    fn download_step(&mut self, id: String, what: &str) {
         use platform::{download_action, DownloadAction, DownloadState};
-        let list = platform::downloads();
-        let path = list.iter().find(|d| d.id == id).map(|d| d.path.clone()).unwrap_or_default();
+        let path = self.downloads_list().as_array().into_iter().flatten().find(|d| d["id"] == id.as_str()).and_then(|d| d["path"].as_str()).unwrap_or_default().to_string();
+        let kept = id.strip_prefix('s').and_then(|n| n.parse::<i64>().ok());
+        let live = id.parse::<u64>().unwrap_or(0);
         let r = match what {
-            "pause" => download_action(id, DownloadAction::Pause).map_err(|e| e.message()),
-            "resume" => download_action(id, DownloadAction::Resume).map_err(|e| e.message()),
-            "cancel" => download_action(id, DownloadAction::Cancel).map_err(|e| e.message()),
-            "forget" => download_action(id, DownloadAction::Forget).map_err(|e| e.message()),
+            "pause" => download_action(live, DownloadAction::Pause).map_err(|e| e.message()),
+            "resume" => download_action(live, DownloadAction::Resume).map_err(|e| e.message()),
+            "cancel" => download_action(live, DownloadAction::Cancel).map_err(|e| e.message()),
+            "forget" if kept.is_some() => {
+                self.forget_kept(kept);
+                Ok(())
+            }
+            "forget" => download_action(live, DownloadAction::Forget).map_err(|e| e.message()),
             "clear" => {
-                for d in list.iter().filter(|d| matches!(d.state, DownloadState::Done | DownloadState::Stopped)) {
+                let ended = platform::downloads().into_iter().filter(|d| d.private == self.incognito && matches!(d.state, DownloadState::Done | DownloadState::Stopped));
+                for d in ended {
                     let _ = download_action(d.id, DownloadAction::Forget);
+                }
+                if !self.incognito {
+                    self.forget_kept(None);
                 }
                 Ok(())
             }
@@ -259,6 +287,18 @@ impl Browser {
 
     /// A download moved on: redraw the Downloads page soon (not for every chunk of bytes).
     pub(crate) fn downloads_changed(&mut self) {
+        // Finished ones move to disk so the list survives a restart (Incognito ones stay here).
+        let finished: Vec<storage::PastDownload> = platform::take_finished()
+            .into_iter()
+            .map(|d| storage::PastDownload { id: 0, url: d.url, path: d.path, size: d.received, done: d.state == platform::DownloadState::Done, started: d.started })
+            .collect();
+        if !finished.is_empty() {
+            self.job(Box::new(move |s| {
+                if let Some(Err(e)) = s.map(|s| s.add_downloads(&finished)) {
+                    eprintln!("downloads: {e}");
+                }
+            }));
+        }
         if self.native.page == "downloads" && self.native.tab != 0 && self.native.refresh_at.is_none() {
             self.native.refresh_at = Some(Instant::now() + DOWNLOADS_EVERY);
         }

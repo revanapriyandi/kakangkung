@@ -128,6 +128,7 @@ shows whether Kakangkung is the default.
 
 | Setting | Key | Values | Applies |
 |---|---|---|---|
+| Interface language | `languages.ui` | **Windows language** / English / Bahasa Indonesia | Live |
 | Translate pages into | `languages.translate_to` | **the browser's language** / Indonesian / English / … (21 languages) | Live |
 
 ## Downloads

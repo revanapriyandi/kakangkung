@@ -29,7 +29,7 @@ jobs:
           - arch: arm64
             target: aarch64-pc-windows-msvc
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Version
         shell: pwsh
@@ -68,7 +68,7 @@ jobs:
             "/DBinDir=..\target\${{ matrix.target }}\release" "/DOutDir=..\dist" installer\kakangkung.iss
           if ($LASTEXITCODE) { throw "Inno Setup failed ($LASTEXITCODE)" }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: kakangkung-${{ matrix.arch }}
           path: dist/*
@@ -79,7 +79,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: kakangkung-*
           merge-multiple: true
@@ -103,7 +103,7 @@ jobs:
 
       - name: Dry-run files
         if: github.ref_type != 'tag'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kakangkung-release-dry-run
           path: dist/*

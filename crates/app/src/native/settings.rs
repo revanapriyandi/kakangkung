@@ -4,6 +4,8 @@
 use platform::page::{Button, ButtonStyle, Control, NavItem, PageDoc, Row, Section};
 use serde_json::Value as Json;
 
+const UI_LANGS: &[(&str, &str)] = &[("auto", "Windows language"), ("en", "English"), ("id", "Bahasa Indonesia")];
+
 const LANG_NAMES: &[(&str, &str)] = &[
     ("auto", "The browser's language"),
     ("id", "Bahasa Indonesia"),
@@ -125,6 +127,7 @@ pub(crate) fn settings_doc(s: &Json, permissions: Option<&[Json]>) -> PageDoc {
         }]]),
         startup(&v, s["startup"].as_str().unwrap_or("newtab")),
         section("languages", "Languages", "languages language translate", vec![vec![
+            v.select("languages.ui", "Interface language", "Menus and built-in pages; more languages are welcome on GitHub", UI_LANGS),
             v.select("languages.translate_to", "Translate pages into", "Used by ⋮ > Translate page (Google Translate)", LANG_NAMES),
         ]]),
         section("downloads", "Downloads", "downloads location folder save", vec![vec![

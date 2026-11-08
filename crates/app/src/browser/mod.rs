@@ -3,6 +3,7 @@
 mod api;
 mod events;
 mod extensions;
+mod groups;
 mod ipc;
 mod menus;
 mod omnibox;
@@ -481,6 +482,7 @@ impl Browser {
     pub(crate) fn apply_settings(&mut self, settings: Settings) {
         let theme = settings.wry_theme();
         platform::motion::set_motion(settings.animations.then_some(settings.animation_speed), settings.smooth_scrolling);
+        crate::i18n::set_language(&settings.ui_language);
         platform::menu::set_menu_theme(match settings.theme.as_str() {
             "light" => Some(false),
             "dark" => Some(true),
@@ -734,6 +736,7 @@ impl Browser {
                     discarded: v.discarded,
                     group_color: group(v.group).map_or(0, |g| hex(g.color)),
                     in_split: self.split.is_some_and(|(l, r)| v.id == l || v.id == r),
+                    favicon: v.favicon.clone(),
                 }
             })
             .collect();

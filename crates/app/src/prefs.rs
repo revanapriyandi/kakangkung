@@ -95,6 +95,7 @@ pub(crate) const SETTABLE: &[(&str, &[&str], &str)] = &[
     ("system.auto_update", ON_OFF, "1"),
     ("languages.translate_to", LANGUAGES, "auto"),
     ("languages.preferred", LANGUAGES, "auto"),
+    ("languages.ui", &["auto", "en", "id"], "auto"),
 ];
 
 /// Settings holding web addresses (checked to be http/https). `startup.pages` is one per line.
@@ -200,6 +201,8 @@ pub(crate) struct Settings {
     pub(crate) auto_update: bool,
     /// Target language of "Translate page" ("auto" = the browser's language).
     pub(crate) translate_to: String,
+    /// Interface language ("auto": the Windows display language).
+    pub(crate) ui_language: String,
     pub(crate) home_button: bool,
     pub(crate) bookmark_star: bool,
     pub(crate) extensions_button: bool,
@@ -270,6 +273,7 @@ impl Settings {
             hardware_acceleration: on("system.hardware_acceleration"),
             auto_update: on("system.auto_update"),
             translate_to: v("languages.translate_to"),
+            ui_language: v("languages.ui"),
             home_button: on("appearance.home_button"),
             bookmark_star: on("appearance.bookmark_star"),
             extensions_button: on("appearance.extensions_button"),
