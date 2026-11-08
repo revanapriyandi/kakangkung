@@ -28,7 +28,7 @@ pub use extensions::{extension_add, extension_change, extensions_list, Extension
 pub use hooks::{hook, unhook, Hooks, Key};
 pub use processes::{processes, ProcessMemory};
 pub use profile::{clear_passwords, reset_site_permission, site_permissions, SitePermission};
-pub use shell::{confirm, dark_mode, is_default_browser, pick_folder, register_as_browser, windows_account_email};
+pub use shell::{confirm, dark_mode, ui_language, is_default_browser, pick_folder, register_as_browser, windows_account_email};
 pub use webview::{apply_protection, devtools_call, document_title, is_suspended, open_find, probe_interfaces,
     raise, resume, save_page_as, set_download_folder, set_muted, stop, try_suspend, zoom, Protection};
 pub use time::{local_time, LocalTime};

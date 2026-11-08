@@ -42,6 +42,14 @@ Design notes: [docs/NATIVE_UI.md](docs/NATIVE_UI.md) (the native interface),
 [docs/API_MAP.md](docs/API_MAP.md) (WebView2 features), [docs/SETTINGS.md](docs/SETTINGS.md)
 (every setting).
 
+## Translations
+
+Interface text is English in the code and translated when shown, from one table per language
+in `crates/app/src/i18n/` (`id.rs` is Bahasa Indonesia). To add a language, copy `id.rs`,
+translate the right-hand side, add it to `TABLES` in `i18n/mod.rs`, to the `languages.ui`
+values in `crates/app/src/prefs.rs` and to `UI_LANGS` in `crates/app/src/native/settings.rs`.
+To fix a translation, edit its line. Text with no entry stays in English.
+
 ## Guidelines
 
 - **Keep it light.** Measure memory and start-up when a change could affect them; no new background

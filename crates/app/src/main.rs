@@ -6,6 +6,7 @@
 //! suspend/resume, close), record what worked, exit.
 //! Any other argument is opened as a URL.
 mod browser;
+mod i18n;
 mod jobs;
 mod msg;
 mod native;
@@ -163,6 +164,10 @@ fn main() {
         eprintln!("creating {}: {e}", base.display());
     }
     let store = Store::open(&base.join("kakangkung.db")).ok();
+    // The self-test checks English text whatever the Windows display language.
+    if let (Run::SelfTest(_), Some(s)) = (&run, &store) {
+        let _ = s.set_setting("languages.ui", "en");
+    }
     timing("database opened");
     let prefs = store.map(|s| Prefs::read(&s));
     timing("settings read");
