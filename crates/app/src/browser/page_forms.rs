@@ -21,9 +21,9 @@ impl Browser {
                 ("account/types", self.chosen_types(), "Saved.")
             }
             Step::SignIn => {
-                let data = &self.native.data;
-                let typed = |k: &str| native::field(&self.native.inputs, k, data["suggested"][k].as_str().unwrap_or("")).trim().to_string();
-                ("account/signin", format!("{}\t{}\t{}", typed("name"), typed("email"), self.chosen_types()), "Signed in. Sync is on.")
+                self.native.toast = "Finish signing in on Google's page in your browser…".into();
+                self.draw_native();
+                ("account/google", self.chosen_types(), "Signed in with Google. Sync is on.")
             }
             Step::Keep { id, on } => {
                 let keep: Vec<&str> = self.native.data["browsers"]

@@ -43,6 +43,8 @@ WebView2 keeps saved passwords inside the profile and has no API to list them on
 
 | Setting | Key | Values | Applies |
 |---|---|---|---|
+| Safety check | — | lists protections that are off (Safe Browsing, HTTPS-First, updates, tracking prevention) | Live |
+| Time range | `privacy.clear_range` | last hour / 24 hours / 7 days / 4 weeks / **all time** | Live (used by both Clear buttons) |
 | Clear browsing history | — | button | Live |
 | Clear all browsing data | — | button (history, cookies, cache, site data) | Live |
 | Clear browsing data when you exit | `privacy.clear_on_exit` | on / **off** | On exit (and again at the next start) |
@@ -50,6 +52,8 @@ WebView2 keeps saved passwords inside the profile and has no API to list them on
 | Always use secure connections (HTTPS-First) | `privacy.https_first` | **on** / off | Live |
 | Tracking prevention | `privacy.tracking` | off / basic / **balanced** / strict | Live |
 | Site permissions | — | list with Reset (camera, microphone, location, notifications, …) | Live |
+| JavaScript | `site.javascript` | **allow** / block | Next page load |
+| Location, Camera, Microphone, Notifications, Clipboard, Automatic downloads, Motion sensors, MIDI devices | `site.location`, `site.camera`, `site.microphone`, `site.notifications`, `site.clipboard`, `site.automatic_downloads`, `site.sensors`, `site.midi` | **ask** / block (denied without a prompt; a per-site choice you saved still wins) | Live |
 
 ## Performance
 
@@ -57,6 +61,7 @@ WebView2 keeps saved passwords inside the profile and has no API to list them on
 |---|---|---|---|
 | Memory Saver | `memory.mode` | moderate (2 h) / **balanced (5 min)** / maximum (30 s) / off | Live |
 | Keep calls running | `performance.protect_media` | **on** / off | Live |
+| Always keep these sites active | `performance.keep_active` | up to 50 sites, subdomains included (`mail.example.com`) | Live |
 | Keep pinned tabs running | `performance.protect_pinned` | **on** / off | Live |
 
 Tabs playing sound are always kept running.
@@ -151,3 +156,57 @@ shows whether Kakangkung is the default.
 
 "Restore settings to their original defaults" puts every setting above back to its default.
 Account, sync, history, bookmarks and the download folder are kept.
+
+## Chrome parity map
+
+Chrome's `chrome://settings` compared with Kakangkung. ✅ done · 🟡 next (WebView2 can do it) ·
+⛔ not possible on WebView2 or Google-only.
+
+| Chrome section | Chrome setting | Kakangkung | How / why not |
+|---|---|---|---|
+| You and Google | Sign in, sync, import | ✅ | `account.*`, `sync.*` |
+| | Customize profile (name, avatar, colour) | 🟡 | name/initial exist; colour = theme accent |
+| | Google services (search/URL improvement, metrics) | ⛔ | Google-only |
+| Autofill and passwords | Offer to save passwords, autofill addresses | ✅ | `ICoreWebView2Profile6` |
+| | Password Manager list, payment methods, addresses list | ⛔ | WebView2 does not list saved entries |
+| Privacy and security | Delete browsing data with time range | ✅ | `ClearBrowsingDataInTimeRange` |
+| | Delete per data type (cookies only, cache only …) | 🟡 | same API takes `COREWEBVIEW2_BROWSING_DATA_KINDS` |
+| | Safety check | ✅ | from settings; no leaked-password check (⛔) |
+| | Privacy Guide | ⛔ | a walkthrough of Google services |
+| | Third-party cookies (allow / block in Incognito / block) | ⛔ | no WebView2 switch; Strict tracking prevention is the closest |
+| | Safe Browsing (no / standard / enhanced) | ✅ on/off | SmartScreen has no "enhanced" |
+| | Always use secure connections | ✅ | `privacy.https_first` |
+| | Use secure DNS (DoH) | ⛔ | profile-wide DNS is not exposed |
+| | Manage certificates | 🟡 | open `certmgr.msc` (Windows store) |
+| | Site settings: Location, Camera, Mic, Notifications, Clipboard, Auto downloads, Sensors, MIDI | ✅ | `PermissionRequested` → deny |
+| | Site settings: JavaScript | ✅ | `ICoreWebView2Settings::IsScriptEnabled` |
+| | Site settings: Pop-ups and redirects | 🟡 | needs "user-initiated" from `NewWindowRequested` (not in wry) |
+| | Site settings: Images | 🟡 | `WebResourceRequested` filter on image context |
+| | Site settings: Sound (mute sites) | 🟡 | `set_muted` on new tabs |
+| | Site settings: per-site exceptions list | ✅ view + reset | adding an exception needs `SetPermissionState` UI |
+| Performance | Memory Saver (moderate / balanced / maximum) | ✅ | `memory.mode` |
+| | Always keep these sites active | ✅ | `performance.keep_active` |
+| | Energy Saver | 🟡 | Windows power status → Memory Saver Maximum + lower frame rate |
+| | Preload pages | ⛔ | no prerender API |
+| | Tab hover card memory usage | 🟡 | `processes()` already measures per tab |
+| Appearance | Theme, mode, home button, full URLs, zoom | ✅ | |
+| | Show bookmarks bar | 🟡 | needs a bookmarks bar in the frame |
+| | Side panel position | ⛔ | no side panel |
+| | Font size, custom fonts | 🟡 | injected CSS default font size; minimum font size |
+| | Pressing Tab highlights links | 🟡 | initialization script |
+| Search engine | Default engine, custom engine | ✅ | |
+| | Manage search engines and site search (`@yt` shortcuts) | 🟡 | keyword table in the omnibox |
+| Default browser | Make default | ✅ | |
+| On startup | New Tab / continue / specific pages | ✅ | |
+| Languages | Translate target | ✅ | |
+| | Preferred website languages (Accept-Language) | 🟡 | `ICoreWebView2EnvironmentOptions::Language` at start-up (restart) |
+| | Spell check | ⛔ | WebView2 has no spell-check languages API |
+| Downloads | Location | ✅ | |
+| | Ask where to save each file | 🟡 | `DownloadStarting` + deferral + save dialog |
+| | Show downloads when done | 🟡 | open the Downloads pop-up on `COMPLETED` |
+| Accessibility | Focus highlight | ✅ | |
+| | Live Caption | ⛔ | Chrome's on-device model |
+| | Caret browsing (F7) | 🟡 | injected caret script |
+| System | Graphics acceleration, proxy | ✅ | |
+| | Continue running background apps | ⛔ | no background apps |
+| Reset settings | Restore defaults | ✅ | |

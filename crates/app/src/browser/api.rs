@@ -13,7 +13,7 @@ use crate::prefs::{all_values, mode_from_id, mode_id, reset, valid_url_setting, 
 use crate::profile::{account, import_from_chrome, keep_browsers_in_sync, run_sync, sign_in, sign_out, sync_status, touch_settings};
 
 /// Component extensions the WebView2 runtime installs itself (clipboard, PDF viewer); not shown.
-const BUILTIN_EXTENSIONS: [&str; 2] = ["dgiklkfkllikcanfonkcabmbdfmgleag", "mhjfbmdgcfjbbpaeojofohoefgiehjai"];
+pub(crate) const BUILTIN_EXTENSIONS: [&str; 2] = ["dgiklkfkllikcanfonkcabmbdfmgleag", "mhjfbmdgcfjbbpaeojofohoefgiehjai"];
 
 impl Browser {
     /// `/api/...` of the built-in pages (token already checked).
@@ -337,13 +337,28 @@ impl Browser {
                 None => respond.send(json!({ "error": "open a tab first" })),
             },
             "privacy/clear" => {
-                // "all" also clears cookies, cache and site data of the tabs' profile.
-                if body.trim() == "all" {
+                // Within the chosen time range; "all" = the data types ticked in Settings.
+                let since = self.settings.clear_since(storage::now_ms());
+                let all = body.trim() == "all";
+                let s = &self.settings;
+                if all && (s.clear_cookies || s.clear_cache) {
                     if let Some(wv) = self.extension_host() {
-                        let _ = wv.clear_all_browsing_data();
+                        platform::clear_browsing_data(wv, s.clear_cookies, s.clear_cache, since.unwrap_or(0), |r| {
+                            if let Err(e) = r {
+                                eprintln!("clear browsing data: {e}");
+                            }
+                        });
                     }
                 }
-                self.db_reply(respond, move |s| ok(s.clear_history()))
+                if all && !s.clear_history {
+                    return respond.send(json!({ "ok": true }));
+                }
+                self.db_reply(respond, move |s| {
+                    ok(match since {
+                        Some(t) => s.clear_history_since(t),
+                        None => s.clear_history(),
+                    })
+                })
             }
             "import/chrome" => self.db_reply(respond, |s| match import_from_chrome(s) {
                 Ok(summary) => json!({ "summary": summary }),
@@ -391,14 +406,7 @@ impl Browser {
                     sync_status(s)
                 });
             }
-            "account" => self.db_reply(respond, |s| {
-                let mut st = sync_status(s);
-                st["suggested"] = json!({
-                    "name": std::env::var("USERNAME").unwrap_or_default(),
-                    "email": platform::windows_account_email().unwrap_or_default(),
-                });
-                st
-            }),
+            "account" => self.db_reply(respond, sync_status),
             "account/signin" => {
                 let mut f = body.splitn(3, '\t');
                 let (name, email, types) = (f.next().unwrap_or("").to_string(), f.next().unwrap_or("").to_string(), f.next().unwrap_or("").to_string());
@@ -411,6 +419,28 @@ impl Browser {
                     let _ = proxy.send_event(Msg::Synced(run_sync(s, tabs, &proxy).is_ok()));
                     sync_status(s)
                 })
+            }
+            // Sign in with Google: consent in the default browser, then sync through Drive. The
+            // answer comes when the person has finished there (or after the wait runs out).
+            "account/google" => {
+                let types = storage::sync::Types::parse(Some(body.trim())).list();
+                let (proxy, tabs, jobs) = (self.proxy.clone(), self.open_tabs(), self.jobs.clone());
+                std::thread::spawn(move || {
+                    let account = match crate::google::sign_in() {
+                        Ok(a) => a,
+                        Err(e) => return respond.send(json!({ "error": e })),
+                    };
+                    let job: crate::jobs::Job = Box::new(move |s| {
+                        let Some(s) = s else { return respond.send(json!({ "error": "the profile database could not be opened" })) };
+                        if let Err(e) = crate::google::save(s, &account).and_then(|_| s.set_setting("sync.types", &types)) {
+                            return respond.send(json!({ "error": e }));
+                        }
+                        let _ = proxy.send_event(Msg::Account(account.name.clone()));
+                        let _ = proxy.send_event(Msg::Synced(run_sync(s, tabs, &proxy).is_ok()));
+                        respond.send(sync_status(s));
+                    });
+                    let _ = jobs.send(job);
+                });
             }
             "account/signout" => {
                 let proxy = self.proxy.clone();

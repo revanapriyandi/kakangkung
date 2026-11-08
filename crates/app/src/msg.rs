@@ -16,6 +16,22 @@ pub(crate) enum Msg {
     Update(crate::update::Status),
     /// An API answer for a native page: what was asked, the message to show when it worked.
     PageReply { path: String, done: String, json: Json },
+    /// A pop-up webview was built for tab `opener` (see `browser::take_popup`); show it as a tab.
+    Popup { id: u64, opener: u64, url: String },
+    /// The page in tab `id` called `window.close()`.
+    CloseTab(u64),
+    /// A message from the Chrome Web Store page in tab `tab` ("check\t<id>", "add\t<id>\t<name>").
+    Store { tab: u64, cmd: String },
+    /// A store extension was downloaded and unpacked (or failed); install it on the UI thread.
+    StoreUnpacked { tab: u64, ext: String, result: Result<PathBuf, String> },
+    /// Show `text` on the store page's button for extension `ext` ("ready" = clickable).
+    StoreButton { tab: u64, ext: String, state: &'static str, text: String },
+    /// The extensions list for the toolbar's extensions menu, opened at (x, y).
+    ExtMenu { list: Vec<platform::Extension>, x: f64, y: f64 },
+    /// The extension pop-up asks to close, lost focus, or reported its content size.
+    Bubble { close: bool, size: Option<(f64, f64)> },
+    /// New data from other devices arrived (Google Drive mirror): run a sync round now.
+    SyncSoon,
     /// A token-checked `/api/...` request from a built-in page.
     Api { path: String, query: String, body: String, respond: Reply },
     /// An extension folder is ready on disk; install it on the UI thread.

@@ -25,6 +25,7 @@ pub(crate) fn mode_from_id(id: &str) -> Option<memory::Mode> {
 
 const ON_OFF: &[&str] = &["1", "0"];
 const OFF_ON: &[&str] = &["0", "1"];
+const ASK_BLOCK: &[&str] = &["ask", "block"];
 const ZOOMS: &[&str] = &["50", "67", "75", "80", "90", "100", "110", "125", "150", "175", "200"];
 /// Languages offered for "Translate page" ("auto" = the browser's language).
 pub(crate) const LANGUAGES: &[&str] = &[
@@ -70,6 +71,21 @@ pub(crate) const SETTABLE: &[(&str, &[&str], &str)] = &[
     ("privacy.passwords", ON_OFF, "1"),
     ("privacy.autofill", ON_OFF, "1"),
     ("privacy.clear_on_exit", OFF_ON, "0"),
+    ("privacy.clear_range", &["all", "hour", "day", "week", "month"], "all"),
+    ("privacy.clear_history", ON_OFF, "1"),
+    ("privacy.clear_cookies", ON_OFF, "1"),
+    ("privacy.clear_cache", ON_OFF, "1"),
+    // Site settings: what every site may do unless you decided otherwise for that site
+    ("site.javascript", &["allow", "block"], "allow"),
+    ("site.location", ASK_BLOCK, "ask"),
+    ("site.camera", ASK_BLOCK, "ask"),
+    ("site.microphone", ASK_BLOCK, "ask"),
+    ("site.notifications", ASK_BLOCK, "ask"),
+    ("site.clipboard", ASK_BLOCK, "ask"),
+    ("site.automatic_downloads", ASK_BLOCK, "ask"),
+    ("site.sensors", ASK_BLOCK, "ask"),
+    ("site.midi", ASK_BLOCK, "ask"),
+    ("site.sound", &["allow", "mute"], "allow"),
     // Performance
     ("performance.protect_media", ON_OFF, "1"),
     ("performance.protect_pinned", ON_OFF, "1"),
@@ -78,17 +94,36 @@ pub(crate) const SETTABLE: &[(&str, &[&str], &str)] = &[
     ("system.hardware_acceleration", ON_OFF, "1"),
     ("system.auto_update", ON_OFF, "1"),
     ("languages.translate_to", LANGUAGES, "auto"),
+    ("languages.preferred", LANGUAGES, "auto"),
 ];
 
 /// Settings holding web addresses (checked to be http/https). `startup.pages` is one per line.
-pub(crate) const URL_SETTINGS: &[&str] = &["appearance.home_url", "tabs.ntp_url", "startup.pages"];
+pub(crate) const URL_SETTINGS: &[&str] = &["appearance.home_url", "tabs.ntp_url", "startup.pages", "performance.keep_active"];
 
-/// Up to this many "Open a specific page" addresses.
-const MAX_STARTUP_PAGES: usize = 10;
+/// Site permission settings and the `COREWEBVIEW2_PERMISSION_KIND` each one blocks.
+pub(crate) const PERMISSION_KINDS: &[(&str, i32)] = &[
+    ("site.microphone", 1),
+    ("site.camera", 2),
+    ("site.location", 3),
+    ("site.notifications", 4),
+    ("site.sensors", 5),
+    ("site.clipboard", 6),
+    ("site.automatic_downloads", 7),
+    ("site.midi", 11),
+];
+
+/// Up to this many addresses in a list setting ("Open a specific page", "Always keep these sites active").
+fn max_urls(key: &str) -> usize {
+    match key {
+        "startup.pages" => 10,
+        "performance.keep_active" => 50,
+        _ => 1,
+    }
+}
 
 /// `value` if it is a valid web address list for URL setting `key` ("" clears it).
 pub(crate) fn valid_url_setting(key: &str, value: &str) -> Option<String> {
-    let max = if key == "startup.pages" { MAX_STARTUP_PAGES } else { 1 };
+    let max = max_urls(key);
     let urls: Vec<&str> = value.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
     (URL_SETTINGS.contains(&key) && urls.len() <= max && urls.iter().all(|u| storage::storable(u))).then(|| urls.join("\n"))
 }
@@ -121,6 +156,18 @@ pub(crate) struct Settings {
     /// Upgrade typed http:// addresses to https:// (HTTPS-First).
     pub(crate) https_first: bool,
     pub(crate) clear_on_exit: bool,
+    /// "Delete browsing data" time range: "all", "hour", "day", "week" or "month".
+    pub(crate) clear_range: String,
+    /// What "Delete browsing data" removes.
+    pub(crate) clear_history: bool,
+    pub(crate) clear_cookies: bool,
+    pub(crate) clear_cache: bool,
+    /// Sound site setting "Don't allow sites to play sound": new tabs start muted.
+    pub(crate) mute_sites: bool,
+    /// Language sites are asked for (Accept-Language), "auto" = Windows' language.
+    pub(crate) preferred_language: String,
+    /// Hosts Memory Saver never freezes ("Always keep these sites active").
+    pub(crate) keep_active: Vec<String>,
     /// Address the Home button opens.
     pub(crate) home_url: String,
     pub(crate) full_urls: bool,
@@ -188,9 +235,18 @@ impl Settings {
                 safe_browsing: on("privacy.safe_browsing"),
                 save_passwords: on("privacy.passwords"),
                 autofill: on("privacy.autofill"),
+                script: v("site.javascript") == "allow",
+                blocked: PERMISSION_KINDS.iter().filter(|(k, _)| v(k) == "block").fold(0, |m, (_, kind)| m | 1 << kind),
             },
             https_first: on("privacy.https_first"),
             clear_on_exit: on("privacy.clear_on_exit"),
+            clear_range: v("privacy.clear_range"),
+            clear_history: on("privacy.clear_history"),
+            clear_cookies: on("privacy.clear_cookies"),
+            clear_cache: on("privacy.clear_cache"),
+            mute_sites: v("site.sound") == "mute",
+            preferred_language: v("languages.preferred"),
+            keep_active: url("performance.keep_active").unwrap_or_default().lines().map(|u| ui::host(u).to_string()).collect(),
             home_url: url("appearance.home_url").unwrap_or_else(|| new_tab_url.clone()),
             full_urls: on("appearance.full_urls"),
             zoom: v("appearance.zoom").parse::<f64>().unwrap_or(100.0) / 100.0,
@@ -220,6 +276,25 @@ impl Settings {
             tab_search_button: on("appearance.tab_search_button"),
             speaker_mutes: on("tabs.speaker_mutes"),
         }
+    }
+
+    /// Start (Unix ms) of the "Delete browsing data" range, `None` = all time.
+    pub(crate) fn clear_since(&self, now_ms: i64) -> Option<i64> {
+        const HOUR: i64 = 3_600_000;
+        let span = match self.clear_range.as_str() {
+            "hour" => HOUR,
+            "day" => 24 * HOUR,
+            "week" => 7 * 24 * HOUR,
+            "month" => 28 * 24 * HOUR,
+            _ => return None,
+        };
+        Some(now_ms - span)
+    }
+
+    /// Memory Saver leaves this page alone (it or a parent domain is on the keep-active list).
+    pub(crate) fn kept_active(&self, url: &str) -> bool {
+        let host = ui::host(url);
+        self.keep_active.iter().any(|k| host == k || host.ends_with(&format!(".{k}")))
     }
 
     pub(crate) fn wry_theme(&self) -> wry::Theme {
@@ -314,5 +389,23 @@ mod tests {
         assert!(valid_url_setting("appearance.home_url", "https://a.com\nhttps://b.com").is_none(), "one address only");
         assert!(valid_url_setting("startup.pages", "https://a.com\nhttps://b.com").is_some());
         assert!(valid_url_setting("privacy.tracking", "https://a.com").is_none(), "not a URL setting");
+    }
+
+    #[test]
+    fn site_settings_and_ranges() {
+        let s = Settings::read(|k| match k {
+            "site.javascript" => Some("block".into()),
+            "site.camera" | "site.notifications" => Some("block".into()),
+            "privacy.clear_range" => Some("hour".into()),
+            "performance.keep_active" => Some("https://mail.example.com\nhttps://music.test".into()),
+            _ => None,
+        });
+        assert!(!s.protection.script);
+        assert_eq!(s.protection.blocked, 1 << 2 | 1 << 4);
+        assert_eq!(s.clear_since(10_000_000), Some(10_000_000 - 3_600_000));
+        assert!(s.kept_active("https://mail.example.com/inbox") && s.kept_active("https://a.music.test/"));
+        assert!(!s.kept_active("https://example.com/") && !s.kept_active("https://evilmusic.test/"));
+        let d = Settings::read(|_| None);
+        assert!(d.protection.script && d.protection.blocked == 0 && d.clear_since(1).is_none());
     }
 }

@@ -73,7 +73,8 @@ pub(crate) fn touch_settings(s: &Store) {
 pub(crate) fn sync_conf(s: &Store) -> (bool, PathBuf, String) {
     let signed_in = account(s);
     let enabled = signed_in.is_some() && s.setting("sync.enabled").is_none_or(|v| v == "1");
-    let base = s.setting("sync.folder").map(PathBuf::from).unwrap_or_else(storage::sync::default_folder);
+    // A Google account syncs through its Drive (a local folder the mirror keeps equal to it).
+    let base = if crate::google::is_google(s) { crate::google::mirror_root() } else { sync_folder(s) };
     let folder = signed_in.map_or(base.clone(), |(_, email)| storage::sync::account_dir(&base, &email));
     let device = s.setting("sync.device").unwrap_or_else(|| {
         let id = random_hex();
@@ -81,6 +82,11 @@ pub(crate) fn sync_conf(s: &Store) -> (bool, PathBuf, String) {
         id
     });
     (enabled, folder, device)
+}
+
+/// The cloud folder chosen for sync (OneDrive by default).
+fn sync_folder(s: &Store) -> PathBuf {
+    s.setting("sync.folder").map(PathBuf::from).unwrap_or_else(storage::sync::default_folder)
 }
 
 pub(crate) fn device_name() -> String {
@@ -97,7 +103,9 @@ pub(crate) fn sync_status(s: &Store) -> Json {
         "name": acct.as_ref().map(|a| a.0.clone()).unwrap_or_default(),
         "email": acct.as_ref().map(|a| a.1.clone()).unwrap_or_default(),
         "types": storage::sync::Types::parse(s.setting("sync.types").as_deref()),
-        "folder": s.setting("sync.folder").map(PathBuf::from).unwrap_or_else(storage::sync::default_folder).display().to_string(),
+        "folder": sync_folder(s).display().to_string(),
+        "google": crate::google::is_google(s),
+        "googleReady": crate::google::client().is_some(),
         "device": device_name(),
         "last": s.setting("sync.last").and_then(|v| v.parse::<i64>().ok()).unwrap_or(0),
         "devices": devices,
@@ -119,6 +127,9 @@ pub(crate) fn run_sync(s: &Store, tabs: Vec<storage::sync::SyncTab>, p: &EventLo
     };
     let types = storage::sync::Types::parse(s.setting("sync.types").as_deref());
     let incoming = storage::sync::sync(s, &folder, &device, &device_name(), out, types)?;
+    if crate::google::is_google(s) {
+        crate::google::kick();
+    }
     if let Some((when, settings)) = incoming.settings {
         for (k, v) in settings.iter().filter(|(k, _)| synced_setting(k)) {
             s.set_setting(k, v)?;
@@ -156,6 +167,7 @@ pub(crate) fn sign_in(s: &Store, name: &str, email: &str, types: &str) -> Result
 }
 
 pub(crate) fn sign_out(s: &Store) -> Result<(), String> {
+    crate::google::forget(s);
     s.set_setting("account.email", "")?;
     s.set_setting("account.name", "")?;
     s.set_setting("sync.enabled", "0")

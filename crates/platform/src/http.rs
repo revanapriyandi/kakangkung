@@ -1,5 +1,5 @@
-//! Tiny HTTPS GET through WinHTTP (part of Windows): search-engine query suggestions and the
-//! updater (release list, checksums, installer).
+//! Tiny HTTPS client through WinHTTP (part of Windows): search-engine query suggestions, the
+//! updater, Chrome Web Store downloads, Google sign-in and Google Drive sync.
 //! Blocking: call it from a worker thread, never the UI thread.
 
 use std::ffi::c_void;
@@ -49,10 +49,17 @@ pub fn download(url: &str, timeout_ms: i32, max: usize) -> Result<Vec<u8>, Strin
 }
 
 fn get_limited(url: &str, timeout_ms: i32, max_body: usize) -> Result<Vec<u8>, String> {
+    request("GET", url, "", &[], timeout_ms, max_body)
+}
+
+/// Any `method` with extra `headers` ("Name: value\r\n…") and `body`. Returns the body of a 2xx
+/// response (at most `max_body` bytes); another status is an error with the start of the body
+/// (APIs explain themselves there).
+pub fn request(method: &str, url: &str, headers: &str, body: &[u8], timeout_ms: i32, max_body: usize) -> Result<Vec<u8>, String> {
     let rest = url.strip_prefix("https://").ok_or("only https URLs are fetched")?;
     let (host, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
     let path = if path.is_empty() { "/" } else { path };
-    let (agent, host_w, verb, path_w) = (HSTRING::from("Kakangkung"), HSTRING::from(host), HSTRING::from("GET"), HSTRING::from(path));
+    let (agent, host_w, verb, path_w) = (HSTRING::from("Kakangkung"), HSTRING::from(host), HSTRING::from(method), HSTRING::from(path));
     // SAFETY: every string argument is a NUL-terminated HSTRING that outlives the call; handles are
     // checked for null and closed by `Handle`; the read buffer is sized by `chunk.len()`.
     unsafe {
@@ -66,7 +73,10 @@ fn get_limited(url: &str, timeout_ms: i32, max_body: usize) -> Result<Vec<u8>, S
             WinHttpOpenRequest(conn.0, &verb, &path_w, PCWSTR::null(), PCWSTR::null(), std::ptr::null(), WINHTTP_FLAG_SECURE),
             "WinHttpOpenRequest",
         )?;
-        WinHttpSendRequest(req.0, None, None, 0, 0, 0).map_err(|e| e.to_string())?;
+        let hdr: Vec<u16> = headers.encode_utf16().collect();
+        let hdr = (!hdr.is_empty()).then_some(hdr.as_slice());
+        let data = (!body.is_empty()).then_some(body.as_ptr().cast::<c_void>());
+        WinHttpSendRequest(req.0, hdr, data, body.len() as u32, body.len() as u32, 0).map_err(|e| e.to_string())?;
         WinHttpReceiveResponse(req.0, std::ptr::null_mut()).map_err(|e| e.to_string())?;
         let (mut status, mut len) = (0u32, 4u32);
         WinHttpQueryHeaders(
@@ -78,9 +88,7 @@ fn get_limited(url: &str, timeout_ms: i32, max_body: usize) -> Result<Vec<u8>, S
             std::ptr::null_mut(),
         )
         .map_err(|e| e.to_string())?;
-        if status != 200 {
-            return Err(format!("HTTP {status}"));
-        }
+        let ok = (200..300).contains(&status);
         let mut body = Vec::new();
         let mut chunk = [0u8; 8192];
         loop {
@@ -90,6 +98,10 @@ fn get_limited(url: &str, timeout_ms: i32, max_body: usize) -> Result<Vec<u8>, S
                 break;
             }
             body.extend_from_slice(&chunk[..got as usize]);
+        }
+        if !ok {
+            let text = String::from_utf8_lossy(&body[..body.len().min(300)]).trim().to_string();
+            return Err(if text.is_empty() { format!("HTTP {status}") } else { format!("HTTP {status}: {text}") });
         }
         Ok(body)
     }

@@ -103,6 +103,20 @@ pub struct Protection {
     pub safe_browsing: bool,
     pub save_passwords: bool,
     pub autofill: bool,
+    /// Sites may run JavaScript (Chrome's Site settings > JavaScript). Applies from the next page load.
+    pub script: bool,
+    /// Bit `1 << kind` set = every request for that `COREWEBVIEW2_PERMISSION_KIND` is denied
+    /// without asking (Site settings > "Don't allow sites to ..."). Saved per-site choices still win.
+    pub blocked: u32,
+}
+
+thread_local! {
+    static BLOCKED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Permission kinds denied by default (read by the `PermissionRequested` hook).
+pub(crate) fn blocked_permissions() -> u32 {
+    BLOCKED.with(|b| b.get())
 }
 
 /// Apply `p` to a tab webview: profile-wide switches (tracking, passwords, autofill) and this
@@ -115,6 +129,7 @@ pub fn apply_protection(wv: &WebView, p: Protection) -> Vec<String> {
         COREWEBVIEW2_TRACKING_PREVENTION_LEVEL_STRICT,
     };
     let mut errors = vec![];
+    BLOCKED.with(|b| b.set(p.blocked));
     let level = match p.tracking {
         0 => COREWEBVIEW2_TRACKING_PREVENTION_LEVEL_NONE,
         1 => COREWEBVIEW2_TRACKING_PREVENTION_LEVEL_BASIC,
@@ -139,6 +154,9 @@ pub fn apply_protection(wv: &WebView, p: Protection) -> Vec<String> {
         }
         if let Err(e) = wv.webview().Settings().and_then(|s| s.cast::<ICoreWebView2Settings8>()).and_then(|s8| s8.SetIsReputationCheckingRequired(p.safe_browsing)) {
             errors.push(format!("SmartScreen: {e}"));
+        }
+        if let Err(e) = wv.webview().Settings().and_then(|s| s.SetIsScriptEnabled(p.script)) {
+            errors.push(format!("JavaScript: {e}"));
         }
     }
     errors

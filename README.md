@@ -56,9 +56,14 @@ with ⋮ > *Restart to update*. Details: [docs/INSTALL.md](docs/INSTALL.md),
   (import from other browsers).
 - **Memory Saver** freezes tabs you have not looked at for a while; tabs playing sound, in a call
   or pinned are left alone. The **task manager** shows the real memory of every process.
-- **Incognito windows**, **extensions** (unpacked Chrome extensions), **import** of history,
-  bookmarks and extensions from Chrome, Edge, Brave and Firefox, **sync** between your PCs through
-  a OneDrive folder.
+- **Extensions from the Chrome Web Store**: on an extension's page the store's button reads
+  *Add to Kakangkung*; the toolbar's extensions button lists them and opens their pop-ups.
+  Unpacked extensions and imports from other browsers work too.
+- **Sign in with Google**: bookmarks, history, open tabs and settings sync between your PCs through
+  a hidden app folder in your Google Drive — see [docs/GOOGLE_SIGNIN.md](docs/GOOGLE_SIGNIN.md).
+  Google's own sign-in works on websites, including sign-in pop-ups.
+- **Incognito windows**, **import** of history, bookmarks and extensions from Chrome, Edge, Brave
+  and Firefox.
 - **Every feature has a setting** — see [docs/SETTINGS.md](docs/SETTINGS.md) — including light/dark
   mode, animations and their speed, smooth scrolling and automatic updates.
 

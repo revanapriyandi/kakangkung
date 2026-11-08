@@ -6,6 +6,7 @@
 //! suspend/resume, close), record what worked, exit.
 //! Any other argument is opened as a URL.
 mod browser;
+mod google;
 mod jobs;
 mod msg;
 mod native;
@@ -14,6 +15,7 @@ mod prefs;
 mod profile;
 mod selftest;
 mod update;
+mod webstore;
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -30,7 +32,7 @@ use crate::browser::{Browser, Paths};
 use crate::jobs::spawn_storage;
 use crate::msg::Msg;
 use crate::prefs::Prefs;
-use crate::profile::{account, import_from_chrome, keep_browsers_in_sync, run_sync, sign_in, sync_conf};
+use crate::profile::{import_from_chrome, keep_browsers_in_sync, run_sync, sync_conf};
 use crate::selftest::{Observed, SelfTest};
 
 const APP: &str = ui::APP_NAME;
@@ -169,8 +171,10 @@ fn main() {
     let (jobs, storage_thread) = spawn_storage(base.join("kakangkung.db"));
     let paths = Paths { extensions: base.join("Extensions") };
     // Hardware acceleration is a browser-process switch: read before the first webview exists.
+    // So is the language sites are asked for (Accept-Language follows `--lang`).
     let gpu = prefs.as_ref().is_none_or(|p| p.settings.hardware_acceleration);
-    let mut browser = match Browser::new(window, base.join("Profile"), proxy.clone(), jobs, paths, gpu) {
+    let lang = prefs.as_ref().map(|p| p.settings.preferred_language.clone()).filter(|l| l != "auto");
+    let mut browser = match Browser::new(window, base.join("Profile"), proxy.clone(), jobs, paths, gpu, lang) {
         Ok(b) => b,
         Err(e) => {
             eprintln!("creating the WebView2 UI failed (is the WebView2 Runtime installed?): {e}");
@@ -224,8 +228,8 @@ fn main() {
     if first_run && matches!(run, Run::Normal(_)) {
         // Like Chrome's first run: bring history and bookmarks over from Chrome automatically,
         // on its own thread and connection so the new tab page and suggestions are not held up.
+        // Signing in is the person's choice now (Sign in with Google): nothing signs in by itself.
         let db = base.join("kakangkung.db");
-        let p = proxy.clone();
         std::thread::spawn(move || {
             let Ok(s) = Store::open(&db) else { return };
             match import_from_chrome(&s) {
@@ -233,17 +237,12 @@ fn main() {
                 Err(e) => eprintln!("first-run import: {e}"),
             }
             keep_browsers_in_sync(&s);
-            // Signed in to Windows with a Microsoft account and OneDrive set up: sign in to
-            // Kakangkung with it automatically so sync just works (Sign out in the profile menu).
-            if account(&s).is_none() && std::env::var_os("OneDrive").is_some() {
-                if let Some(email) = platform::windows_account_email() {
-                    let name = std::env::var("USERNAME").unwrap_or_else(|_| email.clone());
-                    if sign_in(&s, &name, &email, "").is_ok() {
-                        let _ = p.send_event(Msg::Account(name));
-                    }
-                }
-            }
         });
+    }
+    // Keeps the Google Drive copy of sync data and the local sync folder equal.
+    if let Run::Normal(_) = run {
+        crate::google::start_mirror(base.join("kakangkung.db"), proxy.clone());
+        crate::google::kick();
     }
     timing("first tab requested");
     let mut storage_thread = Some(storage_thread);

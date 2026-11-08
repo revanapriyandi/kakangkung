@@ -15,7 +15,8 @@ impl Browser {
     pub(crate) fn open_tab(&mut self, url: &str, at: Option<usize>) {
         let id = self.next_id;
         self.next_id += 1;
-        let view = TabView { id, url: url.into(), title: String::new(), loading: true, private: self.incognito, ..Default::default() };
+        let muted = self.settings.mute_sites;
+        let view = TabView { id, url: url.into(), title: String::new(), loading: true, private: self.incognito, muted, ..Default::default() };
         // Created hidden and in the DISCARDED state; activation runs CreateWebview + Show.
         let tab = Tab::unloaded(view);
         let at = at.unwrap_or(self.tabs.len()).min(self.tabs.len());
@@ -24,6 +25,29 @@ impl Browser {
         if url == ui::NEWTAB_URL {
             self.focus_omnibox();
         }
+    }
+
+    /// Show pop-up webview `id` (built by the new-window handler of tab `opener`) as a tab next
+    /// to its opener. It keeps `window.opener` and closes when its page calls `window.close()`.
+    pub(crate) fn adopt_popup(&mut self, id: u64, opener: u64, url: String) {
+        let Some(wv) = super::take_popup(id) else { return };
+        let at = self.index(opener).map(|i| i + 1);
+        let private = at.map_or(self.incognito, |i| self.tabs[i - 1].view.private);
+        let mut tab = Tab::unloaded(TabView { id, url, title: String::new(), loading: true, private, muted: self.settings.mute_sites, ..Default::default() });
+        for e in platform::apply_protection(&wv, self.settings.protection) {
+            eprintln!("pop-up {id}: {e}");
+        }
+        tab.hooks = self.hook_tab(id, &wv);
+        set_default_zoom(&wv, self.settings.zoom);
+        let p = self.proxy.clone();
+        let _ = platform::on_close_requested(&wv, move || {
+            let _ = p.send_event(Msg::CloseTab(id));
+        });
+        tab.webview = Some(wv);
+        tab.state = Lifecycle::Idle;
+        let at = at.unwrap_or(self.tabs.len()).min(self.tabs.len());
+        self.tabs.insert(at, tab);
+        self.activate(id);
     }
 
     /// Open a page the way Chrome opens its own pages: switch to a tab already showing it, else
@@ -65,7 +89,7 @@ impl Browser {
         let id = self.next_id;
         self.next_id += 1;
         let title = Some(ui::host(url)).filter(|h| !h.is_empty()).unwrap_or(url).to_string();
-        let view = TabView { id, url: url.into(), title, discarded: true, private: self.incognito, ..Default::default() };
+        let view = TabView { id, url: url.into(), title, discarded: true, private: self.incognito, muted: self.settings.mute_sites, ..Default::default() };
         self.tabs.insert(at.min(self.tabs.len()), Tab::unloaded(view));
         id
     }
@@ -149,7 +173,7 @@ impl Browser {
         let s = &self.settings;
         // A native page has nothing to freeze.
         let native = crate::native::page_of(&tab.view.url).is_some();
-        let protected = native || tab.view.audio || (s.protect_media && tab.view.media) || (s.protect_pinned && tab.view.pinned);
+        let protected = native || tab.view.audio || (s.protect_media && tab.view.media) || (s.protect_pinned && tab.view.pinned) || s.kept_active(&tab.view.url);
         let (next, cmds) = match transition(tab.state, ev, protected) {
             Ok(step) => step,
             Err(e) => {

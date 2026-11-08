@@ -2,6 +2,7 @@
 
 mod api;
 mod events;
+mod extensions;
 mod ipc;
 mod menus;
 mod omnibox;
@@ -41,6 +42,9 @@ const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI";
 /// track, so Memory Saver never freezes a call. `track.stop()` fires no event, hence the check
 /// every few seconds, which only runs once the page has captured something.
 pub(crate) const MEDIA_WATCH_JS: &str = include_str!("../../../../assets/media-watch.js");
+
+/// Runs in every tab page, acts only on the Chrome Web Store: the "Add to Kakangkung" button.
+const STORE_JS: &str = include_str!("../../../../assets/webstore.js");
 
 /// Run-wide locations.
 pub(crate) struct Paths {
@@ -135,6 +139,12 @@ pub(crate) struct Browser {
     pub(crate) menu_probe: Option<Vec<String>>,
     /// Self-test only: windows that would open, as (address, Incognito), instead of starting them.
     pub(crate) window_probe: Option<Vec<(String, bool)>>,
+    /// Next id for a pop-up tab (handed out inside the new-window handler).
+    pub(crate) next_popup: std::rc::Rc<std::cell::Cell<u64>>,
+    /// An extension's toolbar pop-up, open under the extensions button.
+    pub(crate) ext_bubble: Option<WebView>,
+    /// Where the extensions button is (DIPs: right edge, bottom), the pop-up hangs from it.
+    pub(crate) bubble_at: (f64, f64),
 }
 
 /// Accessibility focus outline, as a script that switches it on or off in a page.
@@ -182,6 +192,7 @@ impl Browser {
         jobs: mpsc::Sender<Job>,
         paths: Paths,
         hardware_acceleration: bool,
+        lang: Option<String>,
     ) -> wry::Result<Self> {
         timing("window created");
         let ctx = WebContext::new(Some(data_dir));
@@ -205,7 +216,10 @@ impl Browser {
         })
         .map_err(|e| wry::Error::Io(std::io::Error::other(e.to_string())))?;
         timing("native frame created");
-        let browser_args = if hardware_acceleration { BROWSER_ARGS.to_string() } else { format!("{BROWSER_ARGS} --disable-gpu") };
+        let mut browser_args = if hardware_acceleration { BROWSER_ARGS.to_string() } else { format!("{BROWSER_ARGS} --disable-gpu") };
+        if let Some(l) = lang {
+            browser_args += &format!(" --lang={l}");
+        }
         Ok(Self {
             window,
             frame,
@@ -251,38 +265,137 @@ impl Browser {
             overlay_closed: None,
             menu_probe: None,
             window_probe: None,
+            next_popup: std::rc::Rc::new(std::cell::Cell::new(FIRST_POPUP_ID)),
+            ext_bubble: None,
+            bubble_at: (0.0, 0.0),
         })
     }
 
+    /// What every tab webview is built with (also handed to the pop-up handler).
+    fn tab_kit(&self) -> TabKit {
+        TabKit {
+            proxy: self.proxy.clone(),
+            token: self.token.clone(),
+            focus_highlight: self.settings.focus_highlight,
+            page_bg: self.page_bg,
+            theme: self.settings.wry_theme(),
+            parent: self.window.hwnd() as isize,
+            bounds: page_bounds(&self.window),
+            next_popup: self.next_popup.clone(),
+        }
+    }
+
     pub(crate) fn build_tab_webview(&mut self, id: u64, url: &str, visible: bool, private: bool) -> wry::Result<WebView> {
-        let p = self.proxy.clone();
-        let (p1, p2, p3, p4) = (p.clone(), p.clone(), p.clone(), p.clone());
+        let kit = self.tab_kit();
         let builder = match &self.env {
             Some(env) => WebViewBuilder::new().with_environment(env.clone()),
             None => WebViewBuilder::new_with_web_context(&mut self.ctx)
                 .with_additional_browser_args(&self.browser_args)
                 .with_browser_extensions_enabled(true),
         };
-        let wv = builder
-            .with_url(url)
+        let wv = kit.configure(builder, id, private).with_visible(visible).build_as_child(&self.window)?;
+        if self.env.is_none() {
+            self.env = Some(wv.environment());
+        }
+        // The identity applies from the first request, so the page loads after it.
+        if let Err(e) = platform::present_as_edge(&wv) {
+            eprintln!("tab {id}: browser identity: {e}");
+        }
+        wv.load_url(url)?;
+        Ok(wv)
+    }
+}
+
+thread_local! {
+    /// Pop-up webviews built inside the new-window handler, waiting for the UI to adopt them
+    /// as tabs (`Msg::Popup`). A webview is not `Send`, so it cannot travel in the message.
+    static POPUPS: std::cell::RefCell<Vec<(u64, WebView)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The pop-up webview created for tab `id`, if it is still waiting.
+pub(crate) fn take_popup(id: u64) -> Option<WebView> {
+    POPUPS.with(|p| {
+        let mut p = p.borrow_mut();
+        let i = p.iter().position(|(pid, _)| *pid == id)?;
+        Some(p.remove(i).1)
+    })
+}
+
+/// Ids of pop-up tabs start here, apart from the ids the strip hands out.
+pub(crate) const FIRST_POPUP_ID: u64 = 1 << 40;
+
+/// Everything a tab webview is configured with; cloned into the new-window handler so a pop-up
+/// is built exactly like a tab.
+#[derive(Clone)]
+pub(crate) struct TabKit {
+    proxy: EventLoopProxy<Msg>,
+    token: String,
+    focus_highlight: bool,
+    page_bg: (u8, u8, u8, u8),
+    theme: wry::Theme,
+    parent: isize,
+    bounds: Rect,
+    next_popup: std::rc::Rc<std::cell::Cell<u64>>,
+}
+
+impl TabKit {
+    /// A sized `window.open` (sign-in, payment): our own webview instead of WebView2's bare
+    /// window, so it keeps `window.opener`, gets the tab handlers and the tab's browser identity
+    /// (Google refuses sign-in pop-ups that announce WebView2), and shows as a tab next to its
+    /// opener that closes again when the page calls `window.close()`.
+    fn popup(&self, opener: u64, private: bool, url: String, features: wry::NewWindowFeatures) -> NewWindowResponse {
+        let id = self.next_popup.get();
+        self.next_popup.set(id + 1);
+        let builder = WebViewBuilder::new().with_environment(features.opener.environment);
+        let built = self.configure(builder, id, private).with_visible(false).build_as_child(&platform::ParentWindow(self.parent));
+        match built {
+            Ok(wv) => {
+                if let Err(e) = platform::present_as_edge(&wv) {
+                    eprintln!("pop-up: browser identity: {e}");
+                }
+                let core = wv.webview();
+                POPUPS.with(|p| p.borrow_mut().push((id, wv)));
+                let _ = self.proxy.send_event(Msg::Popup { id, opener, url });
+                NewWindowResponse::Create { webview: core }
+            }
+            Err(e) => {
+                eprintln!("pop-up: {e}");
+                NewWindowResponse::Allow
+            }
+        }
+    }
+
+    fn configure<'a>(&self, builder: WebViewBuilder<'a>, id: u64, private: bool) -> WebViewBuilder<'a> {
+        let p = self.proxy.clone();
+        let (p1, p2, p3, p4) = (p.clone(), p.clone(), p.clone(), p.clone());
+        let kit = self.clone();
+        builder
             .with_initialization_script(MEDIA_WATCH_JS)
-            .with_initialization_script(focus_script(self.settings.focus_highlight))
-            // Pages can only send this one message; a page claiming "live" merely keeps itself
-            // from being frozen, which it could also do by playing sound.
+            .with_initialization_script(focus_script(self.focus_highlight))
+            .with_initialization_script(STORE_JS)
+            // Pages can only send these messages. A page claiming "live" merely keeps itself
+            // from being frozen, which it could also do by playing sound; store messages count
+            // only from the Chrome Web Store, and installing still asks the person first.
             .with_ipc_handler(move |req| {
-                let live = match req.body().as_str() {
+                let body = req.body().as_str();
+                if let Some(cmd) = body.strip_prefix("kk:store:") {
+                    if ui::host(&req.uri().to_string()) == crate::webstore::HOST {
+                        let _ = p4.send_event(Msg::Store { tab: id, cmd: cmd.to_string() });
+                    }
+                    return;
+                }
+                let live = match body {
                     "kk:media:1" => true,
                     "kk:media:0" => false,
                     _ => return,
                 };
                 let _ = p4.send_event(Msg::Media { id, live });
             })
-            .with_visible(visible)
             .with_background_color(self.page_bg)
             .with_incognito(private)
             .with_devtools(true)
-            .with_theme(self.settings.wry_theme())
-            .with_bounds(page_bounds(&self.window))
+            .with_theme(self.theme)
+            .with_bounds(self.bounds)
             .with_https_scheme(true)
             .with_hotkeys_zoom(true)
             .with_asynchronous_custom_protocol("kakangkung".into(), {
@@ -316,22 +429,19 @@ impl Browser {
             .with_document_title_changed_handler(move |title| {
                 let _ = p2.send_event(Msg::Title { id, title });
             })
-            // `window.open` with a size opens a pop-up window that keeps `window.opener`
-            // (sign-in and payment pop-ups); everything else opens as a new tab.
-            // Simplification: the pop-up is WebView2's own window without an address bar.
+            // `window.open` with a size is a pop-up that keeps `window.opener` (sign-in and
+            // payment pop-ups); everything else opens as a new tab.
             .with_new_window_req_handler(move |url, features| {
                 if features.size.is_some() {
-                    return NewWindowResponse::Allow;
+                    return kit.popup(id, private, url, features);
                 }
                 let _ = p3.send_event(Msg::OpenTab(url));
                 NewWindowResponse::Deny
             })
-            .build_as_child(&self.window)?;
-        if self.env.is_none() {
-            self.env = Some(wv.environment());
-        }
-        Ok(wv)
     }
+}
+
+impl Browser {
 
     pub(crate) fn hook_tab(&self, id: u64, wv: &WebView) -> platform::Hooks {
         let (p1, p2, p3) = (self.proxy.clone(), self.proxy.clone(), self.proxy.clone());

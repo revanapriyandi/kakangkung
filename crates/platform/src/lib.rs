@@ -7,9 +7,11 @@ mod downloads;
 mod extensions;
 mod hash;
 mod hooks;
+mod identity;
 pub mod motion;
 mod processes;
 mod profile;
+mod secret;
 mod shell;
 mod time;
 mod webview;
@@ -22,11 +24,13 @@ pub mod popup;
 pub mod sqlite;
 
 pub use downloads::{download_action, downloads, DownloadAction, DownloadInfo, DownloadState};
-pub use hash::sha256_hex;
+pub use hash::{random_bytes, sha256, sha256_hex};
+pub use secret::{protect, unprotect};
 pub use extensions::{extension_add, extension_change, extensions_list, Extension};
 pub use hooks::{hook, unhook, Hooks, Key};
+pub use identity::{edge_identity, on_close_requested, on_lost_focus, present_as_edge, runtime_version, ParentWindow};
 pub use processes::{processes, ProcessMemory};
-pub use profile::{clear_passwords, reset_site_permission, site_permissions, SitePermission};
+pub use profile::{clear_browsing_data, clear_passwords, reset_site_permission, site_permissions, SitePermission};
 pub use shell::{confirm, dark_mode, is_default_browser, pick_folder, register_as_browser, windows_account_email};
 pub use webview::{apply_protection, devtools_call, document_title, is_suspended, open_find, probe_interfaces,
     raise, resume, save_page_as, set_download_folder, set_muted, stop, try_suspend, zoom, Protection};

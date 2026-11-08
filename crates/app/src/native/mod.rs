@@ -10,7 +10,7 @@ mod tools;
 mod welcome;
 mod when;
 
-pub(crate) use account::{field, signin_doc, sync_doc, type_on, TYPES};
+pub(crate) use account::{signin_doc, sync_doc, type_on, TYPES};
 pub(crate) use lists::{bookmarks_doc, history_doc};
 pub(crate) use settings::settings_doc;
 pub(crate) use start::{incognito_doc, launch_doc, newtab_doc};
@@ -187,6 +187,11 @@ fn settings_step(kind: &str, id: &str, value: &str) -> Option<Step> {
         ("text", "custom-engine") => call("settings/engine", value.trim(), "Search engine changed."),
         // Several start-up pages are typed on one line, separated by spaces.
         ("text", "startup.pages") => call("settings/url", format!("{id}\t{}", value.split_whitespace().collect::<Vec<_>>().join("\n")), saved),
+        // Sites to keep active may be typed bare ("mail.example.com"), like in Chrome.
+        ("text", "performance.keep_active") => {
+            let urls: Vec<String> = value.split_whitespace().map(|w| if w.contains("://") { w.into() } else { format!("https://{w}") }).collect();
+            call("settings/url", format!("{id}\t{}", urls.join("\n")), saved)
+        }
         ("text", _) => call("settings/url", format!("{id}\t{}", value.trim()), saved),
         ("button", "sync-pick") => call("sync/pick", "", "Sync folder changed."),
         ("button", "sync-now") => call("sync/now", "", "Synced."),

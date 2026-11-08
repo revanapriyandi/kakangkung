@@ -82,16 +82,17 @@ pub(crate) fn extensions_doc(answer: &Json) -> PageDoc {
                 .collect();
             sections.push(Section { id: "installed".into(), title: format!("Installed ({})", list.len()), keywords: String::new(), cards });
         }
-        Some(_) => sections.push(empty("installed", "Installed", "\u{EA86}", "No extensions yet", "Load an unpacked extension or import one from another browser below.")),
+        Some(_) => sections.push(empty("installed", "Installed", "\u{EA86}", "No extensions yet", "Add one from the Chrome Web Store, load an unpacked one, or import one from another browser below.")),
         None => sections.push(empty("installed", "Installed", "\u{EA86}", "Extensions are not available right now", answer["error"].as_str().unwrap_or(""))),
     }
     sections.push(section("add", "Add an extension", vec![
+        Row::new("Chrome Web Store", "Open an extension's page and choose Add to Kakangkung", Control::Link { id: "visit:https://chromewebstore.google.com/category/extensions".into() }),
         Row::new("Load unpacked", "The folder that contains manifest.json", buttons(&[("ext-load", "Load unpacked", ButtonStyle::Primary)])),
         Row::new("Import from a browser", "Chrome, Edge or Brave", Control::Link { id: "open:welcome#chrome".into() }),
     ]));
     sections.push(section("about", "", vec![Row::new(
         "How extensions run",
-        "Extensions run in Kakangkung's tabs through Microsoft WebView2: content scripts, background work and blocking rules run. WebView2 has no toolbar buttons or pop-up windows for extensions, so an extension's own button menu is not available.",
+        "Extensions run in Kakangkung's tabs through Microsoft WebView2: content scripts, background work and blocking rules run. The extensions button in the toolbar opens an extension's own pop-up; it runs beside the page, so an extension that acts on \"the current tab\" may not see the page behind it.",
         Control::None,
     )]));
     PageDoc {

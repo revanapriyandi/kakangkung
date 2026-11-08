@@ -73,7 +73,8 @@ impl Values<'_> {
     }
 
     fn url_field(&self, key: &str, title: &str, sub: &str) -> Row {
-        Row::new(title, sub, Control::Text { id: key.into(), value: self.get(key).into(), placeholder: "https://example.com".into(), button: "Save".into() })
+        // Lists are stored one per line and typed on one line, separated by spaces.
+        Row::new(title, sub, Control::Text { id: key.into(), value: self.get(key).replace('\n', " "), placeholder: "https://example.com".into(), button: "Save".into() })
     }
 }
 
@@ -231,9 +232,27 @@ fn privacy(v: &Values, permissions: Option<&[Json]>) -> Section {
             }
         }
     }
+    site.push(Row::heading("Default behaviour"));
+    site.push(v.select("site.javascript", "JavaScript", "Applies from the next page load", &[("allow", "Sites can use JavaScript"), ("block", "Don't allow sites to use JavaScript")]));
+    for (key, title, what) in [
+        ("site.location", "Location", "see your location"),
+        ("site.camera", "Camera", "use your camera"),
+        ("site.microphone", "Microphone", "use your microphone"),
+        ("site.notifications", "Notifications", "send notifications"),
+        ("site.clipboard", "Clipboard", "see text and images copied to the clipboard"),
+        ("site.automatic_downloads", "Automatic downloads", "download several files automatically"),
+        ("site.sensors", "Motion sensors", "use motion sensors"),
+        ("site.midi", "MIDI devices", "connect to MIDI devices"),
+    ] {
+        let ask = format!("Sites can ask to {what}");
+        let block = format!("Don't allow sites to {what}");
+        site.push(v.select(key, title, "", &[("ask", ask.as_str()), ("block", block.as_str())]));
+    }
     site.push(Row::new("Incognito window", "Browse without saving history, cookies or form data · Ctrl+Shift+N", Control::None));
     let mut rows = vec![
+        safety_check(v),
         Row::heading("Browsing data"),
+        v.select("privacy.clear_range", "Time range", "Used by the two Clear buttons below", &[("hour", "Last hour"), ("day", "Last 24 hours"), ("week", "Last 7 days"), ("month", "Last 4 weeks"), ("all", "All time")]),
         Row::new("Clear browsing history", "Pages you visited in Kakangkung", buttons(&[("clear-history", "Clear", ButtonStyle::Danger)])),
         Row::new("Clear all browsing data", "History, cookies, cached files and site data", buttons(&[("clear-all", "Clear", ButtonStyle::Danger)])),
         v.toggle("privacy.clear_on_exit", "Clear browsing data when you exit", "History, cookies, cache and site data are removed when Kakangkung closes"),
@@ -243,7 +262,22 @@ fn privacy(v: &Values, permissions: Option<&[Json]>) -> Section {
         v.select("privacy.tracking", "Tracking prevention", "Blocks trackers from sites you haven't visited; Strict may break some sites", &[("0", "Off"), ("1", "Basic"), ("2", "Balanced (recommended)"), ("3", "Strict")]),
     ];
     rows.extend(site);
-    section("privacy", "Privacy and security", "privacy security clear browsing data history cookies cache safe browsing https tracking site permissions camera location notifications", vec![rows])
+    section("privacy", "Privacy and security", "privacy security safety check clear browsing data time range history cookies cache safe browsing https tracking site settings permissions javascript camera microphone location notifications clipboard downloads sensors midi", vec![rows])
+}
+
+/// Chrome's Safety check, from the settings alone: which protections are switched off.
+fn safety_check(v: &Values) -> Row {
+    let issues: Vec<&str> = [
+        (!v.on("privacy.safe_browsing"), "Safe Browsing is off"),
+        (!v.on("privacy.https_first"), "secure connections are not enforced"),
+        (!v.on("system.auto_update"), "automatic updates are off"),
+        (v.get("privacy.tracking") == "0", "tracking prevention is off"),
+    ]
+    .into_iter()
+    .filter_map(|(bad, text)| bad.then_some(text))
+    .collect();
+    let sub = if issues.is_empty() { "No problems found".to_string() } else { format!("{} problem(s): {}", issues.len(), issues.join(", ")) };
+    Row::new("Safety check", &sub, Control::None)
 }
 
 fn performance(v: &Values, memory: &str) -> Section {
@@ -256,6 +290,7 @@ fn performance(v: &Values, memory: &str) -> Section {
         mode("performance", "Off", "Keep every tab running"),
         v.toggle("performance.protect_media", "Keep calls running", "Never freeze tabs using the camera, microphone or screen sharing"),
         v.toggle("performance.protect_pinned", "Keep pinned tabs running", "Memory Saver leaves pinned tabs alone"),
+        v.url_field("performance.keep_active", "Always keep these sites active", "Sites and their subdomains, separated by spaces (mail.example.com)"),
     ]])
 }
 

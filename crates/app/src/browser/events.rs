@@ -21,6 +21,17 @@ impl Browser {
                 Some(wv) => platform::extension_add(wv, &folder, move |r| respond.send(api_json(r.map(ext_json)))),
                 None => respond.send(json!({ "error": "open a tab first" })),
             },
+            Msg::Popup { id, opener, url } => self.adopt_popup(id, opener, url),
+            Msg::CloseTab(id) => {
+                self.close_tab(id);
+                return !self.tabs.is_empty();
+            }
+            Msg::Store { tab, cmd } => self.store_message(tab, &cmd),
+            Msg::StoreUnpacked { tab, ext, result } => self.store_unpacked(tab, ext, result),
+            Msg::StoreButton { tab, ext, state, text } => self.store_button(tab, &ext, state, &text),
+            Msg::ExtMenu { list, x, y } => self.show_extensions_menu(list, x, y),
+            Msg::Bubble { close, size } => self.on_bubble(close, size),
+            Msg::SyncSoon => return self.on_menu("syncnow"),
             Msg::Suggest { seq, json } => {
                 if seq == self.suggest_state.0 {
                     self.suggest_state.1 = serde_json::from_str(&json).ok();

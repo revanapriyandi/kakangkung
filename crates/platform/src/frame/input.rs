@@ -84,7 +84,7 @@ impl Inner {
             Hit::Reload => if self.state.loading { "stop".into() } else { "reload".into() },
             Hit::Home => "home".into(),
             Hit::Star => "bookmark".into(),
-            Hit::Extensions => "open\tkakangkung://extensions".into(),
+            Hit::Extensions => format!("extensions\t{}\t{}", place.0.round(), (place.1 + 2.0).round()),
             Hit::Profile => format!("profile\t{}\t{}", place.0.round(), (place.1 + 2.0).round()),
             Hit::Menu => format!("menu\t{}\t{}", place.0.round(), (place.1 + 2.0).round()),
             Hit::Chip => format!("siteinfo\t{}\t{}", place.2.round(), (place.1 + 6.0).round()),
@@ -202,7 +202,7 @@ pub(super) unsafe extern "system" fn frame_proc(hwnd: HWND, msg: u32, wp: WPARAM
                     // The window moves when the empty strip is dragged.
                     Hit::Drag if y < STRIP_H => i.send("drag".into()),
                     // Menus open on press, like Chrome.
-                    Hit::Menu | Hit::Profile | Hit::Chip | Hit::TabSearch => {
+                    Hit::Menu | Hit::Profile | Hit::Extensions | Hit::Chip | Hit::TabSearch => {
                         i.pressed = Hit::None;
                         i.click(h, x, y);
                     }

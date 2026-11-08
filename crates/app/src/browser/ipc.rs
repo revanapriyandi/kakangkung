@@ -18,7 +18,19 @@ impl Browser {
         let cmd = parts.next().unwrap_or("");
         let arg = parts.next().unwrap_or("");
         let id = arg.parse::<u64>().unwrap_or(0);
+        // Any use of the frame closes an open extension pop-up (the extensions button toggles it).
+        if self.ext_bubble.is_some() && !matches!(cmd, "overlaysel" | "omnichange") {
+            self.close_bubble();
+            if cmd == "extensions" {
+                return true;
+            }
+        }
         match cmd {
+            "extensions" => {
+                let right: f64 = arg.parse().unwrap_or(0.0);
+                let top: f64 = parts.next().unwrap_or("").parse().unwrap_or(0.0);
+                self.request_extensions_menu(right, top);
+            }
             "ready" => {
                 self.ui_ready = true;
                 self.show_window();

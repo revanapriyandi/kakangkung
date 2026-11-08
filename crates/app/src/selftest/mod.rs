@@ -78,6 +78,23 @@ fn hud(b: &Browser) -> Json {
     })
 }
 
+/// A test RSA public key (SubjectPublicKeyInfo, base64) and the extension id Chrome derives from
+/// it (SHA-256, first 16 bytes as a–p), for the "store" step.
+const TEST_STORE_KEY: &str = "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQC1l6DJXMoR40Y3FuEYlmWPBIkPT51DhLhSH/aR97FjKkMTLG+DvejR+9qvymczs7n0G6xMkScnuPNYAOZHQEZ4mlXV65ioqOZkAtAlk5zDoPbDNGZVtNBJIVz2V+SLbBXGp+qBousEo3eLXiTGUpBsaLTZXbbrb/bHcsfZLoBYnwIDAQAB";
+const TEST_STORE_ID: &str = "fnefnikcefeclaobcbndpmkblbnidkon";
+
+/// An unpacked extension like a store install leaves (manifest with `key`, a toolbar pop-up).
+fn test_store_extension(dir: &std::path::Path) -> PathBuf {
+    let _ = std::fs::create_dir_all(dir);
+    let manifest = serde_json::json!({
+        "manifest_version": 3, "name": "Kakangkung store test", "version": "1.0",
+        "key": TEST_STORE_KEY, "action": { "default_popup": "popup.html" },
+    });
+    let _ = std::fs::write(dir.join("manifest.json"), manifest.to_string());
+    let _ = std::fs::write(dir.join("popup.html"), "<!doctype html><body style=\"width:200px\">ok</body>");
+    dir.to_path_buf()
+}
+
 /// Runs inside kakangkung://selftest (a blank page that carries the API token) through the token-checked API:
 /// Chrome history import, Chrome extension import + off + remove, folder sync.
 pub(crate) const FEATURE_JS: &str = r#"window.__kakangkungTest = "";
@@ -90,6 +107,7 @@ pub(crate) const FEATURE_JS: &str = r#"window.__kakangkungTest = "";
     return j;
   };
   const FOLDER = __FOLDER__;
+  const STORE_EXT = __STORE_EXT__, STORE_ID = "__STORE_ID__";
   const r = {};
   const step = async (name, f) => {
     try { r[name] = await f(); } catch (e) { r[name] = { ok: false, detail: String((e && e.message) || e) }; }
@@ -122,6 +140,15 @@ pub(crate) const FEATURE_JS: &str = r#"window.__kakangkungTest = "";
     return { ok: on === true && off === false && gone,
       detail: `imported '${added.name}' from Chrome and it is running (enabled=${on})` +
         (refused.length ? ` (refused first: ${refused.join("; ")})` : "") + `; switched off -> enabled=${off}; removed=${gone}` };
+  });
+  await step("store", async () => {
+    // What a Chrome Web Store install loads: an unpacked folder whose manifest carries the
+    // store's key, so WebView2 gives it the store id. The id and the toolbar pop-up must hold.
+    const added = await api("extensions/load", STORE_EXT);
+    const listed = (await api("extensions")).some(e => e.id === added.id);
+    await api("extensions/remove", added.id);
+    return { ok: added.id === STORE_ID && listed,
+      detail: `loaded a test extension with a manifest key: id ${added.id} (expected ${STORE_ID}), listed=${listed}, removed` };
   });
   await step("sync", async () => {
     // Point sync at a test folder first, then sign in like a person would (sync starts by itself).
@@ -346,8 +373,8 @@ impl SelfTest {
                 b.act(Action::CloseTab); // Ctrl+W on the new tab
                 let one_left = b.tabs.len() == 1 && b.active == 1;
                 let hooks_after = b.hook_count();
-                // Tab 1's webview has its 4 handlers; the native New Tab page added and left none.
-                let ok = ok && frozen && running && back_on_1 && one_left && hooks_after == 4 && self.hooks_with_two_tabs == 4;
+                // Tab 1's webview has its 5 handlers (keys, favicon, audio, downloads, permissions); the native New Tab page added and left none.
+                let ok = ok && frozen && running && back_on_1 && one_left && hooks_after == 5 && self.hooks_with_two_tabs == 5;
                 b.act(Action::Back); // back to the New Tab page for the toolbar check
                 self.steps.push((
                     "act",
@@ -379,7 +406,11 @@ impl SelfTest {
             }
             (Stage::WaitScriptPage, Observed::Loaded { url, .. }) if url == ABOUT => {
                 let folder = serde_json::to_string(&self.sync_folder.display().to_string()).unwrap_or_default();
-                let js = FEATURE_JS.replace("__FOLDER__", &folder);
+                let ext = test_store_extension(&self.sync_folder.with_extension("ext"));
+                let js = FEATURE_JS
+                    .replace("__FOLDER__", &folder)
+                    .replace("__STORE_EXT__", &serde_json::to_string(&ext.display().to_string()).unwrap_or_default())
+                    .replace("__STORE_ID__", TEST_STORE_ID);
                 match b.active_webview().map(|wv| wv.evaluate_script(&js)) {
                     Some(Ok(())) => {
                         self.stage = Stage::PollFeatures;
@@ -396,7 +427,7 @@ impl SelfTest {
                     return false;
                 }
                 let r: Json = serde_json::from_str(&inner).unwrap_or(Json::Null);
-                for step in ["import", "extensions", "sync", "browsers", "search", "privacy", "taskmanager", "settings", "sitedata"] {
+                for step in ["import", "extensions", "store", "sync", "browsers", "search", "privacy", "taskmanager", "settings", "sitedata"] {
                     let ok = r[step]["ok"].as_bool().unwrap_or(false);
                     let mut detail = r[step]["detail"].as_str().unwrap_or("no result").to_string();
                     if step == "sync" {

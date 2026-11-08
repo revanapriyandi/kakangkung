@@ -2,11 +2,11 @@
 
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2_15, ICoreWebView2_8, COREWEBVIEW2_KEY_EVENT_KIND, COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
-    COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN,
+    COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN, COREWEBVIEW2_PERMISSION_KIND, COREWEBVIEW2_PERMISSION_STATE_DENY,
 };
 use webview2_com::{
     take_pwstr, AcceleratorKeyPressedEventHandler, FaviconChangedEventHandler,
-    IsDocumentPlayingAudioChangedEventHandler,
+    IsDocumentPlayingAudioChangedEventHandler, PermissionRequestedEventHandler,
 };
 use windows::core::{Interface, BOOL, PWSTR};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_MENU, VK_SHIFT};
@@ -28,12 +28,13 @@ pub struct Hooks {
     favicon: Option<i64>,
     audio: Option<i64>,
     downloads: Option<i64>,
+    permission: Option<i64>,
 }
 
 impl Hooks {
     /// Number of live registrations (the self-test checks none are leaked).
     pub fn count(&self) -> usize {
-        [self.accel, self.favicon, self.audio, self.downloads].iter().flatten().count()
+        [self.accel, self.favicon, self.audio, self.downloads, self.permission].iter().flatten().count()
     }
 }
 
@@ -119,6 +120,25 @@ pub fn hook(
             Err(e) => eprintln!("hook: IsDocumentPlayingAudioChanged registration failed: {e}"),
         }
     }
+    // Site settings: kinds switched to "Don't allow" are denied without a prompt.
+    let perm = PermissionRequestedEventHandler::create(Box::new(|_, args| {
+        let Some(args) = args else { return Ok(()) };
+        let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
+        // SAFETY: `kind` is a writable local; plain COM calls on the live event args.
+        unsafe {
+            args.PermissionKind(&mut kind)?;
+            if (0..32).contains(&kind.0) && crate::webview::blocked_permissions() & (1 << kind.0) != 0 {
+                args.SetState(COREWEBVIEW2_PERMISSION_STATE_DENY)?;
+            }
+        }
+        Ok(())
+    }));
+    let mut token = 0i64;
+    // SAFETY: handler is a valid COM object; token is a writable local.
+    match unsafe { wv.webview().add_PermissionRequested(&perm, &mut token) } {
+        Ok(()) => hooks.permission = Some(token),
+        Err(e) => eprintln!("hook: PermissionRequested registration failed: {e}"),
+    }
     hooks
 }
 
@@ -126,6 +146,12 @@ pub fn hook(
 pub fn unhook(wv: &WebView, hooks: &mut Hooks) {
     if let Some(t) = hooks.downloads.take() {
         crate::downloads::unwatch(wv, t);
+    }
+    if let Some(t) = hooks.permission.take() {
+        // SAFETY: token came from add_PermissionRequested on this webview.
+        if let Err(e) = unsafe { wv.webview().remove_PermissionRequested(t) } {
+            eprintln!("unhook: PermissionRequested: {e}");
+        }
     }
     if let Some(t) = hooks.accel.take() {
         // SAFETY: token came from add_AcceleratorKeyPressed on this controller.

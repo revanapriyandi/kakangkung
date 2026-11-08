@@ -132,6 +132,12 @@ impl Store {
         self.db.run("DELETE FROM history", &[])
     }
 
+    /// Forget pages last visited at or after `since_ms` (Unix ms).
+    /// ponytail: only the last visit is kept, so a page visited before and inside the range goes too.
+    pub fn clear_history_since(&self, since_ms: i64) -> Result<(), String> {
+        self.db.run("DELETE FROM history WHERE last_visit >= ?1", &[since_ms.into()])
+    }
+
     /// Upsert visits from another source: keep the higher count and the newer visit/title.
     pub fn merge(&self, visits: &[Visit]) -> Result<usize, String> {
         self.db.batch("BEGIN")?;

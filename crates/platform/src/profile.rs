@@ -2,7 +2,8 @@
 
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2Profile2, ICoreWebView2Profile4, COREWEBVIEW2_BROWSING_DATA_KINDS,
-    COREWEBVIEW2_BROWSING_DATA_KINDS_GENERAL_AUTOFILL, COREWEBVIEW2_BROWSING_DATA_KINDS_PASSWORD_AUTOSAVE,
+    COREWEBVIEW2_BROWSING_DATA_KINDS_ALL_SITE, COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE, COREWEBVIEW2_BROWSING_DATA_KINDS_GENERAL_AUTOFILL,
+    COREWEBVIEW2_BROWSING_DATA_KINDS_PASSWORD_AUTOSAVE,
     COREWEBVIEW2_PERMISSION_KIND, COREWEBVIEW2_PERMISSION_STATE_ALLOW, COREWEBVIEW2_PERMISSION_STATE_DEFAULT,
 };
 use webview2_com::{
@@ -93,5 +94,27 @@ pub fn clear_passwords(wv: &WebView, done: impl FnOnce(std::result::Result<(), S
     );
     // SAFETY: valid profile interface and handler; completion runs on this (UI) thread.
     let r = profile::<ICoreWebView2Profile2>(wv).and_then(|p| unsafe { p.ClearBrowsingData(kinds, &handler) });
+    fail_now(r, &slot);
+}
+
+/// Chrome's "Delete browsing data": cookies and other site data and/or cached images and files
+/// stored since `since_ms` (Unix ms, 0 = all time). Passwords and autofill stay.
+pub fn clear_browsing_data(wv: &WebView, cookies: bool, cache: bool, since_ms: i64, done: impl FnOnce(std::result::Result<(), String>) + 'static) {
+    let done: Done<()> = Box::new(done);
+    let slot = std::rc::Rc::new(std::cell::Cell::new(Some(done)));
+    let s2 = slot.clone();
+    let handler = ClearBrowsingDataCompletedHandler::create(Box::new(move |hr| {
+        if let Some(d) = s2.take() {
+            d(hr.map_err(|e| e.message()));
+        }
+        Ok(())
+    }));
+    // WebView2 takes seconds since the epoch; the far future ends the range.
+    let (start, end) = (since_ms as f64 / 1000.0, f64::from(u32::MAX));
+    // SAFETY: valid profile interface and handler; completion runs on this (UI) thread.
+    let kinds = COREWEBVIEW2_BROWSING_DATA_KINDS(
+        if cookies { COREWEBVIEW2_BROWSING_DATA_KINDS_ALL_SITE.0 } else { 0 } | if cache { COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE.0 } else { 0 },
+    );
+    let r = profile::<ICoreWebView2Profile2>(wv).and_then(|p| unsafe { p.ClearBrowsingDataInTimeRange(kinds, start, end, &handler) });
     fail_now(r, &slot);
 }
