@@ -68,7 +68,7 @@ jobs:
             "/DBinDir=..\target\${{ matrix.target }}\release" "/DOutDir=..\dist" installer\kakangkung.iss
           if ($LASTEXITCODE) { throw "Inno Setup failed ($LASTEXITCODE)" }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: kakangkung-${{ matrix.arch }}
           path: dist/*
@@ -103,7 +103,7 @@ jobs:
 
       - name: Dry-run files
         if: github.ref_type != 'tag'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kakangkung-release-dry-run
           path: dist/*
