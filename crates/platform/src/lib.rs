@@ -21,7 +21,7 @@ pub mod page;
 pub mod popup;
 pub mod sqlite;
 
-pub use downloads::{download_action, downloads, DownloadAction, DownloadInfo, DownloadState};
+pub use downloads::{download_action, downloads, take_finished, DownloadAction, DownloadInfo, DownloadState};
 pub use hash::sha256_hex;
 pub use extensions::{extension_add, extension_change, extensions_list, Extension};
 pub use hooks::{hook, unhook, Hooks, Key};

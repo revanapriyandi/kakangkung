@@ -18,13 +18,16 @@ pub(crate) fn size(bytes: i64) -> String {
     }
 }
 
-/// The Downloads page: this run's downloads, grouped by day, newest first.
+/// The Downloads page: downloads of this run and kept ones, grouped by day, newest first.
 pub(crate) fn downloads_doc(items: &Json) -> PageDoc {
     let now = storage::now_ms();
     let (today, yesterday) = (local(now), local(now - 86_400_000));
     let mut sections: Vec<Section> = vec![];
     for d in items.as_array().into_iter().flatten() {
-        let id = d["id"].as_u64().unwrap_or(0);
+        let id = match &d["id"] {
+            Json::String(s) => s.clone(),
+            other => other.to_string(),
+        };
         let path = d["path"].as_str().unwrap_or("");
         let url = d["url"].as_str().unwrap_or("");
         let name = path.rsplit(['\\', '/']).next().filter(|n| !n.is_empty()).unwrap_or(url);
@@ -50,7 +53,7 @@ pub(crate) fn downloads_doc(items: &Json) -> PageDoc {
         }
     }
     if sections.is_empty() {
-        sections.push(empty("none", "", "\u{E896}", "Files you download appear here", "Downloads of this session are listed; the files stay in your downloads folder."));
+        sections.push(empty("none", "", "\u{E896}", "Files you download appear here", "Finished downloads stay listed until you remove them; the files stay in your downloads folder."));
     }
     PageDoc {
         title: "Downloads".into(),
