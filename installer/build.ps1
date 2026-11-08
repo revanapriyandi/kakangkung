@@ -1,5 +1,5 @@
-# Builds the Kakangkung installer with Inno Setup 6.5+ (installed or upgraded with Chocolatey when
-# missing or older). Used by CI and the release workflow:
+# Builds the Kakangkung installer with Inno Setup 6.5+ (installed with Chocolatey when missing).
+# Used by CI and the release workflow:
 #   pwsh installer\build.ps1 -Version 0.1.0 -Arch x64 -BinDir target\release
 #
 # Code signing: when SIGN_PFX_BASE64 (a base64 .pfx) and SIGN_PFX_PASSWORD are set, the program
@@ -16,15 +16,15 @@ $root = Split-Path $PSScriptRoot
 
 function Find-Iscc {
     Get-ChildItem "${env:ProgramFiles(x86)}\Inno Setup*\ISCC.exe", "$env:ProgramFiles\Inno Setup*\ISCC.exe" -ErrorAction SilentlyContinue |
-        Sort-Object { $_.VersionInfo.FileVersionRaw } | Select-Object -Last 1
+        Sort-Object FullName | Select-Object -Last 1
 }
+# ISCC.exe carries no file version; kakangkung.iss itself refuses Inno Setup older than 6.5.
 $iscc = Find-Iscc
-if (-not $iscc -or $iscc.VersionInfo.FileVersionRaw -lt [version]'6.5.0') {
-    choco upgrade innosetup -y --no-progress | Out-Null
+if (-not $iscc) {
+    choco install innosetup -y --no-progress | Out-Null
     $iscc = Find-Iscc
 }
 if (-not $iscc) { throw 'Inno Setup was not found' }
-"Inno Setup $($iscc.VersionInfo.FileVersion)"
 
 $bin = Resolve-Path (Join-Path $root $BinDir)
 $out = Join-Path $root $OutDir
