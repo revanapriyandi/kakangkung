@@ -47,6 +47,8 @@ pub struct FrameTab {
     /// Group colour as 0xRRGGBB, 0 = no group.
     pub group_color: u32,
     pub in_split: bool,
+    /// Address of the site icon (drawn once loaded; a globe until then).
+    pub favicon: String,
 }
 
 /// A tab group's label in the strip, drawn before its first tab.
@@ -106,6 +108,8 @@ struct Gfx {
     factory: ID2D1Factory,
     target: Option<ID2D1HwndRenderTarget>,
     brush: Option<ID2D1SolidColorBrush>,
+    /// Site icons made for this target, by address.
+    favicons: std::collections::HashMap<String, windows::Win32::Graphics::Direct2D::ID2D1Bitmap>,
     text: IDWriteTextFormat,
     text_bold: IDWriteTextFormat,
     icons: IDWriteTextFormat,
@@ -164,6 +168,7 @@ impl Frame {
                 factory,
                 target: None,
                 brush: None,
+                favicons: Default::default(),
                 text: text_format(&dw, w!("Segoe UI"), 12.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING)?,
                 text_bold: text_format(&dw, w!("Segoe UI"), 12.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER)?,
                 icons: text_format(&dw, icons, 16.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER)?,
