@@ -152,6 +152,7 @@ impl Browser {
             doc.logo_bounce = platform::page::Bounce::Once;
         }
         doc.toast = std::mem::take(&mut self.native.toast);
+        crate::i18n::translate_doc(&mut doc);
         // Incognito pages are always dark, like Chrome's.
         let dark = self.dark_ui() || self.incognito || page == "incognito";
         self.page.set_doc(doc, dark);
