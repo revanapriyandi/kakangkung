@@ -54,9 +54,12 @@ pub fn save_file(owner: isize, suggested: &str) -> Option<std::path::PathBuf> {
     }
 }
 
-/// Is Windows set to dark mode for apps (HKCU ...\Themes\Personalize\AppsUseLightTheme = 0)?
-/// Two-letter code of the Windows display language ("id", "en", …; "en" when not known).
+/// Two-letter code of the interface language to start in: the one picked in the installer
+/// (HKCU\Software\Kakangkung, Language), else the Windows display language ("en" when not known).
 pub fn ui_language() -> String {
+    if let Some(lang) = reg_get("Software\\Kakangkung", "Language").filter(|l| matches!(l.as_str(), "en" | "id")) {
+        return lang;
+    }
     // SAFETY: no arguments.
     let lang = unsafe { windows::Win32::Globalization::GetUserDefaultUILanguage() } & 0x3ff;
     // ponytail: only the languages Kakangkung has tables for; a full LCID map when there are more.
@@ -67,6 +70,7 @@ pub fn ui_language() -> String {
     .to_string()
 }
 
+/// Is Windows set to dark mode for apps (HKCU ...\Themes\Personalize\AppsUseLightTheme = 0)?
 pub fn dark_mode() -> bool {
     use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
     let (key, value) = (

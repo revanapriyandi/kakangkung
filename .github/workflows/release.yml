@@ -52,21 +52,26 @@ jobs:
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }}
 
+      # Signs kakangkung.exe, Setup and the uninstaller when the SIGN_PFX_BASE64 and
+      # SIGN_PFX_PASSWORD secrets exist (see docs/RELEASING.md); unsigned otherwise.
+      - name: Installer
+        shell: pwsh
+        env:
+          SIGN_PFX_BASE64: ${{ secrets.SIGN_PFX_BASE64 }}
+          SIGN_PFX_PASSWORD: ${{ secrets.SIGN_PFX_PASSWORD }}
+        run: ./installer/build.ps1 -Version $env:VERSION -Arch ${{ matrix.arch }} -BinDir target\${{ matrix.target }}\release
+
+      # After the installer, so the zip holds the same (signed) program file.
       - name: Portable zip
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
           Compress-Archive -Path target\${{ matrix.target }}\release\kakangkung.exe, LICENSE, README.md `
             -DestinationPath "dist\Kakangkung-$env:VERSION-${{ matrix.arch }}.zip"
 
-      - name: Installer
+      - name: Installer smoke test
+        if: matrix.arch == 'x64'
         shell: pwsh
-        run: |
-          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
-          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
-          & $iscc "/DAppVersion=$env:VERSION" "/DArch=${{ matrix.arch }}" `
-            "/DBinDir=..\target\${{ matrix.target }}\release" "/DOutDir=..\dist" installer\kakangkung.iss
-          if ($LASTEXITCODE) { throw "Inno Setup failed ($LASTEXITCODE)" }
+        run: ./installer/smoke-test.ps1 -Setup "dist\Kakangkung-Setup-$env:VERSION-x64.exe"
 
       - uses: actions/upload-artifact@v7
         with:

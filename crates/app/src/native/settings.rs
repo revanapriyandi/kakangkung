@@ -4,7 +4,7 @@
 use platform::page::{Button, ButtonStyle, Control, NavItem, PageDoc, Row, Section};
 use serde_json::Value as Json;
 
-const UI_LANGS: &[(&str, &str)] = &[("auto", "Windows language"), ("en", "English"), ("id", "Bahasa Indonesia")];
+const UI_LANGS: &[(&str, &str)] = &[("auto", "Automatic (installer or Windows language)"), ("en", "English"), ("id", "Bahasa Indonesia")];
 
 const LANG_NAMES: &[(&str, &str)] = &[
     ("auto", "The browser's language"),

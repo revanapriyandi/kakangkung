@@ -390,7 +390,7 @@ pub(super) const TEXT: &[(&str, &str)] = &[
     ("Used by ⋮ > Translate page (Google Translate)", "Dipakai oleh ⋮ > Terjemahkan halaman (Google Translate)"),
     ("Interface language", "Bahasa antarmuka"),
     ("Menus and built-in pages; more languages are welcome on GitHub", "Menu dan halaman bawaan; bahasa lain bisa ditambahkan lewat GitHub"),
-    ("Windows language", "Bahasa Windows"),
+    ("Automatic (installer or Windows language)", "Otomatis (bahasa installer atau Windows)"),
     ("Show a highlight on the focused object", "Tampilkan sorotan pada objek yang difokuskan"),
     ("A thick outline follows the keyboard focus on web pages", "Garis tebal mengikuti fokus keyboard di halaman web"),
     ("Check for updates", "Periksa pembaruan"),

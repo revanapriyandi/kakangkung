@@ -132,7 +132,7 @@ shows whether Kakangkung is the default.
 
 | Setting | Key | Values | Applies |
 |---|---|---|---|
-| Interface language | `languages.ui` | **Windows language** / English / Bahasa Indonesia | Live |
+| Interface language | `languages.ui` | **Automatic** (the language picked in the installer, else Windows') / English / Bahasa Indonesia | Live |
 | Preferred language for websites | `languages.preferred` | **Windows' language** / Indonesian / English / … (`--lang`, sets Accept-Language) | Restart |
 | Translate pages into | `languages.translate_to` | **the browser's language** / Indonesian / English / … (21 languages) | Live |
 

@@ -1,13 +1,20 @@
-; Kakangkung installer (Inno Setup 6.3 or newer).
+; Kakangkung installer (Inno Setup 6.5 or newer).
 ;
-; Built by .github/workflows/release.yml, or by hand:
-;   iscc /DAppVersion=0.1.0 /DArch=x64 /DBinDir=..\target\release installer\kakangkung.iss
+; Built by installer\build.ps1 (CI and .github/workflows/release.yml), or by hand:
+;   pwsh installer\build.ps1 -Version 0.1.0 -Arch x64 -BinDir target\release
+; Checked by installer\smoke-test.ps1 in CI: silent install, what it left, uninstall.
 ;
 ; - Installs for the current user only (no administrator prompt), so automatic updates can put a
 ;   new version in silently.
+; - Asks for the language (English or Bahasa Indonesia); Kakangkung's interface starts in it.
 ; - Installs Microsoft Edge WebView2 Runtime when the PC does not have it (Windows 10).
 ; - `/RELAUNCH` (used by the updater's "Restart to update") opens Kakangkung again afterwards
 ;   with the tabs that were open.
+; - installer\build.ps1 signs the program file and, with /DSign, Setup and its uninstaller.
+
+#if VER < EncodeVer(6, 5, 0)
+  #error Inno Setup 6.5.0 or newer is needed (installer\Indonesian.isl is for 6.5)
+#endif
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"
@@ -38,6 +45,7 @@ AppUpdatesURL={#Repo}/releases
 AppCopyright=Kakangkung contributors, MIT License
 VersionInfoVersion={#AppVersion}
 VersionInfoDescription={#AppName} Setup
+VersionInfoProductName={#AppName}
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
@@ -68,13 +76,39 @@ SolidCompression=yes
 CloseApplications=yes
 RestartApplications=no
 SetupLogging=yes
+; The language list always shows, with the Windows display language picked.
+ShowLanguageDialog=yes
+#ifdef Sign
+SignTool=kksign
+SignedUninstaller=yes
+#endif
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
+Name: "indonesian"; MessagesFile: "Indonesian.isl"
 
 [Messages]
-WelcomeLabel2=This will install [name/ver] on your computer.%n%nKakangkung is a light, fast browser for Windows with a native interface, a memory saver for idle tabs and automatic updates.%n%nClose other programs before you continue.
-FinishedLabel=Kakangkung is installed. It keeps itself up to date in the background.
+english.WelcomeLabel2=This will install [name/ver] on your computer.%n%nKakangkung is a light, fast browser for Windows with a native interface, a memory saver for idle tabs, a built-in ad blocker and automatic updates.%n%nClose other programs before you continue.
+indonesian.WelcomeLabel2=Ini akan memasang [name/ver] di komputer Anda.%n%nKakangkung adalah browser yang ringan dan cepat untuk Windows, dengan antarmuka native, penghemat memori untuk tab yang tidak dipakai, pemblokir iklan bawaan, dan pembaruan otomatis.%n%nTutup program lain sebelum melanjutkan.
+english.FinishedLabel=Kakangkung is installed. It keeps itself up to date in the background.
+indonesian.FinishedLabel=Kakangkung sudah terpasang. Kakangkung memperbarui dirinya sendiri di latar belakang.
+
+[CustomMessages]
+; The interface language Kakangkung starts in (HKCU\Software\Kakangkung, Language).
+english.AppLang=en
+indonesian.AppLang=id
+english.LaunchComment=Browse the web with Kakangkung
+indonesian.LaunchComment=Jelajahi web dengan Kakangkung
+english.WebView2Title=Getting Microsoft Edge WebView2
+indonesian.WebView2Title=Mengunduh Microsoft Edge WebView2
+english.WebView2Text=Kakangkung uses the WebView2 Runtime to show web pages. It is being downloaded from Microsoft.
+indonesian.WebView2Text=Kakangkung memakai WebView2 Runtime untuk menampilkan halaman web. Runtime ini sedang diunduh dari Microsoft.
+english.WebView2Installing=Installing Microsoft Edge WebView2...
+indonesian.WebView2Installing=Memasang Microsoft Edge WebView2...
+english.WebView2Failed=Microsoft Edge WebView2 could not be installed (%1).%nKakangkung needs it to show web pages; you can get it from microsoft.com/edge/webview2.
+indonesian.WebView2Failed=Microsoft Edge WebView2 tidak dapat dipasang (%1).%nKakangkung membutuhkannya untuk menampilkan halaman web; Anda bisa mengunduhnya dari microsoft.com/edge/webview2.
+english.RemoveData=Also delete your Kakangkung data (history, bookmarks, cookies, saved passwords, extensions and settings)?%n%nChoose No to keep it for a later install.
+indonesian.RemoveData=Hapus juga data Kakangkung Anda (riwayat, bookmark, cookie, kata sandi tersimpan, ekstensi, dan pengaturan)?%n%nPilih Tidak untuk menyimpannya bagi instalasi berikutnya.
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
@@ -84,10 +118,11 @@ Source: "{#BinDir}\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; Comment: "Browse the web with Kakangkung"
+Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; Comment: "{cm:LaunchComment}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Registry]
+Root: HKCU; Subkey: "Software\Kakangkung"; ValueType: string; ValueName: "Language"; ValueData: "{cm:AppLang}"; Flags: uninsdeletekey
 ; Left by "Make default" in Settings; removed with Kakangkung.
 Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\Kakangkung"; Flags: uninsdeletekey dontcreatekey
 Root: HKCU; Subkey: "Software\Classes\KakangkungHTML"; Flags: uninsdeletekey dontcreatekey
@@ -97,6 +132,10 @@ Root: HKCU; Subkey: "Software\RegisteredApplications"; ValueType: none; ValueNam
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 ; After an update started with "Restart to update": open again with the same tabs.
 Filename: "{app}\{#AppExe}"; Parameters: "--restore-session"; Flags: nowait; Check: ShouldRelaunch
+
+[UninstallRun]
+; A running Kakangkung would keep its program file locked.
+Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM {#AppExe}"; Flags: runhidden; RunOnceId: "CloseKakangkung"
 
 [Code]
 var
@@ -133,8 +172,7 @@ end;
 
 procedure InitializeWizard;
 begin
-  DownloadPage := CreateDownloadPage('Getting Microsoft Edge WebView2',
-    'Kakangkung uses the WebView2 Runtime to show web pages. It is being downloaded from Microsoft.', nil);
+  DownloadPage := CreateDownloadPage(CustomMessage('WebView2Title'), CustomMessage('WebView2Text'), nil);
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
@@ -149,14 +187,21 @@ begin
     try
       try
         DownloadPage.Download;
-        DownloadPage.SetText('Installing Microsoft Edge WebView2...', '');
+        DownloadPage.SetText(CustomMessage('WebView2Installing'), '');
         Exec(ExpandConstant('{tmp}\MicrosoftEdgeWebview2Setup.exe'), '/silent /install', '', SW_HIDE, ewWaitUntilTerminated, Code);
       except
-        SuppressibleMsgBox('Microsoft Edge WebView2 could not be installed (' + GetExceptionMessage + ').' + #13#10 +
-          'Kakangkung needs it to show web pages; you can get it from microsoft.com/edge/webview2.', mbError, MB_OK, IDOK);
+        SuppressibleMsgBox(FmtMessage(CustomMessage('WebView2Failed'), [GetExceptionMessage]), mbError, MB_OK, IDOK);
       end;
     finally
       DownloadPage.Hide;
     end;
   end;
+end;
+
+{ The person's data stays unless they ask; silent uninstalls (scripts) never delete it. }
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if (CurUninstallStep = usPostUninstall) and not UninstallSilent then
+    if MsgBox(CustomMessage('RemoveData'), mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
+      DelTree(ExpandConstant('{localappdata}\{#AppName}'), True, True, True);
 end;

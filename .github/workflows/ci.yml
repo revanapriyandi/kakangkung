@@ -55,6 +55,13 @@ jobs:
           $failed = @($r.steps | Where-Object { -not $_.passed })
           if ($failed.Count) { throw "$($failed.Count) self-test step(s) failed" }
 
+      - name: Installer (build, silent install, uninstall)
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          ./installer/build.ps1 -Version $v -Arch x64 -BinDir target\release
+          ./installer/smoke-test.ps1 -Setup "dist\Kakangkung-Setup-$v-x64.exe"
+
       - name: Screenshots
         if: always()
         uses: actions/upload-artifact@v7

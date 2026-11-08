@@ -10,7 +10,9 @@
    Not sure? *Settings > System > About* in Windows shows the "System type".
 3. Run it. If Windows SmartScreen says it protected your PC, choose **More info > Run anyway**
    (the installer is not code-signed yet).
-4. Follow the wizard. It installs for your user account only — no administrator rights — into
+4. Pick the language (English or Bahasa Indonesia); Kakangkung's menus and pages start in it
+   (change it later in *Settings > Languages*).
+5. Follow the wizard. It installs for your user account only — no administrator rights — into
    `%LOCALAPPDATA%\Programs\Kakangkung`, adds Kakangkung to the Start menu (and, if you want, the
    desktop), and installs Microsoft Edge WebView2 when your PC does not have it.
 
@@ -32,8 +34,12 @@ Profile data (history, bookmarks, settings, cookies, extensions) lives in
 
 ## Uninstalling
 
-*Windows Settings > Apps > Installed apps > Kakangkung > Uninstall*. Your profile data stays in
-`%LOCALAPPDATA%\Kakangkung`; delete that folder too if you want everything gone.
+*Windows Settings > Apps > Installed apps > Kakangkung > Uninstall*. The uninstaller closes
+Kakangkung if it is open and asks whether to delete your data too (`%LOCALAPPDATA%\Kakangkung`);
+answer No to keep it for a later install. A silent uninstall (`unins000.exe /VERYSILENT`) keeps it.
+
+Silent install for scripts: `Kakangkung-Setup-<version>-x64.exe /VERYSILENT /CURRENTUSER /LANG=indonesian`
+(or `/LANG=english`).
 
 ## Requirements
 

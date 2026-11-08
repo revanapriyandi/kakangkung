@@ -38,5 +38,22 @@ as the run's artifacts (`kakangkung-release-dry-run`).
 | `Kakangkung-<version>-arm64.zip` | Portable, Windows ARM64 |
 | `SHA256SUMS.txt` | Checksums of all of the above (the updater verifies against it) |
 
-The files are not code-signed yet, so Windows SmartScreen may warn on the first download of a new
-version ("More info" > "Run anyway"). Automatic updates are not affected.
+### Code signing
+
+`installeruild.ps1` signs `kakangkung.exe`, the installer and its uninstaller (SHA-256,
+timestamped) when the repository has two secrets:
+
+- `SIGN_PFX_BASE64`: the code-signing certificate as a base64 `.pfx`
+  (`[Convert]::ToBase64String([IO.File]::ReadAllBytes('cert.pfx'))`);
+- `SIGN_PFX_PASSWORD`: its password.
+
+Without them the files are unsigned and Windows SmartScreen warns on the first download of a new
+version ("More info" > "Run anyway"); automatic updates are not affected. An OV or EV code-signing
+certificate (or Azure Trusted Signing) removes the warning.
+
+### Checks
+
+Every CI run builds the x64 installer and runs `installer\smoke-test.ps1`: a silent install in
+Bahasa Indonesia, checks of the program, Start menu entry, Installed apps entry and language, then a
+silent uninstall that must leave nothing behind but the data folder. The release workflow runs the
+same test on the x64 installer it publishes.
