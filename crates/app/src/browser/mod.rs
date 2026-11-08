@@ -279,7 +279,7 @@ impl Browser {
             focus_highlight: self.settings.focus_highlight,
             page_bg: self.page_bg,
             theme: self.settings.wry_theme(),
-            parent: self.window.hwnd() as isize,
+            parent: self.window.hwnd(),
             bounds: page_bounds(&self.window),
             next_popup: self.next_popup.clone(),
         }

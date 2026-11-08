@@ -68,7 +68,7 @@ impl Browser {
                 let ask = format!(
                     "Add {what} to Kakangkung?\n\nIt is downloaded from the Chrome Web Store. Depending on what it asks for, it can read and change your data on websites."
                 );
-                if !platform::confirm(self.window.hwnd() as isize, "Add extension", &ask) {
+                if !platform::confirm(self.window.hwnd(), "Add extension", &ask) {
                     return;
                 }
                 self.store_button(tab, &ext, "busy", "Adding…");
