@@ -2,6 +2,7 @@
 //!
 //! Completion and event callbacks run on the UI thread from the message pump, like wry's own handlers.
 
+mod adblock;
 mod completion;
 mod downloads;
 mod favicon;
@@ -28,6 +29,7 @@ pub use downloads::{download_action, downloads, take_finished, DownloadAction, D
 pub use hash::{random_bytes, sha256, sha256_hex};
 pub use secret::{protect, unprotect};
 pub use extensions::{extension_add, extension_change, extensions_list, Extension};
+pub use adblock::ads_blocked;
 pub use hooks::{hook, unhook, Hooks, Key};
 pub use identity::{edge_identity, on_close_requested, on_lost_focus, present_as_edge, runtime_version, ParentWindow};
 pub use processes::{processes, ProcessMemory};

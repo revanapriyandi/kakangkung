@@ -1,4 +1,5 @@
-//! Per-tab event handlers: shortcuts while a page has focus, favicon and audio changes, downloads.
+//! Per-tab event handlers: shortcuts while a page has focus, favicon and audio changes, downloads,
+//! permissions and the ad blocker.
 
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2_15, ICoreWebView2_8, COREWEBVIEW2_KEY_EVENT_KIND, COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
@@ -29,12 +30,13 @@ pub struct Hooks {
     audio: Option<i64>,
     downloads: Option<i64>,
     permission: Option<i64>,
+    adblock: Option<i64>,
 }
 
 impl Hooks {
     /// Number of live registrations (the self-test checks none are leaked).
     pub fn count(&self) -> usize {
-        [self.accel, self.favicon, self.audio, self.downloads, self.permission].iter().flatten().count()
+        [self.accel, self.favicon, self.audio, self.downloads, self.permission, self.adblock].iter().flatten().count()
     }
 }
 
@@ -53,7 +55,11 @@ pub fn hook(
     mut on_audio: impl FnMut(bool) + 'static,
     on_download: impl Fn() + 'static,
 ) -> Hooks {
-    let mut hooks = Hooks { downloads: crate::downloads::watch(wv, std::rc::Rc::new(on_download)), ..Default::default() };
+    let mut hooks = Hooks {
+        downloads: crate::downloads::watch(wv, std::rc::Rc::new(on_download)),
+        adblock: crate::adblock::watch(wv),
+        ..Default::default()
+    };
     let controller = wv.controller();
     let accel = AcceleratorKeyPressedEventHandler::create(Box::new(move |_, args| {
         let Some(args) = args else { return Ok(()) };
@@ -147,6 +153,9 @@ pub fn hook(
 pub fn unhook(wv: &WebView, hooks: &mut Hooks) {
     if let Some(t) = hooks.downloads.take() {
         crate::downloads::unwatch(wv, t);
+    }
+    if let Some(t) = hooks.adblock.take() {
+        crate::adblock::unwatch(wv, t);
     }
     if let Some(t) = hooks.permission.take() {
         // SAFETY: token came from add_PermissionRequested on this webview.

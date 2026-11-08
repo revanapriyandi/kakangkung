@@ -1,0 +1,106 @@
+# Ad networks blocked by Kakangkung's built-in ad blocker (Settings > Privacy and security).
+# One domain per line; its subdomains are blocked too. A site is never blocked on its own
+# domain (visiting taboola.com works; taboola.com ads on other sites do not load).
+# Trackers are left to Tracking prevention.
+
+# Google
+doubleclick.net
+googlesyndication.com
+googleadservices.com
+googletagservices.com
+adservice.google.com
+2mdn.net
+
+# Exchanges, SSPs and DSPs
+adnxs.com
+appnexus.com
+adsrvr.org
+amazon-adsystem.com
+advertising.com
+adtechus.com
+adform.net
+adroll.com
+criteo.com
+criteo.net
+pubmatic.com
+rubiconproject.com
+openx.net
+casalemedia.com
+indexww.com
+smartadserver.com
+yieldmo.com
+media.net
+bidswitch.net
+sharethrough.com
+teads.tv
+triplelift.com
+3lift.com
+33across.com
+spotxchange.com
+spotx.tv
+springserve.com
+contextweb.com
+sovrn.com
+lijit.com
+gumgum.com
+yieldlab.net
+stickyadstv.com
+undertone.com
+emxdgt.com
+richaudience.com
+adkernel.com
+onetag-sys.com
+admixer.net
+lkqd.net
+innovid.com
+tremorhub.com
+serving-sys.com
+flashtalking.com
+adition.com
+smaato.net
+yandexadexchange.net
+an.yandex.ru
+adfox.ru
+an.facebook.com
+ads.yahoo.com
+zedo.com
+adblade.com
+
+# Native ads and content recommendation widgets
+taboola.com
+outbrain.com
+zemanta.com
+revcontent.com
+mgid.com
+connatix.com
+primis.tech
+vidazoo.com
+infolinks.com
+buysellads.com
+carbonads.net
+ads.adthrive.com
+scripts.mediavine.com
+
+# Pop-unders and aggressive networks
+propellerads.com
+popads.net
+popcash.net
+adsterra.com
+exoclick.com
+juicyads.com
+trafficjunky.net
+adcash.com
+hilltopads.net
+clickadu.com
+bidvertiser.com
+
+# Ad verification
+moatads.com
+adsafeprotected.com
+doubleverify.com
+
+# In-app ad SDKs that also serve web ads
+applovin.com
+inmobi.com
+unityads.unity3d.com
+adcolony.com

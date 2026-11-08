@@ -142,6 +142,7 @@ impl Browser {
             }
             "settings" => {
                 let update = self.update.json();
+                let ads_blocked = platform::ads_blocked(); // counted on this (UI) thread
                 self.db_reply(respond, move |s| {
                 let engines: Vec<Json> = ui::ENGINES.iter().map(|e| json!({ "id": e.id, "name": e.name })).collect();
                 let p = Prefs::read(s);
@@ -155,6 +156,8 @@ impl Browser {
                     "animations": p.settings.animations,
                     "tracking": p.settings.protection.tracking,
                     "safeBrowsing": p.settings.protection.safe_browsing,
+                    "adblock": p.settings.protection.adblock,
+                    "adsBlocked": ads_blocked,
                     "httpsFirst": p.settings.https_first,
                     "passwords": p.settings.protection.save_passwords,
                     "autofill": p.settings.protection.autofill,

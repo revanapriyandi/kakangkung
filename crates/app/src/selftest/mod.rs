@@ -198,6 +198,24 @@ pub(crate) const FEATURE_JS: &str = r#"window.__kakangkungTest = "";
       detail: `saved and read back: tracking prevention strict=${s.tracking === 3}, HTTPS-First=${s.httpsFirst}, Safe Browsing=${s.safeBrowsing}, ` +
               `save passwords off=${!s.passwords}, theme=${s.theme}, animations off=${!s.animations}; invalid value refused=${refused}` };
   });
+  await step("adblock", async () => {
+    const ad = () => "https://securepubads.g.doubleclick.net/kakangkung-selftest.gif?" + Math.random();
+    const load = (u) => new Promise((r) => { const i = new Image(); i.onload = i.onerror = r; setTimeout(r, 5000); i.src = u; });
+    await api("settings/set", "privacy.adblock	1");
+    const before = (await api("settings")).adsBlocked;
+    await load(ad());
+    const on = (await api("settings")).adsBlocked;
+    await load(location.origin + "/kakangkung-selftest-not-an-ad.gif");
+    const ownSite = (await api("settings")).adsBlocked;
+    await api("settings/set", "privacy.adblock	0");
+    await load(ad());
+    const off = (await api("settings")).adsBlocked;
+    await api("settings/set", "privacy.adblock	1");
+    const back = (await api("settings")).adblock;
+    return { ok: on === before + 1 && ownSite === on && off === on && back,
+      detail: `on: ad request blocked=${on === before + 1}, the page's own request let through=${ownSite === on}; ` +
+              `off: ad request let through=${off === on}; switched back on=${back} (${off} blocked in total)` };
+  });
   await step("taskmanager", async () => {
     const m = await api("memory");
     const total = m.processes.reduce((a, p) => a + p.ws, 0);
@@ -382,8 +400,8 @@ impl SelfTest {
                 b.act(Action::CloseTab); // Ctrl+W on the new tab
                 let one_left = b.tabs.len() == 1 && b.active == 1;
                 let hooks_after = b.hook_count();
-                // Tab 1's webview has its 5 handlers (keys, favicon, audio, downloads, permissions); the native New Tab page added and left none.
-                let ok = ok && frozen && running && back_on_1 && one_left && hooks_after == 5 && self.hooks_with_two_tabs == 5;
+                // Tab 1's webview has its 6 handlers (keys, favicon, audio, downloads, permissions, ad blocker); the native New Tab page added and left none.
+                let ok = ok && frozen && running && back_on_1 && one_left && hooks_after == 6 && self.hooks_with_two_tabs == 6;
                 b.act(Action::Back); // back to the New Tab page for the toolbar check
                 self.steps.push((
                     "act",
@@ -436,7 +454,7 @@ impl SelfTest {
                     return false;
                 }
                 let r: Json = serde_json::from_str(&inner).unwrap_or(Json::Null);
-                for step in ["import", "extensions", "store", "sync", "browsers", "search", "privacy", "taskmanager", "settings", "sitedata"] {
+                for step in ["import", "extensions", "store", "sync", "browsers", "search", "privacy", "adblock", "taskmanager", "settings", "sitedata"] {
                     let ok = r[step]["ok"].as_bool().unwrap_or(false);
                     let mut detail = r[step]["detail"].as_str().unwrap_or("no result").to_string();
                     if step == "sync" {

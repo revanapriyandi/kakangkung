@@ -110,6 +110,8 @@ pub struct Protection {
     pub blocked: u32,
     /// Show a Save As dialog for every download (Chrome's "Ask where to save each file").
     pub ask_downloads: bool,
+    /// Built-in ad blocker (requests to known ad networks are refused). Live.
+    pub adblock: bool,
 }
 
 thread_local! {
@@ -133,6 +135,7 @@ pub fn apply_protection(wv: &WebView, p: Protection) -> Vec<String> {
     let mut errors = vec![];
     BLOCKED.with(|b| b.set(p.blocked));
     crate::downloads::set_ask(p.ask_downloads);
+    crate::adblock::set_enabled(p.adblock);
     let level = match p.tracking {
         0 => COREWEBVIEW2_TRACKING_PREVENTION_LEVEL_NONE,
         1 => COREWEBVIEW2_TRACKING_PREVENTION_LEVEL_BASIC,
