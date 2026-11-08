@@ -223,6 +223,14 @@ pub(crate) fn tab_features(b: &mut Browser) -> (bool, String) {
     let dup = b.tabs[pos(b, a) + 1].view.id;
     b.tab_action(&format!("group{gid}:{dup}"));
     let grouped = gid != 0 && b.groups.len() == 1 && pos(b, dup) == pos(b, a) + 1;
+    // The group's right-click menu: its entries, a new colour, a new name (typed in the field).
+    b.menu_probe = Some(vec![]);
+    let _ = b.show_group_menu(gid, 120.0, 20.0);
+    let menu = b.menu_probe.take().unwrap_or_default();
+    b.group_action(&format!("color:{gid}:3"));
+    let _ = b.on_ipc(&format!("input	grouprename:{gid}	Work"));
+    let named = b.groups.first().is_some_and(|g| g.name == "Work" && g.color == ui::GROUP_COLORS[3]);
+    let group_menu = named && ["Rename group…", "Colour > Green", "Ungroup", "Close group"].iter().all(|w| menu.iter().any(|l| l == w));
     b.tab_action(&format!("ungroup:{dup}"));
     b.tab_action(&format!("ungroup:{a}"));
     let ungrouped = b.groups.is_empty();
@@ -250,11 +258,11 @@ pub(crate) fn tab_features(b: &mut Browser) -> (bool, String) {
     let others = b.tabs.len() == 2 && b.index(c).is_some() && b.index(a).is_some();
     b.tab_action(&format!("pin:{c}"));
     b.tab_action(&format!("close:{c}"));
-    let ok = pinned && muted && grouped && ungrouped && split && unsplit && search && others && b.tabs.len() == 1;
+    let ok = pinned && muted && grouped && group_menu && ungrouped && split && unsplit && search && others && b.tabs.len() == 1;
     (
         ok,
         format!(
-            "{start} tab + 2 opened; pin moved tab to the front={pinned}; mute={muted}; new group + duplicate added next to it={grouped}; \
+            "{start} tab + 2 opened; pin moved tab to the front={pinned}; mute={muted}; new group + duplicate added next to it={grouped}; group menu renamed and recoloured it={group_menu}; \
              groups removed when emptied={ungrouped}; split view showed both tabs side by side={split}, closed again={unsplit}; \
              tab search pop-up={search}; 'Close other tabs' kept the pinned tab={others}; {} tab left",
             b.tabs.len()
