@@ -2,6 +2,29 @@
 
 All notable changes are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## [0.1.1] - 2026-11-08
+
+### Added
+- Extensions from the Chrome Web Store: on an extension's page the store's button reads
+  *Add to Kakangkung*. The toolbar's extensions menu lists them and opens their pop-ups.
+- Sign in to Kakangkung with Google: bookmarks, history, open tabs and settings sync through a
+  hidden app folder in your Google Drive (see docs/GOOGLE_SIGNIN.md).
+- Google's own sign-in works on websites, including sign-in pop-ups, which now open as tabs and
+  keep their link to the page that opened them.
+- Built-in ad blocker, on by default (*Settings > Privacy and security > Block ads*).
+- Delete browsing data by type (history, cookies, cache) within a time range; site settings for
+  sound and images; "Ask where to save each file" and "Show downloads when done"; preferred
+  language for websites.
+- The installer asks for the language (English or Bahasa Indonesia), and Kakangkung starts in it.
+
+### Changed
+- Uninstalling closes Kakangkung if it is open and asks whether to delete your data too.
+- The release files can be code-signed (when the signing secrets are set); every CI run builds
+  the installer and tests a silent install and uninstall.
+
+### Fixed
+- The self-test no longer stops at the Downloads page, and a time-out is reported as a failure.
+
 ## [0.1.0] - 2026-11-08
 
 First public version.
