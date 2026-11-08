@@ -625,6 +625,7 @@ impl Browser {
                     discarded: v.discarded,
                     group_color: group(v.group).map_or(0, |g| hex(g.color)),
                     in_split: self.split.is_some_and(|(l, r)| v.id == l || v.id == r),
+                    favicon: v.favicon.clone(),
                 }
             })
             .collect();

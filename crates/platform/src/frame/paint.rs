@@ -2,7 +2,9 @@
 
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct2D::{D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_ELLIPSE, D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_PRESENT_OPTIONS_NONE, D2D1_RENDER_TARGET_PROPERTIES, D2D1_ROUNDED_RECT, ID2D1HwndRenderTarget};
-use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_U};
+use windows::Win32::Graphics::Direct2D::Common::{D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT, D2D_RECT_F, D2D_SIZE_U};
+use windows::Win32::Graphics::Direct2D::{D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_BITMAP_PROPERTIES};
+use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::DirectWrite::{DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT, DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT, DWRITE_WORD_WRAPPING_NO_WRAP, IDWriteFactory, IDWriteTextFormat};
 use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, MoveWindow};
 use windows::core::{w, PCWSTR};
@@ -73,6 +75,7 @@ impl Inner {
                 t.SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
                 self.gfx.brush = Some(t.CreateSolidColorBrush(&color(0, 1.0), None)?);
                 self.gfx.target = Some(t);
+                self.gfx.favicons.clear();
             }
             let t = self.gfx.target.clone().expect("render target created above");
             t.Resize(&size)?;
@@ -88,10 +91,34 @@ impl Inner {
         Ok(())
     }
 
+    /// Direct2D bitmaps of the tabs' site icons that are decoded but not made yet.
+    fn make_favicons(&mut self, t: &ID2D1HwndRenderTarget, tabs: &[super::FrameTab]) {
+        let size = crate::favicon::SIZE;
+        let props = D2D1_BITMAP_PROPERTIES {
+            pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
+            dpiX: 96.0,
+            dpiY: 96.0,
+        };
+        for tab in tabs {
+            if self.gfx.favicons.contains_key(&tab.favicon) {
+                continue;
+            }
+            let Some(px) = crate::favicon::get(&tab.favicon) else { continue };
+            if self.gfx.favicons.len() >= 64 {
+                self.gfx.favicons.clear();
+            }
+            // SAFETY: `px` holds `size` rows of `size * 4` bytes; props is a valid local.
+            if let Ok(b) = unsafe { t.CreateBitmap(D2D_SIZE_U { width: size, height: size }, Some(px.as_ptr().cast()), size * 4, &props) } {
+                self.gfx.favicons.insert(tab.favicon.clone(), b);
+            }
+        }
+    }
+
     pub(super) fn draw(&mut self, t: &ID2D1HwndRenderTarget, width: f32) {
         let s = self.state.clone();
         let p = palette(s.dark, s.incognito);
         let brush = self.gfx.brush.clone().expect("brush created with the target");
+        self.make_favicons(t, &s.tabs);
         let mut hits: Vec<(D2D_RECT_F, Hit)> = vec![];
         // SAFETY: drawing calls on a live render target between BeginDraw and EndDraw.
         unsafe {
@@ -155,8 +182,13 @@ impl Inner {
                 }
                 let fg = if active { p.text } else { p.muted };
                 let icon_x = if tab.pinned { r.left + (w - 16.0) / 2.0 } else { r.left + 12.0 };
-                let icon = if tab.loading { glyph::SYNC } else if tab.private { glyph::PRIVATE } else { glyph::GLOBE };
-                text(icon, rect(icon_x, r.top, 16.0, TAB_H), &self.gfx.icons_small, if tab.loading { p.brand } else { fg });
+                let site = self.gfx.favicons.get(&tab.favicon).filter(|_| !tab.loading && !tab.private);
+                if let Some(b) = site {
+                    t.DrawBitmap(b, Some(&rect(icon_x, r.top + (TAB_H - 16.0) / 2.0, 16.0, 16.0)), 1.0, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
+                } else {
+                    let icon = if tab.loading { glyph::SYNC } else if tab.private { glyph::PRIVATE } else { glyph::GLOBE };
+                    text(icon, rect(icon_x, r.top, 16.0, TAB_H), &self.gfx.icons_small, if tab.loading { p.brand } else { fg });
+                }
                 hits.push((r, Hit::Tab(tab.id)));
                 if !tab.pinned {
                     let mut title_right = r.right - 8.0;
