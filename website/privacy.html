@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy policy: Kakangkung</title>
+<meta name="description" content="How the Kakangkung browser handles your data, including the Google user data it accesses when you sign in with Google.">
+<link rel="canonical" href="https://kakangkung.rnevio.com/privacy">
+<link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/"><img src="/assets/logo.svg" alt="" width="28" height="28">Kakangkung</a>
+  <nav aria-label="Main"><a href="/terms">Terms</a><a class="cta cta-sm" href="/#download">Download</a></nav>
+</header>
+<main class="doc">
+<h1>Privacy policy</h1>
+<p class="updated">Effective 9 November 2026</p>
+
+<p>Kakangkung is a free, open-source web browser for Windows (“Kakangkung”, “we”). This policy explains what data the Kakangkung desktop app and this website handle, where that data goes, and how you control it. The source code is public at <a href="https://github.com/revanapriyandi/kakangkung">github.com/revanapriyandi/kakangkung</a>, so you can check every statement below.</p>
+
+<p><strong>In short:</strong> Kakangkung has no servers that receive your data. Your browsing data stays on your PC. If you sign in with Google, the data you choose to sync is stored in a hidden app folder in <em>your own</em> Google Drive, and nowhere else.</p>
+
+<h2>1. Data that stays on your PC</h2>
+<p>Like any browser, Kakangkung keeps the following in your Windows user profile (<code>%LOCALAPPDATA%\Kakangkung</code>): history, bookmarks, open tabs and sessions, downloads list, settings, site permissions, extension list, cookies and website storage (managed by Microsoft Edge WebView2), and saved passwords. Saved passwords and the Google sign-in token are encrypted with Windows Data Protection (DPAPI), so only your Windows account on that PC can decrypt them. We never receive any of this data.</p>
+
+<h2>2. Sign in with Google</h2>
+<p>Signing in is optional. When you choose <em>Sign in with Google</em>, Kakangkung opens Google’s consent page in your web browser and asks for these permissions:</p>
+<table>
+  <thead><tr><th scope="col">Permission (scope)</th><th scope="col">What Kakangkung does with it</th></tr></thead>
+  <tbody>
+    <tr><td><code>openid</code>, <code>email</code>, <code>profile</code></td><td>Reads your Google account ID, email address, name and profile photo to show which account is signed in (on the toolbar and the Account page) and to keep each account’s sync data separate.</td></tr>
+    <tr><td><code>https://www.googleapis.com/auth/drive.appdata</code></td><td>Creates, reads, updates and deletes Kakangkung’s own sync files in the hidden application data folder of your Google Drive. This folder is visible only to Kakangkung. Kakangkung cannot see, open or change any other file in your Drive.</td></tr>
+  </tbody>
+</table>
+
+<h3>What is synced</h3>
+<p>Only the data types you switch on: bookmarks, history, open tabs, settings and the names of installed extensions. Passwords, cookies and website sign-ins are never synced. Each PC writes one sync file; other PCs signed in to the same account download and merge it.</p>
+
+<h3>Where Google user data goes</h3>
+<ul>
+  <li>Data received from Google APIs is used only on your PC, only to provide sign-in and sync for you.</li>
+  <li>It is sent to Google’s servers (to store your sync files in your Drive) and nowhere else. We do not operate a server that receives it.</li>
+  <li>We do not sell it, share it with or transfer it to anyone, use it for advertising, or use it to build profiles.</li>
+  <li>No person reads it. It is not used to develop, improve or train generalized or non-personalized AI or machine-learning models.</li>
+</ul>
+<p class="callout"><strong>Kakangkung’s use and transfer to any other app of information received from Google APIs will adhere to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements.</strong></p>
+
+<h3>Storage and protection</h3>
+<p>Your Google refresh token is stored on your PC, encrypted with DPAPI. Your profile photo is cached locally. Communication with Google uses HTTPS, and sign-in uses OAuth 2.0 with PKCE.</p>
+
+<h3>Removing your Google data</h3>
+<ul>
+  <li><strong>Sign out</strong> in Kakangkung (Profile button → Sign out). Kakangkung deletes its token from your PC and asks Google to revoke it.</li>
+  <li><strong>Revoke access</strong> at any time at <a href="https://myaccount.google.com/connections">myaccount.google.com/connections</a>.</li>
+  <li><strong>Delete the synced files</strong> in Google Drive on the web: Settings → Manage apps → Kakangkung → Options → Delete hidden app data.</li>
+  <li><strong>Delete local data</strong> by uninstalling Kakangkung and deleting <code>%LOCALAPPDATA%\Kakangkung</code>.</li>
+</ul>
+
+<h2>3. Network connections the app makes</h2>
+<p>Besides the websites you visit, Kakangkung connects to:</p>
+<ul>
+  <li><strong>Your search engine</strong> (Google by default, or the one you choose) for address bar suggestions as you type. Turn this off in Settings.</li>
+  <li><strong>GitHub</strong> to check for and download updates. GitHub sees your IP address and the version request. Turn automatic updates off in Settings.</li>
+  <li><strong>Chrome Web Store</strong> (Google) when you add an extension from the store.</li>
+  <li><strong>Google</strong> for sign-in and sync, only if you sign in (section 2).</li>
+  <li><strong>Microsoft</strong> for WebView2 updates, handled by Windows.</li>
+</ul>
+<p>Kakangkung contains no analytics, telemetry, advertising or crash-reporting code.</p>
+
+<h2>4. This website</h2>
+<p>kakangkung.rnevio.com is a static site hosted by Vercel and served through Cloudflare. It sets no cookies and uses no analytics. Like any web host, Vercel and Cloudflare process your IP address and request details to deliver the page and protect it from abuse, under their own privacy policies. Downloads are served by GitHub.</p>
+
+<h2>5. Children</h2>
+<p>Kakangkung is a general-purpose browser and is not directed at children under 13. We do not knowingly collect data from children; in fact we collect no personal data at all.</p>
+
+<h2>6. Your rights</h2>
+<p>Because we do not hold your personal data, there is nothing for us to access, correct or delete on our side. Everything is on your PC or in your Google account, under your control, as described above.</p>
+
+<h2>7. Changes</h2>
+<p>If this policy changes, we will update this page and its effective date. Material changes to how Google user data is used will be announced in the release notes before they take effect, and will ask for your consent again if required.</p>
+
+<h2>8. Contact</h2>
+<p>Questions about privacy: open an issue at <a href="https://github.com/revanapriyandi/kakangkung/issues">github.com/revanapriyandi/kakangkung/issues</a>. For security reports, use <a href="https://github.com/revanapriyandi/kakangkung/security/advisories/new">private vulnerability reporting</a>.</p>
+</main>
+<footer class="foot">
+  <span>© 2026 Kakangkung contributors. MIT License.</span>
+  <nav aria-label="Legal"><a href="/">Home</a><a href="/terms">Terms of service</a><a href="https://github.com/revanapriyandi/kakangkung/issues">Report a problem</a></nav>
+</footer>
+</body>
+</html>

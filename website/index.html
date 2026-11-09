@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kakangkung: a light, fast browser for Windows</title>
+<meta name="description" content="Kakangkung is a free, open-source web browser for Windows, written in Rust. It draws its own interface and puts tabs you are not looking at to sleep, so the page you are reading gets the memory.">
+<link rel="canonical" href="https://kakangkung.rnevio.com/">
+<link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
+<link rel="preload" href="/assets/schibsted.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/style.css">
+<meta name="theme-color" content="#eef2ea" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0e1712" media="(prefers-color-scheme: dark)">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Kakangkung: a light, fast browser for Windows">
+<meta property="og:description" content="Free and open source. Tabs you are not looking at go to sleep, so the page you are reading gets the memory.">
+<meta property="og:url" content="https://kakangkung.rnevio.com/">
+<meta property="og:image" content="https://kakangkung.rnevio.com/assets/promo-poster.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"Kakangkung","operatingSystem":"Windows 10, Windows 11","applicationCategory":"BrowserApplication","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"url":"https://kakangkung.rnevio.com/","downloadUrl":"https://github.com/revanapriyandi/kakangkung/releases/latest","license":"https://opensource.org/licenses/MIT"}
+</script>
+<script src="/main.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<!-- Identity motif: a kangkung stem that grows with scroll. Each leaf links to a section. -->
+<nav class="stem" aria-label="Page sections">
+  <svg class="stem-svg" viewBox="0 0 40 1000" preserveAspectRatio="none" aria-hidden="true">
+    <path class="stem-bg" d="M20 0 C 26 120, 14 240, 20 360 S 26 600, 20 720 S 14 900, 20 1000"/>
+    <path class="stem-grow" d="M20 0 C 26 120, 14 240, 20 360 S 26 600, 20 720 S 14 900, 20 1000" pathLength="1"/>
+  </svg>
+  <a class="node" href="#top" data-for="top"><span class="leaf"></span><span class="node-label">Top</span></a>
+  <a class="node" href="#video" data-for="video"><span class="leaf"></span><span class="node-label">Video</span></a>
+  <a class="node" href="#sleep" data-for="sleep"><span class="leaf"></span><span class="node-label">How tabs sleep</span></a>
+  <a class="node" href="#pages" data-for="pages"><span class="leaf"></span><span class="node-label">Built-in pages</span></a>
+  <a class="node" href="#sync" data-for="sync"><span class="leaf"></span><span class="node-label">Sync</span></a>
+  <a class="node" href="#download" data-for="download"><span class="leaf"></span><span class="node-label">Download</span></a>
+</nav>
+
+<header class="top">
+  <a class="brand" href="/"><img src="/assets/logo.svg" alt="" width="28" height="28">Kakangkung</a>
+  <nav aria-label="Main">
+    <a href="#sleep">How tabs sleep</a>
+    <a href="#pages">Built-in pages</a>
+    <a href="#sync">Sync</a>
+    <a class="cta cta-sm" href="#download">Download</a>
+  </nav>
+</header>
+
+<main id="main">
+<section id="top" class="hero frame" data-section>
+  <h1 class="hero-title" id="sleepy" tabindex="-1"><span class="awake">Tabs you aren’t looking at</span> <span class="drowsy">go to sleep.</span></h1>
+  <div class="hero-row">
+    <div class="hero-copy">
+      <p class="lede">Kakangkung is a free web browser for Windows, written in Rust. It draws its own interface and freezes the tabs you left behind, so the page in front of you gets the memory.</p>
+      <div class="actions">
+        <a class="cta" href="#download">Download for Windows</a>
+        <a class="plain" href="#video">Play the 30-second video</a>
+      </div>
+      <p class="fine">MIT licensed. Windows 10 and 11, Intel, AMD and ARM.</p>
+    </div>
+
+    <figure class="window" aria-describedby="demo-cap">
+      <div class="tabs" id="tabs">
+        <div class="tab active" data-keep><span class="fav c1">K</span><span class="t">New Tab</span></div>
+        <div class="tab" data-keep><span class="fav c2">♪</span><span class="t">Music</span><span class="eq" aria-hidden="true"><i></i><i></i><i></i></span></div>
+        <div class="tab"><span class="fav c3">D</span><span class="t">Docs</span></div>
+        <div class="tab"><span class="fav c4">N</span><span class="t">News</span></div>
+        <div class="tab"><span class="fav c5">M</span><span class="t">Maps</span></div>
+        <div class="tab"><span class="fav c6">S</span><span class="t">Shop</span></div>
+      </div>
+      <div class="toolbar"><span class="addr" id="addr">kakangkung://newtab</span></div>
+      <div class="page"><img src="/assets/new-tab.png" alt="Kakangkung’s New Tab page" width="820" height="461"></div>
+      <div class="meter">
+        <span class="meter-label">Memory in use</span>
+        <span class="meter-track"><span class="meter-fill" id="fill"></span></span>
+        <span class="meter-note" id="note" aria-live="off">6 tabs awake</span>
+      </div>
+      <figcaption id="demo-cap" class="demo-cap">
+        <span>Demo: idle tabs fall asleep and the bar shrinks. The tab playing music stays awake. Bar lengths are illustrative.</span>
+        <button class="demo-toggle" type="button" id="demo-toggle" aria-pressed="false">Pause demo</button>
+      </figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="video" class="video-band" data-section>
+  <div class="video-inner frame">
+    <h2>Thirty seconds of Kakangkung</h2>
+    <div class="player" data-player>
+      <video preload="none" playsinline poster="/assets/promo-poster.jpg" width="1280" height="720">
+        <source src="/assets/kakangkung-promo.mp4" type="video/mp4">
+      </video>
+      <button class="big-play" type="button" aria-label="Play the video">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z"/></svg>
+      </button>
+      <p class="player-state" role="status"></p>
+      <div class="controls">
+        <button class="ctl" type="button" data-act="play" aria-label="Play">
+          <svg class="i-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z"/></svg>
+          <svg class="i-pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14"/></svg>
+        </button>
+        <div class="scrub" role="slider" tabindex="0" aria-label="Seek" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="0:00">
+          <span class="scrub-fill"></span>
+        </div>
+        <span class="time">0:00</span>
+        <button class="ctl" type="button" data-act="mute" aria-label="Mute">
+          <svg class="i-vol" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.5L12 6v12l-4.5-3.5H4z"/><path d="M15.5 9a4 4 0 0 1 0 6"/></svg>
+          <svg class="i-mute" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.5L12 6v12l-4.5-3.5H4z"/><path d="m16 9.5 5 5m0-5-5 5"/></svg>
+        </button>
+        <button class="ctl" type="button" data-act="full" aria-label="Full screen">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+        </button>
+      </div>
+    </div>
+    <p class="video-note">The video narration is in Indonesian.</p>
+  </div>
+</section>
+
+<section id="sleep" class="sleep" data-section data-story>
+  <div class="sleep-pin">
+    <h2>What happens to a tab you leave</h2>
+    <div class="clock" aria-hidden="true">
+      <span class="clock-val" data-at="0">0 s</span>
+      <span class="clock-val" data-at="1">30 s</span>
+      <span class="clock-val" data-at="2">click</span>
+    </div>
+    <ol class="moments">
+      <li data-at="0"><strong>You switch to another tab.</strong> The one you left keeps its scripts, timers and video running, as in any browser.</li>
+      <li data-at="1"><strong>Kakangkung freezes it.</strong> On the Maximum setting, which new profiles use, a hidden tab freezes after 30 seconds. Tabs playing sound, in a call or pinned are left alone.</li>
+      <li data-at="2"><strong>You click it again.</strong> It wakes where you left it. The memory it gave back went to the page you were using.</li>
+    </ol>
+    <div class="specimen" aria-hidden="true">
+      <div class="spec-tab"><span class="fav c3">D</span>Docs<span class="spec-leaf"></span></div>
+      <div class="spec-body"><i></i><i></i><i></i></div>
+      <div class="spec-state"></div>
+    </div>
+    <div class="timeline" aria-hidden="true"><span class="timeline-fill"></span></div>
+  </div>
+</section>
+
+<section id="pages" class="pages" data-section>
+ <div class="pages-sticky">
+  <div class="pages-head frame">
+    <h2>Every built-in page is drawn by Kakangkung, not loaded as a website.</h2>
+    <p>Settings, History, the task manager and the rest are native Direct2D screens. Opening one starts no page process. These are real screenshots.</p>
+    <div class="gallery-nav">
+      <button class="arrow-btn" type="button" data-go="-1" aria-label="Previous screenshot"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <button class="arrow-btn" type="button" data-go="1" aria-label="Next screenshot"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg></button>
+    </div>
+  </div>
+  <ul class="gallery" tabindex="0" aria-label="Screenshots of built-in pages">
+    <li><figure><img src="/assets/settings.png" alt="Settings, Privacy and security section" width="1280" height="800" loading="lazy"><figcaption><b>Settings.</b> One page per section, with search. Every feature has a switch.</figcaption></figure></li>
+    <li><figure><img src="/assets/task-manager.png" alt="Task manager listing tabs and their memory" width="1280" height="800" loading="lazy"><figcaption><b>Task manager.</b> Private memory per tab, totalled with the WebView2 processes.</figcaption></figure></li>
+    <li class="tall"><figure><img src="/assets/tab-search.png" alt="Tab search listing open and recently closed tabs" width="500" height="830" loading="lazy"><figcaption><b>Tab search.</b> Ctrl+Shift+A, open tabs by recent use.</figcaption></figure></li>
+    <li><figure><img src="/assets/history.png" alt="History page" width="1280" height="800" loading="lazy"><figcaption><b>History.</b> Search, by day, with site icons.</figcaption></figure></li>
+    <li><figure><img src="/assets/extensions.png" alt="Extensions page" width="1280" height="800" loading="lazy"><figcaption><b>Extensions.</b> From the Chrome Web Store, with what each one can do.</figcaption></figure></li>
+  </ul>
+ </div>
+</section>
+
+<section class="more frame" aria-labelledby="more-h">
+  <h2 id="more-h">Also built in</h2>
+  <dl>
+    <div class="more-lead"><dt>An ad blocker that is on from the first start</dt><dd>EasyList and EasyPrivacy network rules. The shield in the toolbar turns blocking off for one site.</dd></div>
+    <div><dt>Passwords sealed by Windows</dt><dd>Saved passwords are encrypted with your Windows account. Showing or exporting one asks Windows Hello. Passkeys work.</dd></div>
+    <div><dt>PDFs in a tab</dt><dd>Search, rotate, two-page view, print, and drawing on local files.</dd></div>
+    <div><dt>Developer tools</dt><dd>F12 opens them in a panel at the bottom of the tab.</dd></div>
+    <div><dt>Import from other browsers</dt><dd>History, bookmarks and extensions from Chrome, Edge, Brave and Firefox.</dd></div>
+    <div><dt>Updates that check themselves</dt><dd>New versions download in the background and are verified against their SHA-256 before installing.</dd></div>
+  </dl>
+</section>
+
+<section id="sync" class="sync frame" data-section>
+  <div class="sync-art" aria-hidden="true">
+    <svg viewBox="0 0 400 300">
+      <path id="p1" class="flow" d="M88 120 C 150 120, 160 210, 196 214"/>
+      <path id="p2" class="flow" d="M312 120 C 250 120, 240 210, 204 214"/>
+      <circle r="5" class="packet"><animateMotion dur="2.6s" repeatCount="indefinite"><mpath href="#p1"/></animateMotion></circle>
+      <circle r="5" class="packet"><animateMotion dur="2.6s" begin="1.3s" repeatCount="indefinite" keyPoints="1;0" keyTimes="0;1" calcMode="linear"><mpath href="#p2"/></animateMotion></circle>
+      <g class="pc"><rect x="40" y="70" width="96" height="62" rx="6"/><path d="M28 142h120"/><text x="88" y="106">This PC</text></g>
+      <g class="pc"><rect x="264" y="70" width="96" height="62" rx="6"/><path d="M252 142h120"/><text x="312" y="106">Your laptop</text></g>
+      <g class="vault"><rect x="140" y="196" width="120" height="70" rx="10"/><text x="200" y="228">Your Drive</text><text x="200" y="248" class="small">hidden app folder</text></g>
+    </svg>
+  </div>
+  <div class="sync-copy">
+    <h2>Sync goes through your own Google Drive</h2>
+    <p>Sign in with Google and Kakangkung keeps bookmarks, history, open tabs, settings and your extension list the same on every PC. It stores them in the hidden app folder of your Drive.</p>
+    <ul class="leaves">
+      <li>It can see only the files it created there, never your own Drive files.</li>
+      <li>Nothing goes to a Kakangkung server. There isn’t one.</li>
+      <li>Passwords are never synced.</li>
+      <li>Signing out deletes its token and asks Google to revoke it.</li>
+    </ul>
+    <a class="plain" href="/privacy">Read what Kakangkung accesses and why</a>
+  </div>
+</section>
+
+<section id="download" class="download" data-section>
+ <div class="frame">
+  <h2>Download Kakangkung</h2>
+  <p class="sub">All files are on the <a href="https://github.com/revanapriyandi/kakangkung/releases/latest">latest release</a> page on GitHub. The installer needs no administrator rights and adds WebView2 if your PC lacks it.</p>
+  <ul class="dl-list">
+    <li class="dl" data-arch="x64">
+      <div><strong>Intel or AMD PC</strong><span class="dl-for">Windows 10 or 11. Most PCs.</span></div>
+      <code>Kakangkung-Setup-&lt;version&gt;-x64.exe</code>
+      <a class="cta" href="https://github.com/revanapriyandi/kakangkung/releases/latest">Get the x64 installer</a>
+    </li>
+    <li class="dl" data-arch="arm64">
+      <div><strong>ARM PC (Snapdragon)</strong><span class="dl-for">Windows 11 on ARM.</span></div>
+      <code>Kakangkung-Setup-&lt;version&gt;-arm64.exe</code>
+      <a class="cta" href="https://github.com/revanapriyandi/kakangkung/releases/latest">Get the ARM64 installer</a>
+    </li>
+    <li class="dl" data-arch="zip">
+      <div><strong>Portable</strong><span class="dl-for">No installation. Unzip and run.</span></div>
+      <code>Kakangkung-&lt;version&gt;-x64.zip</code>
+      <a class="cta cta-quiet" href="https://github.com/revanapriyandi/kakangkung/releases/latest">Get the zip</a>
+    </li>
+  </ul>
+  <p class="detect" id="detect" role="status"></p>
+ </div>
+</section>
+</main>
+
+<footer class="foot">
+  <span>© 2026 Kakangkung contributors. MIT License.</span>
+  <nav aria-label="Legal">
+    <a href="/privacy">Privacy policy</a>
+    <a href="/terms">Terms of service</a>
+    <a href="https://github.com/revanapriyandi/kakangkung">Source code</a>
+    <a href="https://github.com/revanapriyandi/kakangkung/issues">Report a problem</a>
+  </nav>
+</footer>
+</body>
+</html>

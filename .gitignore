@@ -21,3 +21,6 @@ google-client.json
 
 # Raw benchmark runs (bench/run.ps1); the summary goes into docs/BENCHMARKS.md
 bench/results/
+
+# Vercel link for website/
+.vercel/
