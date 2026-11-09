@@ -29,7 +29,28 @@ const MENU_PADDING: f64 = 12.0;
 
 
 impl Browser {
+    pub(crate) fn show_adblock(&mut self, right: f64, top: f64) {
+        let url = self.tabs.iter().find(|t| t.view.id == self.active).map(|t| t.view.url.as_str()).unwrap_or("");
+        let web = storage::storable(url);
+        let allowed = platform::adblock_site_allowed(url);
+        let on = self.settings.protection.adblock && !allowed;
+        let mut rows = vec![
+            json!({ "header": true, "label": "Ad blocker" }),
+            json!({ "note": true, "label": if on { "On for this site" } else if allowed { "Paused for this site" } else { "Off" } }),
+            json!({ "note": true, "label": format!("{} recorded blocks for this site; {} across all sites this session", platform::blocked_for_site(url), platform::ads_blocked()) }),
+        ];
+        if web {
+            rows.push(json!({ "id": "adblock-site", "label": if allowed { "Resume on this site" } else { "Pause on this site" }, "checked": !allowed }));
+        }
+        rows.push(json!({ "id": "adblock-global", "label": "Block ads on all sites", "checked": self.settings.protection.adblock }));
+        rows.push(json!({ "id": "privacy", "label": "Privacy settings" }));
+        rows.push(json!({ "note": true, "label": "EasyList + EasyPrivacy and YouTube player filtering. Some ads and sponsored content may remain." }));
+        self.menu_at = (right, top);
+        let _ = self.native_popup(rows, right, top, true);
+    }
+
     pub(crate) fn hide_overlay(&mut self) {
+        self.previews.hide();
         if self.overlay_open {
             self.overlay_open = false;
             self.overlay_closed = Some((self.overlay_kind.clone(), Instant::now()));
@@ -333,6 +354,29 @@ impl Browser {
                 }));
             }
             "privacy" => self.open_after_active(&format!("{}settings#privacy", ui::INTERNAL)),
+            "adblock-site" | "adblock-global" => {
+                let global = id == "adblock-global";
+                let url = self.tabs.iter().find(|t| t.view.id == self.active).map(|t| t.view.url.clone()).unwrap_or_default();
+                let Some(_) = storage::passwords::origin_of(&url).filter(|_| !global) else {
+                    if global {
+                        let next = !self.settings.protection.adblock;
+                        let mut settings = self.settings.clone();
+                        settings.protection.adblock = next;
+                        self.apply_settings(settings);
+                        self.db(move |s| s.set_setting("privacy.adblock", if next { "1" } else { "0" }));
+                    }
+                    return true;
+                };
+                let host = platform::adblock_site_key(&url);
+                let mut sites: Vec<String> = self.settings.adblock_allowlist.lines().map(str::to_string).collect();
+                if platform::adblock_site_allowed(&url) { sites.retain(|s| s != &host); }
+                else if sites.len() < 100 { sites.push(host); }
+                let value = sites.join("\n");
+                self.settings.adblock_allowlist = value.clone();
+                platform::configure_adblock_sites(&value);
+                self.db(move |s| s.set_setting("privacy.adblock_allowlist", &value));
+                if let Some(wv) = self.active_webview() { let _ = wv.reload(); }
+            }
             "history" => return self.act(Action::History),
             "downloads" => return self.act(Action::Downloads),
             "bookmarks" => return self.act(Action::Bookmarks),

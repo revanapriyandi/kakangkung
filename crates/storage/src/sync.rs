@@ -147,7 +147,7 @@ pub fn devices(folder: &Path, own: &str) -> Vec<RemoteDevice> {
 
 /// Merge the other devices' data (the chosen types) into `store`, then publish this device's file.
 pub fn sync(store: &Store, folder: &Path, device: &str, name: &str, out: Outgoing, types: Types) -> Result<Incoming, String> {
-    if device.is_empty() || !device.chars().all(|c| c.is_ascii_hexdigit()) {
+    if device.is_empty() || device.len() > 64 || !device.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err("invalid device id".into());
     }
     std::fs::create_dir_all(folder).map_err(|e| format!("cannot use sync folder {}: {e}", folder.display()))?;
@@ -181,6 +181,9 @@ pub fn sync(store: &Store, folder: &Path, device: &str, name: &str, out: Outgoin
         extensions: if types.extensions { out.extensions } else { vec![] },
     };
     let json = serde_json::to_vec(&mine).map_err(|e| e.to_string())?;
+    if json.len() as u64 > MAX_FILE {
+        return Err("sync data exceeds the 20 MiB device-file limit".into());
+    }
     let (tmp, file) = (folder.join(format!("{device}.json.tmp")), folder.join(format!("{device}.json")));
     std::fs::write(&tmp, json).and_then(|_| std::fs::rename(&tmp, &file)).map_err(|e| format!("writing {}: {e}", file.display()))?;
     incoming.devices = summary(&remote);
@@ -190,6 +193,19 @@ pub fn sync(store: &Store, folder: &Path, device: &str, name: &str, out: Outgoin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_files_that_other_devices_cannot_read() {
+        let root = std::env::temp_dir().join(format!("kakangkung-sync-size-test-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let store = Store::open(&root.join("store.db")).unwrap();
+        assert!(sync(&store, &root, &"a".repeat(65), "PC", Outgoing::default(), Types::ALL).is_err());
+        let file = root.join("aa.json");
+        std::fs::write(&file, b"previous snapshot").unwrap();
+        let outgoing = Outgoing { extensions: vec!["x".repeat(MAX_FILE as usize)], ..Default::default() };
+        assert!(sync(&store, &root, "aa", "PC", outgoing, Types::ALL).is_err());
+        assert_eq!(std::fs::read(file).unwrap(), b"previous snapshot", "oversized sync preserves last snapshot");
+    }
 
     #[test]
     fn two_devices_exchange_history_and_tabs() {

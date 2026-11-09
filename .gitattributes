@@ -6,3 +6,4 @@
 *.png binary
 *.bmp binary
 *.ico binary
+/assets/filterlists/*.txt -text -whitespace

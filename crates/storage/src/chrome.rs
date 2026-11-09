@@ -3,6 +3,7 @@
 //! `places.sqlite`. Read-only: the other browsers' files are never modified (copies are read).
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use platform::sqlite::Db;
 use serde::Serialize;
@@ -12,6 +13,35 @@ use crate::Visit;
 
 /// Microseconds between 1601-01-01 (Chrome's epoch) and 1970-01-01.
 const WEBKIT_EPOCH_OFFSET_US: i64 = 11_644_473_600_000_000;
+
+pub(crate) struct Snapshot {
+    dir: PathBuf,
+    pub(crate) path: PathBuf,
+}
+
+impl Snapshot {
+    pub(crate) fn read(source: &Path) -> Result<Self, String> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let base = std::env::temp_dir();
+        let dir = loop {
+            let dir = base.join(format!("kakangkung-snapshot-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+            match std::fs::create_dir(&dir) {
+                Ok(()) => break dir,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e.to_string()),
+            }
+        };
+        let snapshot = Self { path: dir.join("data.db"), dir };
+        Db::snapshot(source, &snapshot.path).map_err(|e| format!("could not snapshot browser data ({e}). Close that browser and try again."))?;
+        Ok(snapshot)
+    }
+}
+
+impl Drop for Snapshot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ChromeExtension {
@@ -88,6 +118,25 @@ pub fn browser(id: &str) -> Option<Browser> {
     browsers().into_iter().find(|b| b.id == id)
 }
 
+/// Metadata only: avoids copying and parsing an unchanged profile every sync round.
+pub fn data_stamp(browser: &Browser, profile: &str) -> Result<String, String> {
+    let selected = browser.profiles.iter().find(|p| p.dir == profile).ok_or("unknown profile")?;
+    let dir = browser.dir.join(&selected.dir);
+    let files: &[&str] = if browser.chromium { &["History", "History-wal", "Bookmarks"] } else { &["places.sqlite", "places.sqlite-wal"] };
+    let mut stamp = format!("{}:{profile}", browser.dir.display());
+    for name in files {
+        match std::fs::metadata(dir.join(name)) {
+            Ok(m) => {
+                let changed = m.modified().map_err(|e| e.to_string())?.duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?;
+                stamp.push_str(&format!("|{name}:{}:{}", m.len(), changed.as_nanos()));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => stamp.push_str(&format!("|{name}:missing")),
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Ok(stamp)
+}
+
 /// The profile to use when none is named: Chromium's last used one, Firefox's most recently used.
 pub fn default_profile(b: &Browser) -> Option<String> {
     if b.chromium {
@@ -120,16 +169,9 @@ fn firefox_profiles(dir: &Path) -> Vec<ChromeProfile> {
 
 /// History and bookmarks from a Firefox `places.sqlite` (read from a copy, WAL file included).
 pub fn read_firefox(places: &Path) -> Result<(Vec<Visit>, Vec<crate::Bookmark>), String> {
-    let tmp = std::env::temp_dir().join(format!("kakangkung-firefox-{}", std::process::id()));
-    std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
-    let copy = tmp.join("places.sqlite");
-    std::fs::copy(places, &copy).map_err(|e| format!("could not read Firefox's history ({e}). Close Firefox and try again."))?;
-    let wal = places.with_file_name("places.sqlite-wal");
-    if wal.is_file() {
-        let _ = std::fs::copy(&wal, tmp.join("places.sqlite-wal"));
-    }
+    let copy = Snapshot::read(places)?;
     let read = || -> Result<(Vec<Visit>, Vec<crate::Bookmark>), String> {
-        let db = Db::open(&copy, false)?;
+        let db = Db::open(&copy.path, true)?;
         let visits = db
             .query(
                 "SELECT url, COALESCE(title, ''), visit_count, last_visit_date FROM moz_places
@@ -151,9 +193,7 @@ pub fn read_firefox(places: &Path) -> Result<(Vec<Visit>, Vec<crate::Bookmark>),
             .collect();
         Ok((visits, marks))
     };
-    let r = read();
-    let _ = std::fs::remove_dir_all(&tmp);
-    r
+    read()
 }
 
 pub fn user_data_dir() -> Option<PathBuf> {
@@ -246,12 +286,10 @@ pub fn read_logins(user_data: &Path, profile: &Path) -> Result<(Vec<crate::passw
         .and_then(|v| v["os_crypt"]["encrypted_key"].as_str().and_then(platform::base64_decode))
         .and_then(|k| k.strip_prefix(b"DPAPI").map(<[u8]>::to_vec))
         .and_then(|k| platform::unprotect(&k).ok());
-    let copy = std::env::temp_dir().join(format!("kakangkung-logins-{}.db", std::process::id()));
-    std::fs::copy(&file, &copy).map_err(|e| format!("could not read the saved passwords ({e})"))?;
-    let rows = Db::open(&copy, true).and_then(|db| {
+    let copy = Snapshot::read(&file)?;
+    let rows = Db::open(&copy.path, true).and_then(|db| {
         db.query("SELECT origin_url, username_value, hex(password_value) FROM logins WHERE blacklisted_by_user = 0", &[])
     });
-    let _ = std::fs::remove_file(&copy);
     let (mut out, mut locked) = (vec![], 0);
     for r in rows? {
         let hex = r[2].text();

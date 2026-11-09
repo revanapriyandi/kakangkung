@@ -10,7 +10,7 @@ use windows::Win32::UI::Controls::{EM_SETMARGINS, EM_SETSEL, WM_MOUSELEAVE};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_MENU, VK_SHIFT, ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_DOWN, VK_ESCAPE, VK_RETURN, VK_UP};
 use windows::Win32::UI::Shell::DefSubclassProc;
-use windows::Win32::UI::WindowsAndMessaging::{KillTimer, WM_TIMER, DefWindowProcW, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, GWLP_USERDATA, PostMessageW, SendMessageW, SetWindowLongPtrW, SetWindowTextW, WM_CHAR, WM_COMMAND, WM_CTLCOLOREDIT, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_SYSKEYDOWN, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, CREATESTRUCTW, WM_NCCREATE, WM_PAINT, WM_RBUTTONUP, WM_SETFOCUS, WM_SETFONT, WM_SIZE};
+use windows::Win32::UI::WindowsAndMessaging::{SetTimer, KillTimer, WM_TIMER, DefWindowProcW, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, GWLP_USERDATA, PostMessageW, SendMessageW, SetWindowLongPtrW, SetWindowTextW, WM_CHAR, WM_COMMAND, WM_CTLCOLOREDIT, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_SYSKEYDOWN, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, CREATESTRUCTW, WM_NCCREATE, WM_PAINT, WM_RBUTTONUP, WM_SETFOCUS, WM_SETFONT, WM_SIZE};
 use windows::core::{w, HSTRING};
 
 use super::style::{STRIP_H, colorref, palette};
@@ -49,6 +49,11 @@ pub(crate) fn lparam_point(l: LPARAM, scale: f32) -> (f32, f32) {
 }
 
 impl Inner {
+    fn cancel_preview(&mut self) {
+        unsafe { let _ = KillTimer(Some(self.hwnd), super::TIMER_TAB_PREVIEW); }
+        if self.preview_tab.take().is_some() { self.send("tabhover\t0".into()); }
+    }
+
     pub(super) fn send(&mut self, cmd: String) {
         (self.on_command)(cmd);
     }
@@ -137,6 +142,19 @@ pub(super) unsafe extern "system" fn frame_proc(hwnd: HWND, msg: u32, wp: WPARAM
         let Ok(mut i) = cell.try_borrow_mut() else { return DefWindowProcW(hwnd, msg, wp, lp) };
         let scale = scale_of(hwnd);
         match msg {
+            WM_TIMER if wp.0 == super::TIMER_TAB_PREVIEW => {
+                if cfg!(debug_assertions) && i.synthetic_hover { eprintln!("fixture hover timer: tab={:?} drag={:?}",i.preview_tab,i.drag); }
+                let _ = KillTimer(Some(hwnd), super::TIMER_TAB_PREVIEW);
+                if let Some(id) = i.preview_tab {
+                    if i.drag.is_none() && i.state.tabs.iter().any(|t| t.id == id) {
+                        if let Some((r, _)) = i.hits.iter().find(|(_, h)| *h == Hit::Tab(id)) {
+                            let cmd = format!("tabhover\t{id}\t{}\t{}\t{}", r.left, STRIP_H, r.right - r.left);
+                            i.send(cmd);
+                        }
+                    }
+                }
+                return LRESULT(0);
+            }
             WM_ERASEBKGND => return LRESULT(1),
             WM_TIMER if wp.0 == super::TIMER_ANIM => {
                 if !i.appear.iter().any(|(_, at)| crate::motion::progress(*at, 0.0, super::TAB_GROW_MS) < 1.0) {
@@ -155,6 +173,7 @@ pub(super) unsafe extern "system" fn frame_proc(hwnd: HWND, msg: u32, wp: WPARAM
             }
             // The wheel over the tab strip scrolls it sideways when the tabs do not fit.
             WM_MOUSEWHEEL => {
+                i.cancel_preview();
                 let mut pt = POINT { x: (lp.0 & 0xffff) as i16 as i32, y: ((lp.0 >> 16) & 0xffff) as i16 as i32 };
                 let _ = ScreenToClient(hwnd, &mut pt);
                 if (pt.y as f32 / scale) < STRIP_H {
@@ -175,7 +194,7 @@ pub(super) unsafe extern "system" fn frame_proc(hwnd: HWND, msg: u32, wp: WPARAM
                 let _ = InvalidateRect(Some(hwnd), None, false);
             }
             WM_MOUSEMOVE => {
-                if !i.tracking {
+                if !i.tracking && !i.synthetic_hover {
                     let mut tme = TRACKMOUSEEVENT { cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: hwnd, dwHoverTime: 0 };
                     let _ = TrackMouseEvent(&mut tme);
                     i.tracking = true;
@@ -202,12 +221,20 @@ pub(super) unsafe extern "system" fn frame_proc(hwnd: HWND, msg: u32, wp: WPARAM
                     }
                 }
                 let h = i.hit(x, y);
+                let tab = if i.drag.is_none() { match h { Hit::Tab(id) | Hit::TabClose(id) | Hit::TabAudio(id) => Some(id), _ => None } } else { None };
+                if tab != i.preview_tab {
+                    i.cancel_preview();
+                    i.preview_tab = tab;
+                    if tab.is_some() { SetTimer(Some(hwnd), super::TIMER_TAB_PREVIEW, 450, None); }
+                }
                 if h != i.hover {
                     i.hover = h;
                     let _ = InvalidateRect(Some(hwnd), None, false);
                 }
             }
             WM_MOUSELEAVE => {
+                if i.synthetic_hover { return LRESULT(0); }
+                i.cancel_preview();
                 i.tracking = false;
                 if i.hover != Hit::None {
                     i.hover = Hit::None;
@@ -215,6 +242,7 @@ pub(super) unsafe extern "system" fn frame_proc(hwnd: HWND, msg: u32, wp: WPARAM
                 }
             }
             WM_LBUTTONDOWN => {
+                i.cancel_preview();
                 let (x, y) = lparam_point(lp, scale);
                 let h = i.hit(x, y);
                 i.pressed = h;
@@ -255,18 +283,21 @@ pub(super) unsafe extern "system" fn frame_proc(hwnd: HWND, msg: u32, wp: WPARAM
                 i.pressed = Hit::None;
             }
             WM_LBUTTONDBLCLK => {
+                i.cancel_preview();
                 let (x, y) = lparam_point(lp, scale);
                 if i.hit(x, y) == Hit::Drag && y < STRIP_H {
                     i.send("max".into());
                 }
             }
             WM_MBUTTONUP => {
+                i.cancel_preview();
                 let (x, y) = lparam_point(lp, scale);
                 if let Hit::Tab(id) | Hit::TabClose(id) = i.hit(x, y) {
                     i.send(format!("close\t{id}"));
                 }
             }
             WM_RBUTTONUP => {
+                i.cancel_preview();
                 let (x, y) = lparam_point(lp, scale);
                 match i.hit(x, y) {
                     Hit::Tab(id) | Hit::TabClose(id) | Hit::TabAudio(id) => i.send(format!("tabmenu\t{id}\t{}\t{}", x.round(), y.round())),

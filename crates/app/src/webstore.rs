@@ -10,6 +10,7 @@
 //! Blocking (download, unzip): run off the UI thread.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::Value as Json;
 
@@ -120,25 +121,51 @@ pub(crate) fn base64(data: &[u8]) -> String {
     out
 }
 
-/// Download extension `id` from the store and unpack it into `root/<id>` (replacing an older
-/// copy). `version` is the browser version the store should pick a compatible release for.
+/// Download extension `id` into a unique staging folder, preserving installed files. `version` is the browser version the store should pick a compatible release for.
 pub(crate) fn install(id: &str, version: &str, root: &Path) -> Result<PathBuf, String> {
     if !valid_id(id) {
         return Err("not an extension id".into());
     }
     let crx = platform::http::download(&crx_url(id, version), 180_000, MAX_CRX).map_err(|e| format!("downloading the extension: {e}"))?;
     let (zip, key) = unpack_crx(&crx, id)?;
-    let dir = root.join(id);
-    if dir.exists() {
-        std::fs::remove_dir_all(&dir).map_err(|e| format!("replacing {}: {e}", dir.display()))?;
+    prepare_package(id, zip, key, root)
+}
+
+fn prepare_package(id: &str, zip: &[u8], key: Option<Vec<u8>>, root: &Path) -> Result<PathBuf, String> {
+    let key = key.ok_or("the package has no public key matching its Chrome Web Store id")?;
+    if id_of(&key)? != id {
+        return Err("the package public key does not match its Chrome Web Store id".into());
     }
-    std::fs::create_dir_all(&dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
-    let archive = root.join(format!("{id}.zip"));
+    let dir = staging_dir(root, id)?;
+    let result = unpack_zip(zip, &key, &dir);
+    let _ = std::fs::remove_file(dir.with_extension("zip"));
+    if result.is_err() {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    result.map(|_| dir)
+}
+
+fn staging_dir(root: &Path, id: &str) -> Result<PathBuf, String> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let staging = root.join(".staging");
+    std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
+    loop {
+        let dir = staging.join(format!("{id}-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+}
+
+fn unpack_zip(zip: &[u8], key: &[u8], dir: &Path) -> Result<(), String> {
+    let archive = dir.with_extension("zip");
     std::fs::write(&archive, zip).map_err(|e| e.to_string())?;
     // Windows' own bsdtar unpacks ZIP files and refuses absolute paths and ".." entries. Called
     // by full path: another tar on PATH (Git's) cannot read ZIP files.
     let tar = PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into())).join("System32").join("tar.exe");
-    let out = std::process::Command::new(tar).arg("-xf").arg(&archive).arg("-C").arg(&dir).output();
+    let out = std::process::Command::new(tar).arg("-xf").arg(&archive).arg("-C").arg(dir).output();
     let _ = std::fs::remove_file(&archive);
     match out {
         Ok(o) if o.status.success() => {}
@@ -149,13 +176,62 @@ pub(crate) fn install(id: &str, version: &str, root: &Path) -> Result<PathBuf, S
     let _ = std::fs::remove_dir_all(dir.join("_metadata"));
     let manifest_path = dir.join("manifest.json");
     let text = std::fs::read_to_string(&manifest_path).map_err(|_| "the extension has no manifest.json".to_string())?;
-    if let (Some(key), Ok(Json::Object(mut m))) = (key, serde_json::from_str::<Json>(text.trim_start_matches('\u{feff}'))) {
-        if !m.contains_key("key") {
-            m.insert("key".into(), Json::String(base64(&key)));
-            std::fs::write(&manifest_path, Json::Object(m).to_string()).map_err(|e| e.to_string())?;
+    let mut m = serde_json::from_str::<Json>(text.trim_start_matches('\u{feff}'))
+        .map_err(|e| format!("the extension manifest is invalid: {e}"))?;
+    let m = m.as_object_mut().ok_or("the extension manifest must be an object")?;
+    if !matches!(m.get("manifest_version").and_then(Json::as_u64), Some(2 | 3)) {
+        return Err("this extension manifest version is not supported".into());
+    }
+    // The selected header key determines the store identity, including when an
+    // existing manifest key was stale or belonged to another build.
+    m.insert("key".into(), Json::String(base64(key)));
+    std::fs::write(&manifest_path, serde_json::to_vec(m).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// A promoted package keeps the previous files until the engine accepts it.
+pub(crate) struct InstallSwap {
+    pub(crate) folder: PathBuf,
+    backup: Option<PathBuf>,
+}
+
+impl InstallSwap {
+    pub(crate) fn finish(self) {
+        if let Some(backup) = self.backup {
+            let _ = std::fs::remove_dir_all(backup);
         }
     }
-    Ok(dir)
+
+    pub(crate) fn rollback(self) -> Result<(), String> {
+        std::fs::remove_dir_all(&self.folder).map_err(|e| format!("removing rejected extension: {e}"))?;
+        if let Some(backup) = self.backup {
+            std::fs::rename(backup, &self.folder).map_err(|e| format!("restoring previous extension: {e}"))?;
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn commit_install(staged: &Path, id: &str, root: &Path) -> Result<InstallSwap, String> {
+    if !valid_id(id) { return Err("not an extension id".into()); }
+    let staging = root.join(".staging").canonicalize().map_err(|e| e.to_string())?;
+    let staged = staged.canonicalize().map_err(|e| e.to_string())?;
+    if staged.parent() != Some(staging.as_path()) || !staged.join("manifest.json").is_file() {
+        return Err("invalid staged extension folder".into());
+    }
+    let folder = root.join(id);
+    let backup = if folder.exists() {
+        let backup = staging_dir(root, id)?;
+        std::fs::remove_dir(&backup).map_err(|e| e.to_string())?;
+        std::fs::rename(&folder, &backup).map_err(|e| format!("preserving previous extension: {e}"))?;
+        Some(backup)
+    } else { None };
+    if let Err(e) = std::fs::rename(&staged, &folder) {
+        if let Some(backup) = &backup {
+            std::fs::rename(backup, &folder).map_err(|restore| format!("install failed ({e}); restoring previous extension failed ({restore})"))?;
+        }
+        return Err(format!("activating extension files: {e}"));
+    }
+    Ok(InstallSwap { folder, backup })
 }
 
 /// The page an installed extension shows from its toolbar button (`action.default_popup`, or
@@ -255,6 +331,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn failed_package_and_cancelled_staging_preserve_installed_files() {
+        let root = std::env::temp_dir().join(format!("kk-stage-preserve-{}", std::process::id()));
+        let key = b"synthetic-key";
+        let id = id_of(key).unwrap();
+        let old = root.join(&id);
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("sentinel"), b"previous installation").unwrap();
+        assert!(prepare_package(&id, b"not a zip", Some(key.to_vec()), &root).is_err());
+        assert_eq!(std::fs::read(old.join("sentinel")).unwrap(), b"previous installation");
+        assert!(prepare_package(&id, b"PK", None, &root).is_err());
+        let staged = staging_dir(&root, &id).unwrap();
+        std::fs::remove_dir_all(staged).unwrap();
+        assert!(old.join("sentinel").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn promotion_can_restore_previous_installation_after_engine_rejection() {
+        let root = std::env::temp_dir().join(format!("kk-stage-rollback-{}", std::process::id()));
+        let id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let old = root.join(id);
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("sentinel"), b"old").unwrap();
+        let staged = staging_dir(&root, id).unwrap();
+        std::fs::write(staged.join("manifest.json"), b"{}").unwrap();
+        let swap = commit_install(&staged, id, &root).unwrap();
+        assert!(!swap.folder.join("sentinel").exists());
+        swap.rollback().unwrap();
+        assert_eq!(std::fs::read(old.join("sentinel")).unwrap(), b"old");
+        assert!(commit_install(&old, id, &root).is_err(), "a live install is never accepted as staging");
+        let staged = staging_dir(&root, id).unwrap();
+        std::fs::write(staged.join("manifest.json"), b"{}").unwrap();
+        let swap = commit_install(&staged, id, &root).unwrap();
+        let backup = swap.backup.clone().unwrap();
+        swap.finish();
+        assert!(old.join("manifest.json").exists());
+        assert!(!backup.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn permission_warnings_use_chromes_words() {
         let dir = std::env::temp_dir().join(format!("kk-perm-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -327,7 +444,8 @@ mod tests {
     #[test]
     #[ignore]
     fn store_install_real_extension() {
-        let root = std::env::temp_dir().join(format!("kk-store-install-{}", std::process::id()));
+        let keep = std::env::var_os("KAKANGKUNG_STORE_TEST_OUTPUT");
+        let root = keep.as_ref().map(PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join(format!("kk-store-install-{}", std::process::id())));
         let id = "ddkjiahejlhfcafbddmgiahcphecmpfh"; // uBlock Origin Lite
         let dir = install(id, "157.0.0.0", &root).unwrap();
         let m: Json = serde_json::from_str(&std::fs::read_to_string(dir.join("manifest.json")).unwrap()).unwrap();
@@ -335,7 +453,8 @@ mod tests {
         assert!(m["key"].as_str().is_some_and(|k| !k.is_empty()), "store key kept");
         assert!(!dir.join("_metadata").exists());
         assert!(button_page(&dir).is_some_and(|(_, popup)| popup));
-        let _ = std::fs::remove_dir_all(&root);
+        if keep.is_some() { println!("STAGED_EXTENSION={}", dir.display()); }
+        else { let _ = std::fs::remove_dir_all(&root); }
     }
 
     #[test]

@@ -22,6 +22,8 @@ const MIGRATIONS: &[&str] = &[
     // Passwords are DPAPI-sealed, hex encoded (see passwords.rs).
     "CREATE TABLE passwords(id INTEGER PRIMARY KEY, origin TEXT NOT NULL, username TEXT NOT NULL, password TEXT NOT NULL, created INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0, UNIQUE(origin, username));
      CREATE TABLE password_never(origin TEXT PRIMARY KEY)",
+    "ALTER TABLE passwords ADD COLUMN canonical_origin TEXT NOT NULL DEFAULT '';
+     CREATE INDEX passwords_canonical ON passwords(canonical_origin, username)",
 ];
 
 /// A finished download kept for the Downloads page after a restart.
@@ -115,6 +117,40 @@ pub struct Store {
 }
 
 impl Store {
+    /// One SQLite statement observes a coherent set of settings across connections.
+    pub fn settings_snapshot(&self) -> Result<std::collections::HashMap<String, String>, String> {
+        Ok(self.db.query("SELECT key, value FROM settings", &[])?.into_iter().map(|row| (row[0].text(), row[1].text())).collect())
+    }
+
+    /// Publish related identity settings together, never a partial account switch.
+    pub fn set_settings(&self, settings: &[(&str, &str)]) -> Result<(), String> {
+        self.db.batch("BEGIN IMMEDIATE")?;
+        let changed = self.db.run_many(
+            "INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            settings.iter().map(|(key, value)| vec![(*key).into(), (*value).into()]),
+        );
+        match changed {
+            Ok(_) => self.db.batch("COMMIT"),
+            Err(error) => { let _ = self.db.batch("ROLLBACK"); Err(error) }
+        }
+    }
+
+    /// Apply account metadata only if the authorizing session still matches.
+    pub fn set_settings_if_current(&self, expected: &[(&str, &str)], updates: &[(&str, &str)]) -> Result<bool, String> {
+        self.db.batch("BEGIN IMMEDIATE")?;
+        let result = (|| {
+            let current = self.settings_snapshot()?;
+            if expected.iter().any(|(key, value)| current.get(*key).map(String::as_str) != Some(*value)) {
+                return Ok(false);
+            }
+            self.db.run_many("INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                updates.iter().map(|(key, value)| vec![(*key).into(), (*value).into()]))?;
+            Ok(true)
+        })();
+        self.db.batch(if result.is_ok() { "COMMIT" } else { "ROLLBACK" })?;
+        result
+    }
+
     pub fn open(path: &Path) -> Result<Store, String> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
@@ -129,7 +165,9 @@ impl Store {
             })?;
             db.batch("COMMIT")?;
         }
-        Ok(Store { db })
+        let store = Store { db };
+        store.migrate_password_origins()?;
+        Ok(store)
     }
 
     pub fn add_visit(&self, url: &str, title: &str, at: i64) -> Result<(), String> {
@@ -351,17 +389,32 @@ impl Store {
 
     /// Import history, bookmarks and saved passwords from another browser's profile.
     pub fn import_browser(&self, b: &chrome::Browser, profile: &str) -> Result<Imported, String> {
+        self.import_browser_parts(b, profile, true)
+    }
+
+    /// Refresh ordinary browsing data without reading or replacing saved passwords.
+    pub fn refresh_browser(&self, b: &chrome::Browser, profile: &str) -> Result<Imported, String> {
+        self.import_browser_parts(b, profile, false)
+    }
+
+    fn import_browser_parts(&self, b: &chrome::Browser, profile: &str, passwords: bool) -> Result<Imported, String> {
         let p = b.profiles.iter().find(|p| p.dir == profile).ok_or("unknown profile")?;
         if b.chromium {
             let dir = b.dir.join(&p.dir);
             let pages = self.import_chrome_history(&dir.join("History"))?;
-            let bookmarks = chrome::read_bookmarks(&dir.join("Bookmarks")).and_then(|m| self.import_bookmarks(&m)).unwrap_or(0);
-            let (passwords, locked) = match chrome::read_logins(&b.dir, &dir) {
-                Ok((logins, locked)) => (self.import_passwords(&logins)?, locked),
-                Err(e) => {
+            let file = dir.join("Bookmarks");
+            let bookmarks = match std::fs::metadata(&file) {
+                Ok(_) => self.import_bookmarks(&chrome::read_bookmarks(&file)?)?,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
+                Err(e) => return Err(format!("reading bookmarks: {e}")),
+            };
+            let (passwords, locked) = match passwords.then(|| chrome::read_logins(&b.dir, &dir)) {
+                Some(Ok((logins, locked))) => (self.import_passwords(&logins)?, locked),
+                Some(Err(e)) => {
                     eprintln!("import passwords from {}: {e}", b.name);
                     (0, 0)
                 }
+                None => (0, 0),
             };
             Ok(Imported { pages, bookmarks, passwords, locked })
         } else {
@@ -373,10 +426,8 @@ impl Store {
 
     /// Import a Chrome `History` SQLite file (works while Chrome is running: a copy is read).
     pub fn import_chrome_history(&self, history: &Path) -> Result<usize, String> {
-        let copy = std::env::temp_dir().join(format!("kakangkung-chrome-history-{}.db", std::process::id()));
-        std::fs::copy(history, &copy).map_err(|e| format!("could not read Chrome's history ({e}). Close Chrome and try again."))?;
-        let visits = chrome::read_history(&copy);
-        let _ = std::fs::remove_file(&copy);
+        let copy = chrome::Snapshot::read(history)?;
+        let visits = chrome::read_history(&copy.path);
         self.merge(&visits?)
     }
 }
@@ -393,6 +444,36 @@ pub fn data_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_metadata_cannot_overwrite_a_switched_account() {
+        let (store, path) = temp_store("conditional-profile");
+        store.set_settings(&[("account.email", "first@example.invalid"), ("account.name", "First")]).unwrap();
+        let other = Store::open(&path).unwrap();
+        other.set_settings(&[("account.email", "second@example.invalid"), ("account.name", "Second")]).unwrap();
+        assert!(!store.set_settings_if_current(&[("account.email", "first@example.invalid")], &[("account.name", "Stale name")]).unwrap());
+        assert_eq!(store.setting("account.name").as_deref(), Some("Second"));
+        assert!(store.set_settings_if_current(&[("account.email", "second@example.invalid")], &[("account.name", "Updated")]).unwrap());
+        assert_eq!(other.setting("account.name").as_deref(), Some("Updated"));
+    }
+
+    #[test]
+    fn chrome_import_reads_committed_wal() {
+        let (store, out) = temp_store("wal-import");
+        let root = std::env::temp_dir().join(format!("kakangkung-wal-import-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let history = root.join("History");
+        let source = Db::open(&history, false).unwrap();
+        source.batch("CREATE TABLE IF NOT EXISTS urls(url TEXT, title TEXT, visit_count INTEGER, last_visit_time INTEGER, hidden INTEGER); DELETE FROM urls; PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0").unwrap();
+        source.run("INSERT INTO urls VALUES(?, ?, 1, ?, 0)", &["https://wal.example/".into(), "Committed in WAL".into(), 13_000_000_000_000_000i64.into()]).unwrap();
+        assert!(root.join("History-wal").metadata().unwrap().len() > 0);
+        store.import_chrome_history(&history).unwrap();
+        assert_eq!(store.history("wal.example", 10).unwrap().len(), 1);
+        drop(source);
+        drop(store);
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_file(out);
+    }
 
     fn temp_store(tag: &str) -> (Store, PathBuf) {
         let p = std::env::temp_dir().join(format!("kakangkung-store-{tag}-{}.db", std::process::id()));

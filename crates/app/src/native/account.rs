@@ -45,8 +45,8 @@ pub(crate) fn signin_doc(a: &Json, inputs: &HashMap<String, String>) -> PageDoc 
             "Bookmarks, history, open tabs and settings travel through your sync folder; no server and no password are involved."
         };
         sections.push(section("account", "Your account", vec![
-            Row::new(name, a["email"].as_str().unwrap_or(""), Control::Avatar { initial: initial(name) }),
-            Row::new("Sync is on", via, Control::None),
+            Row::new(name, a["email"].as_str().unwrap_or(""), Control::AvatarImage { initial: initial(name), path: a["picture"].as_str().unwrap_or("").into() }),
+            Row::new(if a["enabled"].as_bool().unwrap_or(false) { "Sync is on" } else { "Sync is off" }, via, Control::None),
             Row::new("Sign out", "Bookmarks, history and settings stay on this PC", buttons(&[("signout", "Sign out", ButtonStyle::Danger)])),
         ]));
         sections.push(section("types", "What you sync", types));
@@ -78,7 +78,11 @@ pub(crate) fn signin_doc(a: &Json, inputs: &HashMap<String, String>) -> PageDoc 
 pub(crate) fn sync_doc(s: &Json) -> PageDoc {
     let enabled = s["enabled"].as_bool().unwrap_or(false);
     let mut sections = vec![section("sync", "Sync", vec![
-        Row::new("Sync history and open tabs", "Each PC writes a small file into a folder your cloud drive (OneDrive, Google Drive, Dropbox…) already keeps in sync, and reads the files of your other PCs.", Control::Toggle { id: "sync-on".into(), on: enabled }),
+        Row::new("Sync selected data", if s["google"].as_bool().unwrap_or(false) {
+            "Sync selected Kakangkung data through Google Drive. Chrome Sync data is separate; use Import to bring local Chrome bookmarks and history into Kakangkung."
+        } else {
+            "Each PC writes a device file into your shared cloud folder and reads the files from your other PCs."
+        }, Control::Toggle { id: "sync-on".into(), on: enabled }),
         if s["google"].as_bool().unwrap_or(false) {
             Row::new("Synced through", &format!("Google Drive of {} (hidden app folder)", s["email"].as_str().unwrap_or("")), buttons(&[("sync-now", "Sync now", ButtonStyle::Primary)]))
         } else {
@@ -88,7 +92,9 @@ pub(crate) fn sync_doc(s: &Json) -> PageDoc {
     ])];
     let devices = s["devices"].as_array().cloned().unwrap_or_default();
     if devices.is_empty() {
-        let text = if enabled { "No other devices yet. Sign in on your other PCs with the same sync folder." } else { "Turn on sync to see the tabs open on your other PCs." };
+        let text = if !enabled { "Turn on sync to see the tabs open on your other PCs." } else if s["google"].as_bool().unwrap_or(false) {
+            "Sign in to Kakangkung on another PC with the same Google account and the same Kakangkung OAuth application."
+        } else { "Sign in on your other PCs with the same sync folder." };
         let heading = if enabled { "No other devices yet" } else { "Sync is off" };
         sections.push(empty("devices", "Tabs from your other devices", "\u{E770}", heading, text));
     }
@@ -123,6 +129,14 @@ mod tests {
         assert!(c.contains(&Control::Toggle { id: "type:history".into(), on: false }));
         let inn = json!({ "signedIn": true, "name": "Ana", "email": "a@example.com", "types": {} });
         assert!(controls(&signin_doc(&inn, &HashMap::new())).iter().any(|c| matches!(c, Control::Buttons(b) if b[0].id == "signout")));
+    }
+
+    #[test]
+    fn signed_in_account_reports_disabled_sync() {
+        let doc = signin_doc(&json!({"signedIn": true, "enabled": false}), &HashMap::new());
+        let serialized = format!("{doc:?}");
+        assert!(serialized.contains("Sync is off"));
+        assert!(!serialized.contains("Sync is on"));
     }
 
     #[test]

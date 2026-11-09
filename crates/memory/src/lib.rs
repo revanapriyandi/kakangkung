@@ -4,10 +4,10 @@ use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
-    /// Chrome's "Moderate" (conservative aggressiveness): only tabs hidden for a long time.
+    /// Conservative policy: only tabs hidden for a long time.
     Moderate,
-    UltraLite,
     #[default]
+    UltraLite,
     Balanced,
     Performance,
 }
@@ -19,10 +19,13 @@ pub struct Thresholds {
     pub discard_after: Option<Duration>,
 }
 
-/// Minutes a hidden tab waits before it may be discarded (two hours, the common browser default).
+/// Conservative suspension delay in minutes; a local policy, not a Chromium default.
 pub const DISCARD_AFTER_MIN: u64 = 120;
 
 impl Mode {
+    pub fn compact_idle(self, hidden: Duration, loading: bool, protected: bool, attempted: bool) -> bool {
+        self == Self::UltraLite && hidden >= Duration::from_secs(10) && !loading && !protected && !attempted
+    }
     /// Default thresholds of each mode; starting points, to be tuned with measurements.
     pub fn default_thresholds(self) -> Thresholds {
         let mins = |m: u64| Some(Duration::from_secs(m * 60));
@@ -67,6 +70,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn idle_compaction_excludes_active_loading_protected_and_repeated_work() {
+        let age = Duration::from_secs(10);
+        assert!(Mode::UltraLite.compact_idle(age, false, false, false));
+        assert!(!Mode::UltraLite.compact_idle(Duration::ZERO, false, false, false));
+        assert!(!Mode::UltraLite.compact_idle(age, true, false, false));
+        assert!(!Mode::UltraLite.compact_idle(age, false, true, false));
+        assert!(!Mode::UltraLite.compact_idle(age, false, false, true));
+        for mode in [Mode::Performance, Mode::Balanced, Mode::Moderate] {
+            assert!(!mode.compact_idle(age, false, false, false));
+        }
+    }
+
+    #[test]
     fn mode_defaults_match_spec() {
         let t = Mode::UltraLite.default_thresholds();
         assert_eq!(t.suspend_after, Some(Duration::from_secs(30)));
@@ -76,7 +92,7 @@ mod tests {
         assert_eq!(t.discard_after, None);
         assert_eq!(Mode::Performance.default_thresholds(), Thresholds { suspend_after: None, discard_after: None });
         assert_eq!(Mode::Moderate.default_thresholds().suspend_after, Some(Duration::from_secs(120 * 60)));
-        assert_eq!(Mode::default(), Mode::Balanced, "Chrome's default aggressiveness is the middle level");
+        assert_eq!(Mode::default(), Mode::UltraLite, "new profiles prioritize low background memory with 30-second suspension");
     }
 
     #[test]

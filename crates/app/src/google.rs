@@ -1,7 +1,7 @@
 //! Sign in with Google, and Kakangkung sync through that account's Google Drive.
 //!
 //! Sign-in is OAuth 2.0 for installed apps (RFC 8252), the way Google wants desktop apps to do
-//! it: the consent page opens in the default browser, Google redirects to a one-shot listener on
+//! it: the consent page opens in an external browser, Google redirects to a one-shot listener on
 //! 127.0.0.1, and the code is exchanged with PKCE. Scopes: name and email, plus `drive.appdata`,
 //! a hidden Drive folder only Kakangkung can see (none of the person's own files). The refresh
 //! token is kept DPAPI-encrypted in the settings (`google.token`).
@@ -112,6 +112,45 @@ pub(crate) struct Account {
     pub(crate) name: String,
     pub(crate) email: String,
     pub(crate) refresh: String,
+    pub(crate) picture: String,
+    pub(crate) subject: String,
+}
+
+fn user_profile(me: &Json, refresh: String) -> Result<Account, String> {
+    let email = me["email"].as_str().unwrap_or("").trim().to_lowercase();
+    if !email.contains('@') {
+        return Err("Google did not share the account's email address.".into());
+    }
+    let subject = me["sub"].as_str().filter(|s| !s.is_empty()).ok_or("Google did not share the account identifier.")?.to_string();
+    let name = me["name"].as_str().map(str::trim).filter(|n| !n.is_empty()).map(String::from)
+        .unwrap_or_else(|| email.split('@').next().unwrap_or("").to_string());
+    let picture = me["picture"].as_str().filter(|url| trusted_picture_url(url)).unwrap_or("").to_string();
+    Ok(Account { name, email, refresh, picture, subject })
+}
+
+fn trusted_picture_url(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://") else { return false };
+    let host = rest.split('/').next().unwrap_or("").to_ascii_lowercase();
+    url.len() <= 8192 && ["googleusercontent.com", "ggpht.com"].iter()
+        .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
+}
+
+fn picture_bytes(bytes: &[u8]) -> bool {
+    !bytes.is_empty() && bytes.len() <= 1024 * 1024 && (
+        bytes.starts_with(b"\x89PNG\r\n\x1a\n") || bytes.starts_with(b"\xff\xd8\xff")
+        || bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a")
+        || (bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP")))
+}
+
+fn cache_picture(account: &Account) -> Result<String, String> {
+    if account.picture.is_empty() { return Ok(String::new()); }
+    let bytes = platform::http::request("GET", &account.picture, "", &[], NET_TIMEOUT_MS, 1024 * 1024 + 1)?;
+    if !picture_bytes(&bytes) { return Err("Google profile photo is not a supported image under 1 MiB".into()); }
+    let folder = mirror_root().join("avatars");
+    std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+    let name = format!("{}-{}.img", hex(&platform::sha256(account.subject.as_bytes())?), hex(&platform::sha256(&bytes)?));
+    write_atomic(&folder, &name, &bytes)?;
+    Ok(folder.join(name).to_string_lossy().into_owned())
 }
 
 /// The query of the redirect Google sends to the listener (`GET /?code=…&state=… HTTP/1.1`),
@@ -173,7 +212,29 @@ fn wait_for_code(listener: &TcpListener, state: &str) -> Result<String, String> 
     Err("Sign-in timed out. Try again.".into())
 }
 
-/// The whole sign-in: consent in the default browser, then code → tokens → name and email.
+fn external_browser(roots: &[PathBuf]) -> Option<PathBuf> {
+    roots.iter().flat_map(|root| [
+        root.join("Microsoft/Edge/Application/msedge.exe"),
+        root.join("Google/Chrome/Application/chrome.exe"),
+        root.join("Mozilla Firefox/firefox.exe"),
+    ]).find(|path| path.is_file())
+}
+
+fn open_authorization(url: &str) -> Result<(), String> {
+    if platform::is_default_browser() {
+        // An embedded WebView2 OAuth page is not an external user agent, even if this
+        // application is registered as the default browser.
+        let roots: Vec<PathBuf> = ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"]
+            .iter().filter_map(std::env::var_os).map(PathBuf::from).collect();
+        let browser = external_browser(&roots).ok_or("Google sign-in needs an external browser. Install Microsoft Edge, Google Chrome or Firefox, or make another supported browser the Windows default, then try again.")?;
+        std::process::Command::new(browser).arg(url).spawn().map_err(|e| format!("cannot open the external browser: {e}"))?;
+    } else {
+        std::process::Command::new("rundll32.exe").arg("url.dll,FileProtocolHandler").arg(url).spawn().map_err(|e| format!("cannot open the browser: {e}"))?;
+    }
+    Ok(())
+}
+
+/// The whole sign-in: consent in an external browser, then code → tokens → name and email.
 pub(crate) fn sign_in() -> Result<Account, String> {
     let c = client().ok_or("Google sign-in is not set up in this build: add an OAuth client (see docs/GOOGLE_SIGNIN.md).")?;
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("cannot listen for Google's answer: {e}"))?;
@@ -194,9 +255,7 @@ pub(crate) fn sign_in() -> Result<Account, String> {
             ("prompt", "consent select_account"),
         ])
     );
-    // The default browser, as Google requires for installed apps (it is Kakangkung itself
-    // when Kakangkung is the default browser).
-    std::process::Command::new("rundll32.exe").arg("url.dll,FileProtocolHandler").arg(&url).spawn().map_err(|e| format!("cannot open the browser: {e}"))?;
+    open_authorization(&url)?;
     let code = wait_for_code(&listener, &state)?;
     let tokens = post_form(
         TOKEN,
@@ -207,21 +266,23 @@ pub(crate) fn sign_in() -> Result<Account, String> {
         return Err("Google did not grant offline access; try signing in again.".into());
     }
     let me: Json = serde_json::from_slice(&platform::http::request("GET", USERINFO, &bearer(access), &[], NET_TIMEOUT_MS, 1 << 20)?).map_err(|e| e.to_string())?;
-    let email = me["email"].as_str().unwrap_or("").to_lowercase();
-    if !email.contains('@') {
-        return Err("Google did not share the account's email address.".into());
-    }
-    let name = me["name"].as_str().filter(|n| !n.is_empty()).map(String::from).unwrap_or_else(|| email.split('@').next().unwrap_or("").to_string());
-    Ok(Account { name, email, refresh: refresh.into() })
+    user_profile(&me, refresh.into())
 }
 
 /// Keep the signed-in Google account (the refresh token DPAPI-encrypted) and turn sync on.
 pub(crate) fn save(s: &Store, a: &Account) -> Result<(), String> {
-    s.set_setting("google.token", &hex(&platform::protect(a.refresh.as_bytes())?))?;
-    s.set_setting("account.provider", "google")?;
-    s.set_setting("account.name", &a.name)?;
-    s.set_setting("account.email", &a.email)?;
-    s.set_setting("sync.enabled", "1")
+    let sealed = hex(&platform::protect(a.refresh.as_bytes())?);
+    let picture = cache_picture(a).unwrap_or_default();
+    s.set_settings(&[
+        ("google.token", &sealed),
+        ("account.provider", "google"),
+        ("account.name", &a.name),
+        ("account.email", &a.email),
+        ("account.picture.path", &picture),
+        ("account.picture.url", &a.picture),
+        ("google.subject", &a.subject),
+        ("sync.enabled", "1"),
+    ])
 }
 
 /// Forget the Google account on this PC and revoke its token at Google (best effort).
@@ -231,8 +292,7 @@ pub(crate) fn forget(s: &Store) {
             let _ = post_form(REVOKE, &[("token", &token)]);
         });
     }
-    let _ = s.set_setting("google.token", "");
-    let _ = s.set_setting("account.provider", "");
+    let _ = s.set_settings(&[("google.token", ""), ("account.provider", ""), ("google.subject", ""), ("account.picture.path", ""), ("account.picture.url", "")]);
 }
 
 /// Is the signed-in account a Google account?
@@ -241,8 +301,11 @@ pub(crate) fn is_google(s: &Store) -> bool {
 }
 
 fn refresh_token(s: &Store) -> Option<String> {
-    let sealed = unhex(&s.setting("google.token")?)?;
-    String::from_utf8(platform::unprotect(&sealed).ok()?).ok()
+    decode_refresh_token(&s.setting("google.token")?)
+}
+
+fn decode_refresh_token(sealed: &str) -> Option<String> {
+    String::from_utf8(platform::unprotect(&unhex(sealed)?).ok()?).ok()
 }
 
 /// The local folder mirrored to the account's Drive.
@@ -267,8 +330,12 @@ pub(crate) fn start_mirror(db: PathBuf, proxy: EventLoopProxy<Msg>) {
     }
     std::thread::spawn(move || {
         let mut m = Mirror::default();
+        let mut shown_profile = None;
+        let mut first = true;
         loop {
-            match rx.recv_timeout(MIRROR_EVERY) {
+            let wait = if first { Duration::ZERO } else { MIRROR_EVERY };
+            first = false;
+            match rx.recv_timeout(wait) {
                 Ok(()) | Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => return,
             }
@@ -284,28 +351,73 @@ pub(crate) fn start_mirror(db: PathBuf, proxy: EventLoopProxy<Msg>) {
                     let _ = proxy.send_event(Msg::Synced(false));
                 }
             }
+            if let Ok(settings) = s.settings_snapshot() {
+                let profile = (settings.get("account.name").cloned().unwrap_or_default(), settings.get("account.picture.path").cloned().unwrap_or_default());
+                if shown_profile.as_ref() != Some(&profile) {
+                    let _ = proxy.send_event(Msg::AccountProfile(profile.0.clone(), profile.1.clone()));
+                    shown_profile = Some(profile);
+                }
+            }
         }
     });
 }
 
+#[derive(Clone, PartialEq, Eq)]
+struct RoundConfig {
+    folder: PathBuf,
+    device: String,
+    sealed: String,
+}
+
+impl RoundConfig {
+    fn account(settings: &HashMap<String, String>) -> Option<Self> {
+        if settings.get("account.provider").map(String::as_str) != Some("google") { return None; }
+        let email = settings.get("account.email").filter(|e| e.contains('@'))?;
+        let sealed = settings.get("google.token").filter(|t| !t.is_empty())?;
+        Some(Self {
+            folder: storage::sync::account_dir(&mirror_root(), email),
+            device: settings.get("sync.device").cloned().unwrap_or_default(),
+            sealed: sealed.clone(),
+        })
+    }
+
+    fn capture(settings: &HashMap<String, String>) -> Option<Self> {
+        if settings.get("sync.enabled").is_some_and(|v| v != "1") { return None; }
+        let config = Self::account(settings)?;
+        device_file(&format!("{}.json", config.device)).then_some(config)
+    }
+
+    fn still_current(&self, settings: &HashMap<String, String>) -> bool {
+        Self::capture(settings).as_ref() == Some(self)
+    }
+}
+
 #[derive(Default)]
 struct Mirror {
+    identity: Option<(PathBuf, String, String)>,
     access: Option<(String, Instant)>,
     /// Drive file id → modifiedTime last downloaded.
     seen: HashMap<String, String>,
     /// This device's file as last uploaded.
     uploaded: Option<Vec<u8>>,
+    profile_checked: Option<Instant>,
 }
 
 impl Mirror {
-    fn token(&mut self, s: &Store) -> Result<String, String> {
+    // Tokens and transfer caches belong to one account, OAuth client and credential.
+    fn select_identity(&mut self, identity: Option<(PathBuf, String, String)>) {
+        if self.identity != identity {
+            *self = Self { identity, ..Self::default() };
+        }
+    }
+
+    fn token(&mut self, c: &Client, sealed: &str) -> Result<String, String> {
         if let Some((t, until)) = &self.access {
             if Instant::now() < *until {
                 return Ok(t.clone());
             }
         }
-        let c = client().ok_or("no OAuth client")?;
-        let refresh = refresh_token(s).ok_or("signed out of Google; sign in again")?;
+        let refresh = decode_refresh_token(sealed).ok_or("signed out of Google; sign in again")?;
         let r = post_form(TOKEN, &[("client_id", &c.id), ("client_secret", &c.secret), ("refresh_token", &refresh), ("grant_type", "refresh_token")])?;
         let t = r["access_token"].as_str().ok_or("Google gave no access token")?.to_string();
         let life = r["expires_in"].as_u64().unwrap_or(3600).saturating_sub(120);
@@ -315,31 +427,57 @@ impl Mirror {
 
     /// One mirror round. True when other devices' files changed (worth a sync now).
     fn round(&mut self, s: &Store) -> Result<bool, String> {
-        let (enabled, folder, device) = crate::profile::sync_conf(s);
-        if !enabled || !is_google(s) {
+        let snapshot = s.settings_snapshot()?;
+        let Some(account_config) = RoundConfig::account(&snapshot) else {
+            self.select_identity(None);
             return Ok(false);
+        };
+        let c = client().ok_or("no OAuth client")?;
+        self.select_identity(Some((account_config.folder.clone(), c.id.clone(), account_config.sealed.clone())));
+        let token = self.token(&c, &account_config.sealed)?;
+        if self.profile_checked.is_none_or(|checked| checked.elapsed() >= Duration::from_secs(3600)) {
+            // Missing/offline profile images must not prevent bookmarks or history syncing.
+            if refresh_profile(s, &snapshot, &token).is_ok() {
+                self.profile_checked = Some(Instant::now());
+            }
         }
-        let token = self.token(s)?;
+        let Some(config) = RoundConfig::capture(&snapshot) else { return Ok(false) };
+        let (folder, device) = (&config.folder, &config.device);
         let auth = bearer(&token);
-        std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
-        let list_url = format!("{FILES}?spaces=appDataFolder&pageSize=1000&fields=files(id%2Cname%2CmodifiedTime)");
-        let list: Json = serde_json::from_slice(&platform::http::request("GET", &list_url, &auth, &[], NET_TIMEOUT_MS, 4 << 20)?).map_err(|e| e.to_string())?;
-        let files = list["files"].as_array().cloned().unwrap_or_default();
+        std::fs::create_dir_all(folder).map_err(|e| e.to_string())?;
+        let files = list_device_files(|url| {
+            let bytes = platform::http::request("GET", url, &auth, &[], NET_TIMEOUT_MS, 4 << 20)?;
+            serde_json::from_slice(&bytes).map_err(|e| e.to_string())
+        })?;
         let own_name = format!("{device}.json");
         let mut changed = false;
         for f in &files {
             let (id, name, modified) = (f["id"].as_str().unwrap_or(""), f["name"].as_str().unwrap_or(""), f["modifiedTime"].as_str().unwrap_or(""));
-            if !device_file(name) || name == own_name || self.seen.get(id).is_some_and(|m| m == modified) {
+            if id.is_empty() || modified.is_empty() || !device_file(name) || name == own_name || self.seen.get(id).is_some_and(|m| m == modified) {
                 continue;
             }
             let body = platform::http::request("GET", &format!("{FILES}/{id}?alt=media"), &auth, &[], NET_TIMEOUT_MS * 2, MAX_FILE)?;
-            write_atomic(&folder, name, &body)?;
+            if body.len() > MAX_FILE {
+                return Err("Google Drive device file is too large".into());
+            }
+            if !config.still_current(&s.settings_snapshot()?) || client().as_ref() != Some(&c) {
+                self.select_identity(None);
+                return Ok(false);
+            }
+            write_atomic(folder, name, &body)?;
             self.seen.insert(id.into(), modified.into());
             changed = true;
         }
         let mine = folder.join(&own_name);
         if let Ok(bytes) = std::fs::read(&mine) {
+            if bytes.len() > MAX_FILE {
+                return Err("Local sync file is too large for Google Drive sync".into());
+            }
             if self.uploaded.as_deref() != Some(bytes.as_slice()) {
+                if !config.still_current(&s.settings_snapshot()?) || client().as_ref() != Some(&c) {
+                    self.select_identity(None);
+                    return Ok(false);
+                }
                 match files.iter().find(|f| f["name"].as_str() == Some(own_name.as_str())).and_then(|f| f["id"].as_str()) {
                     Some(id) => {
                         let headers = format!("{auth}Content-Type: application/json\r\n");
@@ -354,6 +492,46 @@ impl Mirror {
             }
         }
         Ok(changed)
+    }
+}
+
+fn refresh_profile(s: &Store, snapshot: &HashMap<String, String>, access: &str) -> Result<(), String> {
+    let bytes = platform::http::request("GET", USERINFO, &bearer(access), &[], NET_TIMEOUT_MS, 1 << 20)?;
+    let profile = user_profile(&serde_json::from_slice(&bytes).map_err(|e| e.to_string())?, String::new())?;
+    let email = snapshot.get("account.email").ok_or("signed out")?;
+    if profile.email != email.trim().to_lowercase() { return Err("Google profile account changed".into()); }
+    if snapshot.get("google.subject").is_some_and(|sub| !sub.is_empty() && sub != &profile.subject) {
+        return Err("Google profile account identifier changed".into());
+    }
+    let picture = cache_picture(&profile).unwrap_or_else(|_| {
+        snapshot.get("account.picture.path").cloned().unwrap_or_default()
+    });
+    let sealed = snapshot.get("google.token").ok_or("signed out")?;
+    s.set_settings_if_current(&[("account.provider", "google"), ("account.email", email), ("google.token", sealed)], &[
+        ("account.name", &profile.name), ("google.subject", &profile.subject),
+        ("account.picture.url", &profile.picture), ("account.picture.path", &picture),
+    ])?;
+    Ok(())
+}
+
+/// Follow all pages: Drive may return fewer than pageSize items even before the last page.
+fn list_device_files(mut fetch: impl FnMut(&str) -> Result<Json, String>) -> Result<Vec<Json>, String> {
+    let mut files = Vec::new();
+    let mut page = String::new();
+    let mut pages = std::collections::HashSet::new();
+    loop {
+        let url = format!("{FILES}?spaces=appDataFolder&q=trashed%3Dfalse&pageSize=1000&fields=nextPageToken%2Cfiles(id%2Cname%2CmodifiedTime)&pageToken={}", percent_encode(&page));
+        let response = fetch(&url)?;
+        let entries = response["files"].as_array().ok_or("Google Drive returned no file list")?;
+        files.extend(entries.iter().filter(|f| f["name"].as_str().is_some_and(device_file)).cloned());
+        let next = response["nextPageToken"].as_str().unwrap_or("");
+        if next.is_empty() {
+            return Ok(files);
+        }
+        if !pages.insert(next.to_string()) {
+            return Err("Google Drive repeated a page token".into());
+        }
+        page = next.to_string();
     }
 }
 
@@ -379,6 +557,110 @@ fn multipart(meta: &Json, content: &[u8]) -> (Vec<u8>, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn google_profile_uses_name_and_optional_safe_picture() {
+        let account = user_profile(&json!({"sub":"fixture-account", "email":" Person@Example.test ", "name":"  Mira Example  ", "picture":"https://lh3.googleusercontent.com/a/photo"}), String::new()).unwrap();
+        assert_eq!(account.name, "Mira Example");
+        assert_eq!(account.email, "person@example.test");
+        assert_eq!(account.subject, "fixture-account");
+        assert_eq!(account.picture, "https://lh3.googleusercontent.com/a/photo");
+        let fallback = user_profile(&json!({"sub":"fixture", "email":"a@example.test", "picture":"http://localhost/private"}), String::new()).unwrap();
+        assert_eq!(fallback.name, "a");
+        assert!(fallback.picture.is_empty());
+        assert!(user_profile(&json!({"email":"a@example.test"}), String::new()).is_err());
+        assert!(user_profile(&json!({"sub":"fixture"}), String::new()).is_err());
+    }
+
+    #[test]
+    fn profile_photo_allows_only_google_https_and_bounded_image_content() {
+        assert!(trusted_picture_url("https://lh3.googleusercontent.com/a/photo"));
+        assert!(trusted_picture_url("https://example.ggpht.com/photo"));
+        for url in ["http://lh3.googleusercontent.com/a", "https://googleusercontent.com.attacker.test/a", "https://lh3.googleusercontent.com@localhost/a", "https://lh3.googleusercontent.com:1234/a", "https://127.0.0.1/photo"] {
+            assert!(!trusted_picture_url(url));
+        }
+        assert!(picture_bytes(b"\x89PNG\r\n\x1a\nfixture"));
+        assert!(picture_bytes(b"\xff\xd8\xfffixture"));
+        assert!(!picture_bytes(b"<html>not an image</html>"));
+        let mut huge = vec![0; 1024 * 1024 + 1];
+        huge[..3].copy_from_slice(b"\xff\xd8\xff");
+        assert!(!picture_bytes(&huge));
+    }
+
+    #[test]
+    fn round_configuration_captures_one_account_and_rejects_session_changes() {
+        let mut settings: HashMap<String, String> = [
+            ("account.provider", "google"), ("account.email", "a@example.test"),
+            ("sync.enabled", "1"), ("sync.device", "aa01"), ("google.token", "sealed-a"),
+        ].into_iter().map(|(k, v)| (k.into(), v.into())).collect();
+        let config = RoundConfig::capture(&settings).unwrap();
+        assert!(config.still_current(&settings));
+        for (key, value) in [
+            ("account.email", "b@example.test"), ("google.token", "sealed-b"),
+            ("sync.device", "bb02"), ("sync.enabled", "0"), ("account.provider", ""),
+        ] {
+            let mut changed = settings.clone();
+            changed.insert(key.into(), value.into());
+            assert!(!config.still_current(&changed), "changed session must stop mirror writes");
+        }
+        settings.remove("google.token");
+        assert!(RoundConfig::capture(&settings).is_none());
+        assert_eq!(config.folder, storage::sync::account_dir(&mirror_root(), "a@example.test"));
+    }
+
+    #[test]
+    fn external_browser_requires_an_installed_executable() {
+        let root = std::env::temp_dir().join(format!("kakangkung-oauth-browser-{}", std::process::id()));
+        let candidate = root.join("Google/Chrome/Application/chrome.exe");
+        let _ = std::fs::remove_file(&candidate);
+        assert!(external_browser(std::slice::from_ref(&root)).is_none());
+        std::fs::create_dir_all(candidate.parent().unwrap()).unwrap();
+        std::fs::write(&candidate, b"test fixture").unwrap();
+        assert_eq!(external_browser(&[root]), Some(candidate.clone()));
+        std::fs::remove_file(candidate).unwrap();
+    }
+
+    #[test]
+    fn account_or_credential_changes_clear_all_mirror_caches() {
+        let identity = |account: &str, token: &str| Some((PathBuf::from(account), "client".into(), token.into()));
+        let mut mirror = Mirror::default();
+        mirror.select_identity(identity("a", "token-a"));
+        mirror.access = Some(("old-access".into(), Instant::now() + Duration::from_secs(60)));
+        mirror.seen.insert("file".into(), "time".into());
+        mirror.uploaded = Some(vec![1]);
+        mirror.select_identity(identity("a", "token-a"));
+        assert!(mirror.access.is_some(), "same session retains its cache");
+        mirror.select_identity(identity("b", "token-b"));
+        assert!(mirror.access.is_none() && mirror.seen.is_empty() && mirror.uploaded.is_none());
+        mirror.access = Some(("access-b".into(), Instant::now()));
+        mirror.select_identity(identity("b", "new-token-b"));
+        assert!(mirror.access.is_none(), "reauthorization invalidates cached credentials");
+        mirror.uploaded = Some(vec![2]);
+        mirror.select_identity(Some((PathBuf::from("b"), "another-client".into(), "new-token-b".into())));
+        assert!(mirror.uploaded.is_none(), "OAuth application changes invalidate transfer caches");
+        mirror.uploaded = Some(vec![3]);
+        mirror.select_identity(None);
+        assert!(mirror.identity.is_none() && mirror.uploaded.is_none());
+    }
+
+    #[test]
+    fn drive_listing_follows_pages_and_rejects_cycles() {
+        let mut calls = 0;
+        let files = list_device_files(|url| {
+            calls += 1;
+            assert!(url.contains("nextPageToken"));
+            Ok(if calls == 1 {
+                json!({"files": [{"name":"aa.json"}], "nextPageToken":"a+/="})
+            } else {
+                assert!(url.contains("pageToken=a%2B%2F%3D"));
+                json!({"files": [{"name":"bb.json"}, {"name":"notes.txt"}]})
+            })
+        }).unwrap();
+        assert_eq!(calls, 2);
+        assert_eq!(files.len(), 2);
+        assert!(list_device_files(|_| Ok(json!({"files": [], "nextPageToken":"repeat"}))).is_err());
+        assert!(list_device_files(|_| Ok(json!({"error":"denied"}))).is_err());
+    }
 
     #[test]
     fn pkce_matches_rfc7636_example() {

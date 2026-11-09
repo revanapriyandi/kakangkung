@@ -4,6 +4,49 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-09
+
+### Fixed
+- Muted video, picture-in-picture and sibling frames now retain media protection correctly;
+  detached stopped media releases its references instead of keeping a tab protected forever.
+- Google display names and profile photos now refresh for existing signed-in accounts and
+  render from a small native image cache, with an initial fallback.
+- Web Store packages stay staged until consent; failed replacement restores the previous
+  files. Store buttons reject stale SPA routes and duplicate clicks.
+- The Downloads toolbar button appears automatically on download activity without changing
+  the pinned-button preference.
+- Task manager totals include every identified WebView2 environment process, even when
+  Windows groups the runtime separately from the app.
+- Password origins, existing vault entries, CSV fidelity and form targeting; delayed save
+  callbacks survive login redirects and stale callbacks cannot replace newer offers.
+- Google account switching no longer reuses another account's mirror caches or reads a
+  different refresh credential midway through selecting an account's sync folder.
+- Live Chrome history imports include committed WAL data. Automatic refresh skips unchanged
+  sources, retries incomplete bookmark reads, and leaves password imports to an explicit action.
+- Audio/media and changed protection wake hidden tabs correctly; failed lifecycle commands
+  remain retryable and replacing split views hides obsolete tabs.
+
+### Added
+- Native tab hover cards with bounded in-memory snapshots and memory diagnostics; affected
+  WebView2 runtimes use an explicitly labelled JavaScript-heap fallback. Cards place the
+  title/domain above a full-width screenshot and memory usage with an icon in the footer.
+- Docked DevTools panel and a page Inspect route; native hosting errors close the inspector
+  rather than leaving it detached. A native clipping viewport removes Chromium's extra
+  client-painted window title bar while retaining its developer tool tabs.
+- Ad blocker toolbar controls, exact-site pause, shared EasyList/EasyPrivacy network matching,
+  and bounded YouTube player-data filtering with basic ad-element hiding.
+- Maximum Memory Saver is the default for new/reset profiles; protected active media stays
+  running and existing saved settings are retained.
+- Synthetic password-form regression fixtures, isolated native parity checks, and a
+  [feature investigation with verification boundaries](docs/CHROME_PARITY.md).
+
+### Verification and limits
+- The signed-out YouTube/GitHub/Instagram/Facebook playback smoke test passed, including
+  muted video continuing in a hidden tab; the approximately 100 MiB total-memory target
+  remains unmet. Hover-card JS heap values are not whole-tab or whole-browser memory.
+- Google consent and authenticated profile/sync delivery still require the application's
+  own OAuth setup and have not been verified against a personal Google account.
+
 ## [0.2.0] - 2026-11-08
 
 ### Fixed
@@ -55,7 +98,7 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
   row zoom too).
 - The Task manager counts memory exactly like Windows Task Manager: every Kakangkung process
   (all windows, every WebView2 process, the crash handler), each at the value of Windows Task
-  Manager's Memory column, so the two always agree.
+  Manager's Memory column. Windows app grouping can differ from the browser process set.
 
 ## [0.1.1] - 2026-11-08
 

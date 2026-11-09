@@ -91,6 +91,7 @@ pub enum Control {
     Link { id: String },
     /// An avatar with an initial at the start of the row (accounts).
     Avatar { initial: String },
+    AvatarImage { initial: String, path: String },
     /// A list entry (a visited page, a bookmark): an icon at the start, the whole row opens `id`
     /// (reported as a link), and a remove button reports `remove`.
     Entry { id: String, icon: String, remove: String },

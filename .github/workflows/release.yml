@@ -70,7 +70,8 @@ jobs:
       - name: Portable zip
         shell: pwsh
         run: |
-          Compress-Archive -Path target\${{ matrix.target }}\release\kakangkung.exe, LICENSE, README.md `
+          Compress-Archive -Path target\${{ matrix.target }}\release\kakangkung.exe, LICENSE, README.md, `
+            THIRD_PARTY_NOTICES.md, assets\filterlists\LICENSE-MPL-2.0.txt, assets\filterlists\LICENSE-CC-BY-SA-3.0.txt `
             -DestinationPath "dist\Kakangkung-$env:VERSION-${{ matrix.arch }}.zip"
 
       - name: Installer smoke test

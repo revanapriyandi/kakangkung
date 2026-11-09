@@ -12,8 +12,8 @@ ARM64.
 3. Commit, then tag and push:
 
    ```powershell
-   git tag v0.2.0
-   git push origin main v0.2.0
+   git tag -a v0.3.0 -m "Kakangkung 0.3.0"
+   git push origin main v0.3.0
    ```
 
 4. The workflow builds both architectures, makes the installers and portable zips, writes
@@ -37,6 +37,9 @@ as the run's artifacts (`kakangkung-release-dry-run`).
 | `Kakangkung-<version>-x64.zip` | Portable, Windows x64 |
 | `Kakangkung-<version>-arm64.zip` | Portable, Windows ARM64 |
 | `SHA256SUMS.txt` | Checksums of all of the above (the updater verifies against it) |
+
+Both installers and portable ZIPs include `THIRD_PARTY_NOTICES.md` and the full
+MPL-2.0 and CC BY-SA 3.0 license texts for the bundled ad-blocking components.
 
 ### Code signing
 

@@ -91,6 +91,19 @@ pub fn transition(state: Lifecycle, event: Event, protected: bool) -> Step {
     }
 }
 
+/// State after a synchronous command succeeds. Keep this progress if a later
+/// command fails, so activation can retry without losing an existing webview.
+/// `TrySuspend` is provisional until the platform completion callback confirms it.
+pub fn after_command(command: Command) -> Lifecycle {
+    match command {
+        Command::CreateWebview | Command::Resume | Command::Hide | Command::SetLevelNormal => Lifecycle::Idle,
+        Command::Show => Lifecycle::Active,
+        Command::DropWebview => Lifecycle::Discarded,
+        Command::SetLevelLow => Lifecycle::LowMemory,
+        Command::TrySuspend => Lifecycle::Suspended,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Command::*, Event::*, Forbidden as F, Lifecycle::*, *};
@@ -161,6 +174,15 @@ mod tests {
         for (s, e, p, want) in table {
             assert_eq!(&transition(*s, *e, *p), want, "{s:?} + {e:?} (protected={p})");
         }
+    }
+
+    #[test]
+    fn failed_activation_keeps_a_retryable_state() {
+        assert_eq!(after_command(CreateWebview), Idle);
+        assert_eq!(after_command(Resume), Idle);
+        assert_eq!(after_command(Hide), Idle);
+        assert_eq!(after_command(SetLevelNormal), Idle);
+        assert_eq!(after_command(Show), Active);
     }
 
     /// Rule 3.2 as invariants over every reachable command list.

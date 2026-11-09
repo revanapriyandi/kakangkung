@@ -11,6 +11,8 @@
   const shown = (el) => el.isConnected && el.getClientRects().length > 0;
   const scope = (el) => el.form || document;
   const pwIn = (root) => [...root.querySelectorAll("input[type=password]")].filter(shown);
+  const isNew = (el) => /(?:^|\s)new-password(?:\s|$)/i.test(el.autocomplete || "");
+  const fillable = (root) => pwIn(root).filter((el) => !isNew(el) && !el.disabled && !el.readOnly);
   const hint = (el) => `${el.name} ${el.id} ${el.autocomplete} ${el.getAttribute("aria-label") || ""} ${el.placeholder || ""}`;
   const userish = (el) =>
     el instanceof HTMLInputElement && TEXTY.includes(el.type) &&
@@ -36,7 +38,7 @@
   let active = null;
   document.addEventListener("focusin", (e) => {
     const t = e.target;
-    const login = isPw(t) || (userish(t) && (pwIn(scope(t)).length > 0 || /username|email/.test(t.autocomplete) || t.type === "email"));
+    const login = (isPw(t) && !isNew(t)) || (userish(t) && (fillable(scope(t)).length > 0 || /username|email/.test(t.autocomplete) || t.type === "email"));
     if (!login) return;
     active = t;
     const r = t.getBoundingClientRect();
@@ -55,11 +57,11 @@
     el.dispatchEvent(new Event("change", { bubbles: true }));
   };
   window.__kkPwFill = (user, pass) => {
-    const from = active && active.isConnected ? active : pwIn(document)[0];
-    if (!from) return;
-    const pw = isPw(from) ? from : pwIn(scope(from))[0];
+    const from = active && active.isConnected && shown(active) ? active : null;
+    if (!from || from.disabled || from.readOnly || (isPw(from) && isNew(from))) return;
+    const pw = isPw(from) && !isNew(from) ? from : fillable(scope(from))[0];
     const u = userish(from) || !pw ? from : userFor(pw);
-    if (u && u !== pw && user) put(u, user);
+    if (u && u !== pw) put(u, user);
     if (pw) put(pw, pass);
     if (user) remember(user);
   };
@@ -85,11 +87,16 @@
       else if (++n > 20) { pending = null; clearInterval(timer); }
     }, 500);
   };
-  document.addEventListener("submit", (e) => capture(pwIn(e.target)[0]), true);
+  const submittedPassword = (root) => {
+    const fields = pwIn(root);
+    return fields.find((el) => isNew(el) && el.value) || fields[0];
+  };
+  document.addEventListener("submit", (e) => capture(submittedPassword(e.target)), true);
   document.addEventListener("keydown", (e) => { if (e.key === "Enter" && isPw(e.target)) capture(e.target); }, true);
   document.addEventListener("click", (e) => {
     const b = e.target.closest && e.target.closest("button, input[type=submit], input[type=button], [role=button]");
-    if (b) capture(pwIn(scope(b))[0] || pwIn(document)[0]);
+    // A toolbar button outside a login form is not a login attempt.
+    if (b && b.form) capture(submittedPassword(b.form));
   }, true);
   addEventListener("pagehide", send);
 })();

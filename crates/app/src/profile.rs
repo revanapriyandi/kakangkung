@@ -22,7 +22,7 @@ pub(crate) fn import_from_chrome(s: &Store) -> Result<String, String> {
 pub(crate) fn import_browser_default(s: &Store, b: &storage::chrome::Browser) -> Result<String, String> {
     let dir = storage::chrome::default_profile(b).ok_or("no profile")?;
     let name = b.profiles.iter().find(|p| p.dir == dir).map(|p| p.name.clone()).unwrap_or_else(|| dir.clone());
-    let summary = s.import_browser(b, &dir)?.summary(&format!("{} profile \"{name}\"", b.name));
+    let summary = s.refresh_browser(b, &dir)?.summary(&format!("{} profile \"{name}\"", b.name));
     s.set_setting("import.summary", &summary)?;
     Ok(summary)
 }
@@ -33,13 +33,25 @@ pub(crate) fn keep_browsers_in_sync(s: &Store) -> usize {
     let keep = s.setting("import.keep").unwrap_or_default();
     let mut n = 0;
     for b in storage::chrome::browsers().iter().filter(|b| keep.split(',').any(|k| k == b.id)) {
-        match storage::chrome::default_profile(b).map(|d| s.import_browser(b, &d)) {
-            Some(Ok(_)) => n += 1,
+        match storage::chrome::default_profile(b).map(|d| refresh_if_changed(s, b, &d)) {
+            Some(Ok(true)) => n += 1,
+            Some(Ok(false)) => {},
             Some(Err(e)) => eprintln!("keeping {} in sync: {e}", b.name),
             None => {}
         }
     }
     n
+}
+
+fn refresh_if_changed(s: &Store, b: &storage::chrome::Browser, profile: &str) -> Result<bool, String> {
+    let stamp = storage::chrome::data_stamp(b, profile)?;
+    let key = format!("import.stamp.{}", b.id);
+    if s.setting(&key).as_deref() == Some(stamp.as_str()) {
+        return Ok(false);
+    }
+    s.refresh_browser(b, profile)?;
+    s.set_setting(&key, &stamp)?;
+    Ok(true)
 }
 
 /// The signed-in Kakangkung account (name, email), if any.
@@ -101,6 +113,7 @@ pub(crate) fn sync_status(s: &Store) -> Json {
         "signedIn": acct.is_some(),
         "name": acct.as_ref().map(|a| a.0.clone()).unwrap_or_default(),
         "email": acct.as_ref().map(|a| a.1.clone()).unwrap_or_default(),
+        "picture": if acct.is_some() { s.setting("account.picture.path").unwrap_or_default() } else { String::new() },
         "types": storage::sync::Types::parse(s.setting("sync.types").as_deref()),
         "folder": sync_folder(s).display().to_string(),
         "google": crate::google::is_google(s),
@@ -159,15 +172,47 @@ pub(crate) fn sign_in(s: &Store, name: &str, email: &str, types: &str) -> Result
         return Err("Enter your name (up to 60 characters).".into());
     }
     let types = storage::sync::Types::parse(Some(types));
-    s.set_setting("account.name", name)?;
-    s.set_setting("account.email", &email)?;
-    s.set_setting("sync.types", &types.list())?;
-    s.set_setting("sync.enabled", "1")
+    crate::google::forget(s);
+    s.set_settings(&[("account.name", name), ("account.email", &email), ("sync.types", &types.list()), ("sync.enabled", "1")])
 }
 
 pub(crate) fn sign_out(s: &Store) -> Result<(), String> {
     crate::google::forget(s);
-    s.set_setting("account.email", "")?;
-    s.set_setting("account.name", "")?;
-    s.set_setting("sync.enabled", "0")
+    s.set_settings(&[("account.email", ""), ("account.name", ""), ("sync.enabled", "0")])
+}
+
+#[cfg(test)]
+mod import_tests {
+    use super::*;
+
+    #[test]
+    fn refresh_caches_only_successful_snapshots_and_never_reads_passwords() {
+        let root = std::env::temp_dir().join(format!("kakangkung-refresh-test-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("source/Default")).unwrap();
+        let history = root.join("source/Default/History");
+        let source = platform::sqlite::Db::open(&history, false).unwrap();
+        source.batch("CREATE TABLE IF NOT EXISTS urls(url TEXT, title TEXT, visit_count INTEGER, last_visit_time INTEGER, hidden INTEGER)").unwrap();
+        let login = platform::sqlite::Db::open(&root.join("source/Default/Login Data"), false).unwrap();
+        login.batch("CREATE TABLE IF NOT EXISTS logins(origin_url TEXT, username_value TEXT, password_value BLOB, blacklisted_by_user INTEGER); DELETE FROM logins").unwrap();
+        let encrypted = platform::protect(b"synthetic-fixture-only").unwrap();
+        let hex: String = encrypted.iter().map(|b| format!("{b:02x}")).collect();
+        login.run(&format!("INSERT INTO logins VALUES('https://fixture.example', 'fixture', X'{hex}', 0)"), &[]).unwrap();
+        drop(login);
+        let store = Store::open(&root.join("store.db")).unwrap();
+        let browser = storage::chrome::Browser { id: "chrome", name: "Fixture Chrome", dir: root.join("source"), chromium: true,
+            profiles: vec![storage::chrome::ChromeProfile { dir: "Default".into(), name: "Fixture".into(), history: history.display().to_string(), history_bytes: 0, extensions: vec![] }] };
+        let bookmarks = root.join("source/Default/Bookmarks");
+        std::fs::write(&bookmarks, "incomplete JSON").unwrap();
+        assert!(refresh_if_changed(&store, &browser, "Default").is_err());
+        assert!(store.setting("import.stamp.chrome").is_none());
+        std::fs::write(&bookmarks, r#"{"roots":{"bookmark_bar":{"children":[{"type":"url","url":"https://fixture.example/","name":"Fixture"}]}}}"#).unwrap();
+        assert!(refresh_if_changed(&store, &browser, "Default").unwrap());
+        assert!(!refresh_if_changed(&store, &browser, "Default").unwrap());
+        assert_eq!(store.bookmarks().unwrap().len(), 1);
+        assert!(store.logins("").unwrap().is_empty());
+        assert_eq!(store.import_browser(&browser, "Default").unwrap().passwords, 1);
+        drop(source);
+        drop(store);
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

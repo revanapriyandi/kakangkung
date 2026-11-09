@@ -110,6 +110,7 @@ pub struct FrameState {
     pub pinned: Vec<Pinned>,
     /// Account initial ("" = signed out).
     pub avatar: String,
+    pub avatar_image: String,
     pub synced: bool,
     pub maximized: bool,
     /// Tab search is open (its button is drawn pressed).
@@ -123,6 +124,7 @@ pub(super) const TAB_GROW_MS: f32 = 200.0;
 /// spinner and keeps the CPU-drawn frame cheap while pages load.
 pub(super) const TIMER_SPIN: usize = 2;
 const SPIN_MS: u32 = 50;
+pub(super) const TIMER_TAB_PREVIEW: usize = 3;
 
 struct Gfx {
     factory: ID2D1Factory,
@@ -146,6 +148,9 @@ struct Inner {
     state: FrameState,
     hover: Hit,
     pressed: Hit,
+    preview_tab: Option<u64>,
+    synthetic_hover: bool,
+    synthetic_omnibox_focus: bool,
     tracking: bool,
     /// Tab drag: (tab id, start x, moved).
     drag: Option<(u64, f32, bool)>,
@@ -209,6 +214,9 @@ impl Frame {
                 state: FrameState::default(),
                 hover: Hit::None,
                 pressed: Hit::None,
+                preview_tab: None,
+                synthetic_hover: false,
+                synthetic_omnibox_focus: false,
                 tracking: false,
                 drag: None,
                 quiet: false,
@@ -286,7 +294,7 @@ impl Frame {
             return;
         }
         // SAFETY: the EDIT control is a live child of the frame.
-        let editing = unsafe { GetFocus() } == i.edit;
+        let editing = i.synthetic_omnibox_focus || unsafe { GetFocus() } == i.edit;
         let text_changed = i.state.display != state.display;
         // Tabs that were not there before widen into place (not the first tabs of the window).
         if !i.state.tabs.is_empty() {
@@ -335,7 +343,15 @@ impl Frame {
     }
 
     pub fn omnibox_has_focus(&self) -> bool {
-        self.inner().is_some_and(|i| unsafe { GetFocus() } == i.borrow().edit)
+        self.inner().is_some_and(|i| {
+            let state = i.borrow();
+            state.synthetic_omnibox_focus || unsafe { GetFocus() } == state.edit
+        })
+    }
+
+    /// Keep the native fixture independent of focus in the person's other desktop windows.
+    pub fn set_fixture_omnibox_focus(&self, focused: bool) {
+        if let Some(inner) = self.inner() { inner.borrow_mut().synthetic_omnibox_focus = focused; }
     }
 
     /// The text in the address bar.
@@ -366,6 +382,23 @@ impl Frame {
             SendMessageW(self.hwnd, windows::Win32::UI::WindowsAndMessaging::WM_LBUTTONDOWN, Some(WPARAM(1)), Some(LPARAM(at as isize)));
             SendMessageW(self.hwnd, windows::Win32::UI::WindowsAndMessaging::WM_LBUTTONUP, Some(WPARAM(0)), Some(LPARAM(at as isize)));
         }
+    }
+
+    /// Send the normal mouse-move path without moving the physical pointer (native fixture).
+    pub fn hover_tab(&self, id: u64) -> bool {
+        let point = self.inner().and_then(|inner| {
+            inner.borrow().hits.iter().find_map(|(r,hit)| (*hit == Hit::Tab(id)).then_some((r.left + 12.0,(r.top+r.bottom)/2.0)))
+        });
+        let Some((x,y)) = point else { return false; };
+        if let Some(inner)=self.inner() {
+            let mut state=inner.borrow_mut();
+            state.synthetic_hover=true;
+            state.preview_tab=None;
+        }
+        let scale = input::scale_of(self.hwnd);
+        let at = (((y*scale) as i32 as u32 as usize)<<16) | ((x*scale) as i32 as u16 as usize);
+        unsafe { SendMessageW(self.hwnd,windows::Win32::UI::WindowsAndMessaging::WM_MOUSEMOVE,Some(WPARAM(0)),Some(LPARAM(at as isize))); }
+        true
     }
 
     /// Where the address bar is (DIPs in the frame), for placing the suggestions below it.

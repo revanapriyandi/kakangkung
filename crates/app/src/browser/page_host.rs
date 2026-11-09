@@ -320,6 +320,8 @@ impl Browser {
 
     /// A download moved on: redraw the Downloads page soon (not for every chunk of bytes).
     pub(crate) fn downloads_changed(&mut self) {
+        self.downloads_visible = true;
+        self.render();
         // Finished ones move to disk so the list survives a restart (Incognito ones stay here).
         let taken = platform::take_finished();
         let any_done = taken.iter().any(|d| d.state == platform::DownloadState::Done);

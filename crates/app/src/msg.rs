@@ -12,6 +12,9 @@ pub(crate) enum Msg {
     Ipc(String),
     /// A download started or moved on (for the Downloads page).
     DownloadsChanged,
+    TabThumbnail { id: u64, revision: u64, result: Result<platform::Thumbnail, String> },
+    TabMemory { id: u64, revision: u64, result: Result<platform::TabMemory, String> },
+    Inspect(u64),
     /// The updater moved on (checking, downloading, ready…).
     Update(crate::update::Status),
     /// An API answer for a native page: what was asked, the message to show when it worked.
@@ -24,6 +27,8 @@ pub(crate) enum Msg {
     Store { tab: u64, cmd: String },
     /// A store extension was downloaded and unpacked (or failed); install it on the UI thread.
     StoreUnpacked { tab: u64, ext: String, result: Result<PathBuf, String> },
+    StorePrepared { tab: u64, ext: String, result: Result<crate::webstore::InstallSwap, String> },
+    StoreInstalled { tab: u64, ext: String, result: Result<(), String> },
     /// Show `text` on the store page's button for extension `ext` ("ready" = clickable).
     StoreButton { tab: u64, ext: String, state: &'static str, text: String },
     /// The extensions list for the toolbar's extensions menu, opened at (x, y).
@@ -44,6 +49,8 @@ pub(crate) enum Msg {
     Engine(String),
     /// Signed-in account name ("" = signed out), for the avatar.
     Account(String),
+    /// Refreshed Google display name and locally cached profile photo.
+    AccountProfile(String, String),
     /// Bookmarks arrived from another device.
     BookmarksChanged,
     /// Appearance or privacy settings changed.
@@ -63,13 +70,13 @@ pub(crate) enum Msg {
     /// Saved logins for the login field that got focus in tab `tab`.
     Logins { tab: u64, origin: String, logins: Vec<storage::passwords::Login> },
     /// A login went through that is not saved yet (`update`: a new password for a saved one).
-    PasswordAsk { tab: u64, cred: storage::passwords::Credential, update: bool },
+    PasswordAsk { tab: u64, cred: storage::passwords::Credential, update: bool, sequence: u64 },
     /// How many logins are saved for the active page's origin (the key in the address bar).
     SavedLogins { origin: String, n: usize },
     /// The login picked under a field, to fill into tab `tab` while it shows `origin`.
     PasswordFill { tab: u64, origin: String, user: String, pass: String },
     /// The tab's page started or stopped using the camera, microphone or screen capture.
-    Media { id: u64, live: bool },
+    Media { id: u64, frame: String, live: bool },
     Do(Action),
     OpenTab(String),
     Suspended { id: u64, ok: bool },

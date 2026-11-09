@@ -9,12 +9,12 @@ use super::build::{buttons, initial, nav, section};
 pub(crate) fn welcome_doc(b: &Json) -> PageDoc {
     let mut sections = vec![section("hello", "", vec![
         Row::new("Welcome to Kakangkung", "A light, safe browser. Bring your history, bookmarks and extensions over from Chrome, Edge, Brave, Firefox and more.", Control::Illustration { glyph: "\u{E8B5}".into() }),
-        Row::new("Turn on sync", "Share history and open tabs between your PCs through a OneDrive folder", Control::Link { id: "open:sync".into() }),
+        Row::new("Turn on sync", "Share Kakangkung data between your PCs through Google Drive or a cloud folder", Control::Link { id: "open:sync".into() }),
         Row::new("Start browsing", "Ctrl+T new tab, Ctrl+L address bar, Ctrl+H history", Control::Link { id: "open:".into() }),
     ])];
     let mut import = vec![Row::new(
         "Your data stays on this PC",
-        "Kakangkung reads the other browsers' files on this computer only; nothing is sent anywhere. Turn on \"Keep in sync\" to bring over new history and bookmarks automatically while you use both.",
+        "Import reads browser files on this PC. Keep in sync copies new history and bookmarks into Kakangkung when the source changes; it does not write back to Chrome or connect to Chrome Sync. Passwords need a separate import. Cloud sync, if enabled separately, can upload imported history and bookmarks.",
         Control::None,
     )];
     if let Some(done) = b["imported"].as_str().filter(|s| !s.is_empty()) {
@@ -30,7 +30,7 @@ pub(crate) fn welcome_doc(b: &Json) -> PageDoc {
         let name = br["name"].as_str().unwrap_or(id);
         let mut rows = vec![
             Row::new(name, "", Control::Avatar { initial: initial(name) }),
-            Row::new("Keep in sync", "New history and bookmarks come over automatically", Control::Toggle { id: format!("keep:{id}"), on: br["keep"].as_bool().unwrap_or(false) }),
+            Row::new("Keep in sync", "Copy new history and bookmarks into Kakangkung; passwords are not refreshed", Control::Toggle { id: format!("keep:{id}"), on: br["keep"].as_bool().unwrap_or(false) }),
         ];
         for p in br["profiles"].as_array().into_iter().flatten() {
             let dir = p["dir"].as_str().unwrap_or("");

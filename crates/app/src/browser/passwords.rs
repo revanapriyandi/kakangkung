@@ -4,6 +4,7 @@
 use platform::popup::PopupRow;
 use serde_json::{json, Value as Json};
 use storage::passwords::{origin_of, Credential, Login};
+use std::time::{Duration, Instant};
 
 use crate::browser::Browser;
 use crate::i18n::tr;
@@ -22,8 +23,25 @@ pub(crate) struct PasswordState {
     /// The last login offered for saving and not answered yet: tab, login, update. The key in
     /// the address bar shows it again ("not now" keeps it, like Chrome).
     offer: Option<(u64, Credential, bool)>,
+    capture_sequence: u64,
+    capture: Option<(u64, u64, Instant)>,
     /// The active page's origin when it has saved logins, and how many.
     pub(crate) saved: Option<(String, usize)>,
+}
+
+impl PasswordState {
+    fn begin_capture(&mut self, tab: u64) -> u64 {
+        self.capture_sequence = self.capture_sequence.wrapping_add(1);
+        self.capture = Some((tab, self.capture_sequence, Instant::now()));
+        self.capture_sequence
+    }
+
+    fn accept_capture(&mut self, tab: u64, sequence: u64) -> bool {
+        let Some((t, seq, at)) = self.capture else { return false };
+        if t != tab || seq != sequence { return false; }
+        self.capture = None;
+        at.elapsed() <= Duration::from_secs(30)
+    }
 }
 
 impl Browser {
@@ -31,6 +49,9 @@ impl Browser {
     pub(crate) fn on_password_message(&mut self, tab: u64, url: &str, what: &str) {
         let Some(origin) = origin_of(url) else { return };
         if what == "blur" {
+            if !self.passwords.focus.as_ref().is_some_and(|(t, o, _)| *t == tab && *o == origin) {
+                return;
+            }
             self.passwords.focus = None;
             if self.overlay_open && self.overlay_kind == "pwfill" {
                 self.hide_overlay();
@@ -59,21 +80,31 @@ impl Browser {
                 return;
             }
             let Ok(v) = serde_json::from_str::<Json>(sent) else { return };
-            let cred = Credential { origin, username: v["u"].as_str().unwrap_or("").trim().to_string(), password: v["p"].as_str().unwrap_or("").to_string() };
+            let cred = Credential { origin, username: v["u"].as_str().unwrap_or("").to_string(), password: v["p"].as_str().unwrap_or("").to_string() };
             if cred.password.is_empty() {
                 return;
             }
+            let sequence = self.passwords.begin_capture(tab);
             let p = self.proxy.clone();
             self.db(move |s| {
                 if s.is_never_saved(&cred.origin) {
                     return Ok(());
                 }
                 if let Some(update) = s.password_change(&cred)? {
-                    let _ = p.send_event(Msg::PasswordAsk { tab, cred, update });
+                    let _ = p.send_event(Msg::PasswordAsk { tab, cred, update, sequence });
                 }
                 Ok(())
             });
         }
+    }
+
+    /// The source URI was captured by the browser before a possible login redirect. Saving
+    /// it never releases a stored password into the destination page.
+    pub(crate) fn accept_password_offer(&mut self, tab: u64, cred: Credential, update: bool, sequence: u64) {
+        if !self.settings.protection.save_passwords || !self.passwords.accept_capture(tab, sequence) {
+            return;
+        }
+        self.ask_save_password(tab, cred, update);
     }
 
     /// Saved logins for the focused field arrived: offer them under it.
@@ -102,6 +133,9 @@ impl Browser {
         let (Some(n), Some((tab, origin, _))) = (id.strip_prefix("fill:").and_then(|n| n.parse::<i64>().ok()), self.passwords.focus.clone()) else { return };
         let p = self.proxy.clone();
         self.db(move |s| {
+            if !s.logins_for(&origin)?.iter().any(|l| l.id == n && can_fill_origin(&origin, &l.origin)) {
+                return Ok(());
+            }
             let (login, pass) = s.password(n, true)?;
             let _ = p.send_event(Msg::PasswordFill { tab, origin, user: login.username, pass });
             Ok(())
@@ -110,6 +144,9 @@ impl Browser {
 
     /// Fill a login into the page of tab `tab`, only while it still shows `origin`.
     pub(crate) fn fill_login(&mut self, tab: u64, origin: &str, user: &str, pass: &str) {
+        if tab != self.active || !self.passwords.focus.as_ref().is_some_and(|(t, o, _)| *t == tab && o == origin) {
+            return;
+        }
         let Some(wv) = self.index(tab).and_then(|i| self.tabs[i].webview.as_ref()) else { return };
         // `location.origin` cannot be faked by the page: a page that navigated away meanwhile
         // gets nothing.
@@ -120,6 +157,9 @@ impl Browser {
     /// "Save password for example.com?": Save / Never; closing it is "not now" (the key in the
     /// address bar brings it back).
     pub(crate) fn ask_save_password(&mut self, tab: u64, cred: Credential, update: bool) {
+        if !self.index(tab).is_some_and(|i| !self.tabs[i].view.private) {
+            return;
+        }
         self.passwords.offer = Some((tab, cred.clone(), update));
         self.render();
         if tab != self.active || (self.overlay_open && self.overlay_kind != "pwsave") {
@@ -142,11 +182,11 @@ impl Browser {
     /// The save dialog was answered: "save" or "never".
     pub(crate) fn answer_save_password(&mut self, answer: &str) {
         self.hide_overlay();
-        let Some((_, cred, _)) = self.passwords.offer.take() else { return };
+        let Some((_, cred, update)) = self.passwords.offer.take() else { return };
         match answer {
             "save" => {
                 let n = self.passwords.saved.as_ref().filter(|(o, _)| *o == cred.origin).map_or(0, |(_, n)| *n);
-                self.passwords.saved = Some((cred.origin.clone(), n + 1));
+                self.passwords.saved = Some((cred.origin.clone(), n + usize::from(!update)));
                 self.db(move |s| s.save_password(&cred));
             }
             "never" => self.db(move |s| s.never_save(&cred.origin)),
@@ -158,7 +198,7 @@ impl Browser {
     /// Show the key in the address bar? The active page has saved logins or a login to save.
     pub(crate) fn key_shown(&self) -> bool {
         let Some(origin) = self.index(self.active).and_then(|i| origin_of(&self.tabs[i].view.url)) else { return false };
-        let offered = self.passwords.offer.as_ref().is_some_and(|(t, c, _)| *t == self.active && c.origin == origin);
+        let offered = self.passwords.offer.as_ref().is_some_and(|(t, _, _)| *t == self.active);
         offered || self.passwords.saved.as_ref().is_some_and(|(o, _)| *o == origin)
     }
 
@@ -187,5 +227,48 @@ impl Browser {
             self.passwords.saved = (n > 0).then_some((origin, n));
             self.render();
         }
+    }
+}
+
+fn can_fill_origin(page: &str, saved: &str) -> bool {
+    page == saved || page.strip_prefix("https://").zip(saved.strip_prefix("http://")).is_some_and(|(a, b)| a == b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{can_fill_origin, PasswordState};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn latest_trusted_capture_can_be_offered_after_a_redirect_only_once() {
+        let mut state = PasswordState::default();
+        let stale = state.begin_capture(1);
+        let current = state.begin_capture(1);
+        assert!(!state.accept_capture(1, stale));
+        assert!(!state.accept_capture(2, current));
+        // Acceptance binds to the source capture, independently of the tab's new URL.
+        assert!(state.accept_capture(1, current));
+        assert!(!state.accept_capture(1, current));
+    }
+
+    #[test]
+    fn expired_or_superseded_captures_cannot_overwrite_an_offer() {
+        let mut state = PasswordState::default();
+        let expired = state.begin_capture(1);
+        state.capture = Some((1, expired, Instant::now() - Duration::from_secs(31)));
+        assert!(!state.accept_capture(1, expired));
+        let old = state.begin_capture(1);
+        let new = state.begin_capture(2);
+        assert!(!state.accept_capture(1, old));
+        assert!(state.accept_capture(2, new));
+    }
+
+    #[test]
+    fn credentials_only_fill_their_site_and_allow_secure_upgrade() {
+        assert!(can_fill_origin("https://a.example", "https://a.example"));
+        assert!(can_fill_origin("https://a.example", "http://a.example"));
+        assert!(!can_fill_origin("http://a.example", "https://a.example"));
+        assert!(!can_fill_origin("https://other.example", "https://a.example"));
+        assert!(!can_fill_origin("https://a.example:8443", "https://a.example"));
     }
 }

@@ -95,7 +95,7 @@ impl Browser {
         };
         match self.pending_install.as_mut() {
             Some(p) if p.ext == ext => p.folder = Some(folder),
-            _ => return,
+            _ => { std::thread::spawn(move || { let _ = std::fs::remove_dir_all(folder); }); return; },
         }
         self.ask_install();
     }
@@ -134,23 +134,56 @@ impl Browser {
             return self.store_button(tab, &ext, "ready", "Add to Kakangkung");
         }
         self.store_button(tab, &ext, "busy", "Adding…");
-        self.load_store_extension(tab, ext, folder);
+        self.pending_install = Some(PendingInstall { tab, ext: ext.clone(), name: String::new(), folder: None });
+        let root = self.paths.extensions.clone();
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            let result = webstore::commit_install(&folder, &ext, &root);
+            let _ = proxy.send_event(Msg::StorePrepared { tab, ext, result });
+        });
     }
 
-    fn load_store_extension(&mut self, tab: u64, ext: String, folder: std::path::PathBuf) {
-        let failed = |e: &str| format!("Couldn't add: {}", e.chars().take(90).collect::<String>());
-        let Some(wv) = self.extension_host() else { return self.store_button(tab, &ext, "ready", &failed("open a tab first")) };
+    pub(crate) fn load_prepared_extension(&mut self, tab: u64, ext: String, result: Result<webstore::InstallSwap, String>) {
+        let swap = match result {
+            Ok(swap) => swap,
+            Err(error) => return self.store_installed(tab, ext, Err(error)),
+        };
         let proxy = self.proxy.clone();
-        platform::extension_add(wv, &folder, move |r| {
-            let (state, text) = match r {
-                Ok(_) => ("done", "Added to Kakangkung".to_string()),
-                Err(e) => {
-                    eprintln!("web store install {ext}: {e}");
-                    ("ready", failed(&e))
+        let folder = swap.folder.clone();
+        let finish = move |result: Result<platform::Extension, String>| {
+            std::thread::spawn(move || {
+                let result = match result {
+                    Ok(extension) if extension.id == ext => { swap.finish(); Ok(()) },
+                    Ok(_) => swap.rollback().and(Err("The runtime returned an unexpected extension ID.".into())),
+                    Err(error) => match swap.rollback() {
+                        Ok(()) => Err(error),
+                        Err(restore) => Err(format!("{error}; restoring the previous extension: {restore}")),
+                    },
+                };
+                let _ = proxy.send_event(Msg::StoreInstalled { tab, ext, result });
+            });
+        };
+        match self.extension_host() {
+            Some(wv) => {
+                platform::extension_add(wv, &folder, finish);
+            }
+            None => finish(Err("Open a web tab before installing an extension.".into())),
+        }
+    }
+
+    pub(crate) fn store_installed(&mut self, tab: u64, ext: String, result: Result<(), String>) {
+        self.pending_install = None;
+        match result {
+            Ok(()) => self.store_button(tab, &ext, "done", "Added to Kakangkung"),
+            Err(error) => {
+                eprintln!("web store install {ext}: {error}");
+                self.store_button(tab, &ext, "ready", &format!("Couldn't add: {error}"));
+                if self.native.page == "extensions" {
+                    self.native.toast = error;
+                    self.draw_native();
                 }
-            };
-            let _ = proxy.send_event(Msg::StoreButton { tab, ext, state, text });
-        });
+            }
+        }
     }
 
     /// The extensions button was pressed at (`right`, `top`): list the extensions, then show
@@ -268,6 +301,10 @@ impl Browser {
             icon: String::new(),
         });
         let mut out: Vec<platform::frame::Pinned> = pages.collect();
+        out.push(platform::frame::Pinned { id: "adblock".into(), glyph: "\u{EA18}", icon: String::new() });
+        if self.downloads_visible && !self.settings.pinned_pages.contains(&"downloads") {
+            out.push(platform::frame::Pinned { id: "page:downloads".into(), glyph: "\u{E896}", icon: String::new() });
+        }
         if self.incognito {
             return out;
         }
@@ -285,6 +322,9 @@ impl Browser {
 
     /// A pinned toolbar button was clicked; (`right`, `top`) is its lower right corner.
     pub(crate) fn open_pinned(&mut self, id: &str, right: f64, top: f64) {
+        if id == "adblock" {
+            return self.show_adblock(right, top);
+        }
         if let Some(ext) = id.strip_prefix("ext:") {
             self.open_bubble(ext, right, top);
         } else if let Some(page) = id.strip_prefix("page:") {

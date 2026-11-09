@@ -15,6 +15,7 @@ mod google;
 mod i18n;
 mod jobs;
 mod msg;
+mod memory_trace;
 mod native;
 mod pages;
 mod prefs;
@@ -234,10 +235,12 @@ fn main() {
         browser.memory_mode = p.memory;
         browser.settings = p.settings.clone();
         browser.account_name = p.account.clone();
+        browser.account_picture = platform::load_avatar_file(Path::new(&p.account_picture)).unwrap_or_default();
         browser.downloads_folder = Some(p.downloads.clone()).filter(|f| f.is_dir());
     }
     // "Clear browsing data when you exit" also runs at the next start (WebView2 clears
     // asynchronously, so the exit may beat it); done when the first webview exists.
+    platform::configure_adblock_sites(&browser.settings.adblock_allowlist);
     browser.clear_at_start = browser.settings.clear_on_exit && matches!(run, Run::Normal(_));
     browser.update_dir = base.join("Updates");
     // The native frame is ready as soon as it exists: show the window now, before any webview
@@ -300,6 +303,7 @@ fn main() {
     let mut saved_session = (String::new(), String::new());
 
     let started = Instant::now();
+    let mut memory_trace = memory_trace::MemoryTrace::from_environment();
     let mut shot_at: Option<Instant> = None;
     let mut test = match &run {
         Run::SelfTest(out) => Some(SelfTest::new(out.clone())),
@@ -351,11 +355,17 @@ fn main() {
             Event::WindowEvent { event: WindowEvent::Moved(_), .. } => browser.hide_overlay(),
             // Tab search takes the keyboard into its own pop-up window and closes itself when it
             // loses it; every other pop-up closes when the browser window loses focus.
-            Event::WindowEvent { event: WindowEvent::Focused(false), .. } if browser.overlay_kind != "tabsearch" && !browser.overlay_kind.starts_with("menu@") => browser.hide_overlay(),
+            Event::WindowEvent { event: WindowEvent::Focused(false), .. } if !matches!(run,Run::SelfTest(_)) && browser.overlay_kind != "tabsearch" && !browser.overlay_kind.starts_with("menu@") => browser.hide_overlay(),
             Event::WindowEvent { event: WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. }, .. } => {
                 browser.relayout()
             }
             Event::UserEvent(msg) => {
+                // Native fixtures generate their own keyboard/mouse scenarios; desktop focus
+                // changes must not dismiss a popup halfway through its assertion.
+                if matches!(run, Run::SelfTest(_)) && matches!(&msg, Msg::Ipc(command)
+                    if matches!(command.as_str(), "omniblur" | "overlayhide" | "tabhover\t0")) {
+                    return;
+                }
                 if let Run::Screenshot(..) = run {
                     if shot_at.is_none() && browser.ui_ready && matches!(msg, Msg::Load { done: true, .. }) {
                         shot_at = Some(Instant::now() + SETTLE);
@@ -380,6 +390,16 @@ fn main() {
 
         // Background clocks: window fallback, idle preparation, memory saver, automatic sync.
         let mut wake = browser.memory_tick();
+        if let Some(at) = browser.preview_tick() {
+            wake = Some(wake.map_or(at, |w| w.min(at)));
+        }
+        if let Some(trace) = memory_trace.as_mut() {
+            let at = trace.tick(&browser);
+            wake = Some(wake.map_or(at, |w| w.min(at)));
+        }
+        if let Some(at) = browser.devtools_tick() {
+            wake = Some(wake.map_or(at, |w| w.min(at)));
+        }
         if let Some(at) = browser.native_tick() {
             wake = Some(wake.map_or(at, |w| w.min(at)));
         }
@@ -434,7 +454,8 @@ fn main() {
 
         if let Some(t) = &mut test {
             let poll = t.tick(&browser);
-            if started.elapsed() >= TEST_TIMEOUT {
+            let timeout = if std::env::var_os("KAKANGKUNG_YOUTUBE_PROBE").is_some() { Duration::from_secs(240) } else { TEST_TIMEOUT };
+            if started.elapsed() >= timeout {
                 t.fail_rest("timed out after 90 s");
                 *flow = ControlFlow::Exit;
             } else if *flow != ControlFlow::Exit {

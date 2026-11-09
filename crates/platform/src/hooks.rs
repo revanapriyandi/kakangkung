@@ -31,12 +31,13 @@ pub struct Hooks {
     downloads: Option<i64>,
     permission: Option<i64>,
     adblock: Option<i64>,
+    context_menu: Option<i64>,
 }
 
 impl Hooks {
     /// Number of live registrations (the self-test checks none are leaked).
     pub fn count(&self) -> usize {
-        [self.accel, self.favicon, self.audio, self.downloads, self.permission, self.adblock].iter().flatten().count()
+        [self.accel, self.favicon, self.audio, self.downloads, self.permission, self.adblock, self.context_menu].iter().flatten().count()
     }
 }
 
@@ -54,10 +55,12 @@ pub fn hook(
     on_favicon: impl Fn(String) + 'static,
     mut on_audio: impl FnMut(bool) + 'static,
     on_download: impl Fn() + 'static,
+    on_inspect: impl Fn() + 'static,
 ) -> Hooks {
     let mut hooks = Hooks {
         downloads: crate::downloads::watch(wv, std::rc::Rc::new(on_download)),
         adblock: crate::adblock::watch(wv),
+        context_menu: crate::devtools::watch_context_menu(wv, on_inspect),
         ..Default::default()
     };
     let controller = wv.controller();
@@ -151,6 +154,10 @@ pub fn hook(
 
 /// Remove every registration in `hooks`. Call before the webview is dropped.
 pub fn unhook(wv: &WebView, hooks: &mut Hooks) {
+    crate::adblock_script::detach_adblock_script(wv);
+    if let Some(t) = hooks.context_menu.take() {
+        crate::devtools::unwatch_context_menu(wv, t);
+    }
     if let Some(t) = hooks.downloads.take() {
         crate::downloads::unwatch(wv, t);
     }

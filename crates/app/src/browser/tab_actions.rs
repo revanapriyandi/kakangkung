@@ -57,6 +57,7 @@ impl Browser {
                 let at = self.tabs.iter().take_while(|t| t.view.pinned).count();
                 self.tabs.insert(at, tab);
                 self.prune_groups();
+                self.apply(at, TabEvent::ProtectionChanged);
             }
             "mute" => {
                 let muted = !self.tabs[i].view.muted;
@@ -98,6 +99,19 @@ impl Browser {
                     self.open_tab(ui::NEWTAB_URL, Some(i + 1));
                     self.active
                 };
+                if left == right {
+                    return;
+                }
+                // Tear down the old pair while its visibility is still known.
+                if let Some((l, r)) = self.split.take() {
+                    for old in [l, r] {
+                        if old != left && old != right {
+                            if let Some(j) = self.index(old) {
+                                self.apply(j, TabEvent::Deactivate);
+                            }
+                        }
+                    }
+                }
                 self.split = Some((left, right));
                 self.activate(right);
                 self.relayout();

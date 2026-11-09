@@ -18,6 +18,14 @@ impl Browser {
         let cmd = parts.next().unwrap_or("");
         let arg = parts.next().unwrap_or("");
         let id = arg.parse::<u64>().unwrap_or(0);
+        if cmd == "tabhover" {
+            if cfg!(debug_assertions) { eprintln!("fixture hover IPC: {id}; overlay={}",self.overlay_open); }
+            let x = parts.next().unwrap_or("0").parse().unwrap_or(0.0);
+            let bottom = parts.next().unwrap_or("41").parse().unwrap_or(41.0);
+            self.hover_tab(id,x,bottom);
+            return true;
+        }
+        self.previews.hide();
         // Any use of the frame closes an open extension pop-up (the extensions button toggles it).
         if self.ext_bubble.is_some() && !matches!(cmd, "overlaysel" | "omnichange") {
             self.close_bubble();

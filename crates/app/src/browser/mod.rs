@@ -2,6 +2,7 @@
 
 mod api;
 mod events;
+mod devtools;
 mod extensions;
 mod groups;
 mod ipc;
@@ -14,6 +15,9 @@ mod tab_actions;
 mod tab_search;
 mod updater;
 mod lifecycle;
+mod media;
+mod memory_diagnostics;
+mod tab_preview;
 
 use std::path::PathBuf;
 use std::sync::{mpsc, Mutex};
@@ -63,6 +67,9 @@ pub(crate) struct Tab {
     pub(crate) state: Lifecycle,
     /// When the tab stopped being visible (memory saver clock).
     pub(crate) hidden_since: Option<Instant>,
+    pub(crate) compacted: bool,
+    pub(crate) media_frames: media::MediaFrames,
+    pub(crate) revision: u64,
     /// Addresses left by switching between a native page and a web page: Back returns to them
     /// once the webview has no history of its own.
     pub(crate) before: Vec<String>,
@@ -71,7 +78,7 @@ pub(crate) struct Tab {
 impl Tab {
     /// A tab without a webview yet: activating it creates one (restored and background tabs).
     pub(crate) fn unloaded(view: TabView) -> Self {
-        Self { view, webview: None, hooks: platform::Hooks::default(), state: Lifecycle::Discarded, hidden_since: None, before: vec![] }
+        Self { view, webview: None, hooks: platform::Hooks::default(), state: Lifecycle::Discarded, hidden_since: None, compacted: false, media_frames: media::MediaFrames::default(), revision: 0, before: vec![] }
     }
 }
 
@@ -113,6 +120,8 @@ pub(crate) struct Browser {
     /// The saved setting behind `search` (engine id, or a custom template).
     pub(crate) engine_setting: String,
     pub(crate) memory_mode: memory::Mode,
+    pub(crate) previews: tab_preview::Previews,
+    pub(crate) compact_idle: bool,
     /// Tab background while a page loads, matching the Windows theme (no white flash).
     pub(crate) page_bg: (u8, u8, u8, u8),
     pub(crate) settings: Settings,
@@ -129,6 +138,10 @@ pub(crate) struct Browser {
     pub(crate) update_dir: PathBuf,
     /// Signed-in account name ("" when signed out), shown in the avatar.
     pub(crate) account_name: String,
+    pub(crate) account_picture: String,
+    pub(crate) devtools: Option<platform::DockedDevTools>,
+    pub(crate) devtools_tab: u64,
+    pub(crate) devtools_ready: bool,
     /// Latest address-bar request: local rows (once known) and the engine's suggestions.
     pub(crate) suggest_state: (u64, Option<Json>, Vec<String>),
     pub(crate) jobs: mpsc::Sender<Job>,
@@ -163,6 +176,7 @@ pub(crate) struct Browser {
     pub(crate) site_icons_asked: std::collections::HashSet<String>,
     /// A store extension waiting for the install dialog's answer.
     pub(crate) pending_install: Option<extensions::PendingInstall>,
+    pub(crate) downloads_visible: bool,
     /// Loaded toolbar icon of each pinned extension ("" = none, the puzzle glyph shows).
     pub(crate) pinned_icons: std::cell::RefCell<std::collections::HashMap<String, String>>,
     /// The password manager's field focus and the login waiting to be saved.
@@ -269,6 +283,8 @@ impl Browser {
             search: ui::search_template(""),
             engine_setting: String::new(),
             memory_mode: memory::Mode::Balanced,
+            previews: Default::default(),
+            compact_idle: std::env::var_os("KAKANGKUNG_MEMORY_COMPACT").is_some(),
             page_bg,
             settings: Settings::read(|_| None),
             shown: false,
@@ -278,6 +294,10 @@ impl Browser {
             update: crate::update::Status::Idle,
             update_dir: PathBuf::new(),
             account_name: String::new(),
+            account_picture: String::new(),
+            devtools: None,
+            devtools_tab: 0,
+            devtools_ready: false,
             suggest_state: (0, None, vec![]),
             jobs,
             token: random_hex(),
@@ -299,6 +319,7 @@ impl Browser {
             bubble_at: (0.0, 0.0),
             site_icons_asked: Default::default(),
             pending_install: None,
+            downloads_visible: false,
             pinned_icons: Default::default(),
             passwords: Default::default(),
         })
@@ -334,7 +355,9 @@ impl Browser {
         if let Err(e) = platform::present_as_edge(&wv) {
             eprintln!("tab {id}: browser identity: {e}");
         }
-        wv.load_url(url)?;
+        if let Err(error) = platform::prepare_adblock_script(&wv, Some(url), self.settings.protection.adblock, &self.settings.adblock_allowlist) {
+            eprintln!("tab {id}: ad blocker: {error}");
+        }
         Ok(wv)
     }
 }
@@ -424,12 +447,9 @@ impl TabKit {
                     }
                     return;
                 }
-                let live = match body {
-                    "kk:media:1" => true,
-                    "kk:media:0" => false,
-                    _ => return,
-                };
-                let _ = p4.send_event(Msg::Media { id, live });
+                if let Some((frame, live)) = media::media_message(body) {
+                    let _ = p4.send_event(Msg::Media { id, frame, live });
+                }
             })
             .with_background_color(self.page_bg)
             .with_incognito(private)
@@ -484,7 +504,7 @@ impl TabKit {
 impl Browser {
 
     pub(crate) fn hook_tab(&self, id: u64, wv: &WebView) -> platform::Hooks {
-        let (p1, p2, p3) = (self.proxy.clone(), self.proxy.clone(), self.proxy.clone());
+        let (p1, p2, p3, p4) = (self.proxy.clone(), self.proxy.clone(), self.proxy.clone(), self.proxy.clone());
         platform::hook(
             wv,
             key_handler(&self.proxy),
@@ -496,6 +516,9 @@ impl Browser {
             },
             move || {
                 let _ = p3.send_event(Msg::DownloadsChanged);
+            },
+            move || {
+                let _ = p4.send_event(Msg::Inspect(id));
             },
         )
     }
@@ -519,6 +542,7 @@ impl Browser {
 
     /// Apply changed appearance/privacy settings to every open webview.
     pub(crate) fn apply_settings(&mut self, settings: Settings) {
+        platform::configure_adblock_sites(&settings.adblock_allowlist);
         let theme = settings.wry_theme();
         platform::motion::set_motion(settings.animations.then_some(settings.animation_speed), settings.smooth_scrolling);
         crate::i18n::set_language(&settings.ui_language);
@@ -555,6 +579,9 @@ impl Browser {
         if !self.settings.split_view && self.split.is_some() {
             let a = self.active;
             self.tab_action(&format!("unsplit:{a}"));
+        }
+        for i in 0..self.tabs.len() {
+            self.apply(i, tabs::Event::ProtectionChanged);
         }
         self.draw_native();
         self.render();
@@ -699,9 +726,7 @@ impl Browser {
                 }
             }
             Action::DevTools => {
-                if let Some(wv) = self.active_webview() {
-                    wv.open_devtools();
-                }
+                self.toggle_devtools();
             }
             Action::TaskManager => self.open_after_active(&format!("{}taskmanager", ui::INTERNAL)),
             Action::Fullscreen => {
@@ -816,6 +841,7 @@ impl Browser {
             show_tab_search: set.tab_search_button,
             pinned: self.pinned_buttons(),
             avatar: self.account_name.trim().chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default(),
+            avatar_image: if self.incognito { String::new() } else { self.account_picture.clone() },
             synced: self.synced,
             maximized: self.window.is_maximized(),
             tab_search_open: self.overlay_open && self.overlay_kind == "tabsearch",
@@ -826,6 +852,8 @@ impl Browser {
         self.hide_overlay();
         let size = self.window.inner_size();
         self.frame.set_bounds(0, 0, size.width as i32, chrome_height(&self.window) as i32);
+        let bounds = self.devtools_bounds();
+        if let Some(panel) = self.devtools.as_mut() { let _ = panel.resize(bounds); }
         for id in self.visible_with(self.active) {
             if let Some(wv) = self.index(id).and_then(|i| self.tabs[i].webview.as_ref()) {
                 let _ = wv.set_bounds(self.tab_bounds(id));

@@ -25,6 +25,11 @@ impl Browser {
             Msg::Ipc(m) => return self.on_ipc(&m),
             Msg::PageReply { path, done, json } => self.on_page_reply(&path, &done, json),
             Msg::DownloadsChanged => self.downloads_changed(),
+            Msg::TabThumbnail { id, revision, result } => self.thumbnail_ready(id,revision,result),
+            Msg::TabMemory { id, revision, result } => self.preview_memory_ready(id,revision,result),
+            Msg::Inspect(id) => {
+                if id == self.active && self.devtools.is_none() { self.toggle_devtools(); }
+            }
             Msg::Update(status) => self.on_update(status),
             Msg::Api { path, query, body, respond } => self.api(&path, &query, body, respond),
             Msg::ExtAdd { folder, respond } => match self.extension_host() {
@@ -38,10 +43,12 @@ impl Browser {
             }
             Msg::Store { tab, cmd } => self.store_message(tab, &cmd),
             Msg::StoreUnpacked { tab, ext, result } => self.store_unpacked(tab, ext, result),
+            Msg::StorePrepared { tab, ext, result } => self.load_prepared_extension(tab, ext, result),
+            Msg::StoreInstalled { tab, ext, result } => self.store_installed(tab, ext, result),
             Msg::SiteIcon { host, path } => self.on_site_icon(&host, path),
             Msg::Password { tab, url, what } => self.on_password_message(tab, &url, &what),
             Msg::Logins { tab, origin, logins } => self.offer_logins(tab, &origin, logins),
-            Msg::PasswordAsk { tab, cred, update } => self.ask_save_password(tab, cred, update),
+            Msg::PasswordAsk { tab, cred, update, sequence } => self.accept_password_offer(tab, cred, update, sequence),
             Msg::SavedLogins { origin, n } => self.on_saved_logins(origin, n),
             Msg::PasswordFill { tab, origin, user, pass } => self.fill_login(tab, &origin, &user, &pass),
             Msg::StoreButton { tab, ext, state, text } => self.store_button(tab, &ext, state, &text),
@@ -69,7 +76,17 @@ impl Browser {
             Msg::SettingsChanged(settings) => self.apply_settings(settings),
             Msg::Account(name) => {
                 self.account_name = name;
+                self.account_picture.clear();
                 self.render();
+            }
+            Msg::AccountProfile(name, path) => {
+                self.account_name = name;
+                self.account_picture = platform::load_avatar_file(std::path::Path::new(&path)).unwrap_or_default();
+                self.render();
+                if self.native.tab != 0 {
+                    let page = self.native.page;
+                    self.refresh_native(page);
+                }
             }
             Msg::BookmarksChanged => self.refresh_bookmark(),
             Msg::MemoryMode(m) => {
@@ -79,7 +96,10 @@ impl Browser {
                     for i in 0..self.tabs.len() {
                         if self.tabs[i].state == Lifecycle::Suspended {
                             if let Some(wv) = &self.tabs[i].webview {
-                                let _ = platform::resume(wv);
+                                if let Err(e) = platform::resume(wv) {
+                                    eprintln!("tab {}: resume failed: {e}", self.tabs[i].view.id);
+                                    continue;
+                                }
                             }
                             self.tabs[i].state = Lifecycle::Idle;
                         }
@@ -121,6 +141,14 @@ impl Browser {
                     return !self.tabs.is_empty();
                 }
                 if let Some(i) = self.index(id) {
+                    if !done {
+                        self.tabs[i].media_frames.clear();
+                        self.tabs[i].revision = self.tabs[i].revision.wrapping_add(1);
+                        self.previews.forget(id);
+                    }
+                    if done && self.visible_with(self.active).contains(&id) {
+                        self.previews.capture_due = Some((id, std::time::Instant::now() + std::time::Duration::from_millis(500)));
+                    }
                     let v = &mut self.tabs[i].view;
                     v.loading = !done;
                     v.url = url;
@@ -173,12 +201,14 @@ impl Browser {
             Msg::Audio { id, playing } => {
                 if let Some(i) = self.index(id) {
                     self.tabs[i].view.audio = playing;
+                    self.apply(i, tabs::Event::ProtectionChanged);
                 }
                 self.render();
             }
-            Msg::Media { id, live } => {
+            Msg::Media { id, frame, live } => {
                 if let Some(i) = self.index(id) {
-                    self.tabs[i].view.media = live;
+                    self.tabs[i].view.media = self.tabs[i].media_frames.set(frame, live);
+                    self.apply(i, tabs::Event::ProtectionChanged);
                 }
             }
             // TrySuspend can refuse (a page still loading, for one). The tab is not frozen then:

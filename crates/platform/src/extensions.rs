@@ -17,6 +17,10 @@ use crate::completion::Done;
 use crate::completion::fail_now;
 use crate::completion::profile;
 
+fn extension_error(error: windows::core::Error) -> String {
+    format!("{} (0x{:08X})", error.message(), error.code().0 as u32)
+}
+
 /// A browser extension installed in the webview's profile.
 #[derive(Debug, Clone)]
 pub struct Extension {
@@ -79,7 +83,7 @@ pub fn extension_add(wv: &WebView, folder: &Path, done: impl FnOnce(std::result:
     let handler = ProfileAddBrowserExtensionCompletedHandler::create(Box::new(move |hr, ext| {
         if let Some(d) = s2.take() {
             let r = hr.and_then(|_| ext.ok_or_else(|| windows::core::Error::from(E_POINTER))).and_then(|e| describe(&e));
-            d(r.map_err(|e| e.message()));
+            d(r.map_err(extension_error));
         }
         Ok(())
     }));

@@ -16,6 +16,18 @@ use crate::profile::{account, import_from_chrome, keep_browsers_in_sync, run_syn
 /// Component extensions the WebView2 runtime installs itself (clipboard, PDF viewer); not shown.
 pub(crate) const BUILTIN_EXTENSIONS: [&str; 2] = ["dgiklkfkllikcanfonkcabmbdfmgleag", "mhjfbmdgcfjbbpaeojofohoefgiehjai"];
 
+fn read_password_csv(file: &std::path::Path) -> Result<String, String> {
+    use std::io::Read;
+    const MAX: u64 = 20 * 1024 * 1024;
+    let source = std::fs::File::open(file).map_err(|e| format!("reading CSV: {e}"))?;
+    let mut bytes = Vec::new();
+    source.take(MAX + 1).read_to_end(&mut bytes).map_err(|e| format!("reading CSV: {e}"))?;
+    if bytes.len() as u64 > MAX {
+        return Err("The passwords CSV is larger than 20 MiB. Export a smaller file and try again.".into());
+    }
+    String::from_utf8(bytes).map_err(|_| "The passwords CSV must use UTF-8. Export it again as UTF-8; no passwords were imported.".into())
+}
+
 impl Browser {
     /// `/api/...` of the built-in pages (token already checked).
     pub(crate) fn api(&mut self, path: &str, query: &str, body: String, respond: Reply) {
@@ -186,7 +198,8 @@ impl Browser {
                 })
             }
             "memory" => {
-                let procs: Vec<Json> = platform::processes(self.extension_host())
+                let webviews: Vec<&wry::WebView> = self.tabs.iter().filter_map(|tab| tab.webview.as_ref()).chain(self.ext_bubble.as_ref()).collect();
+                let procs: Vec<Json> = platform::processes(&webviews)
                     .into_iter()
                     .map(|p| json!({ "pid": p.pid, "kind": p.kind, "ws": p.private_ws, "commit": p.commit }))
                     .collect();
@@ -416,9 +429,9 @@ impl Browser {
             "passwords/import" => match platform::pick_file(self.window.hwnd(), &tr("Choose the passwords file (CSV)"), &tr("Passwords (CSV)"), "*.csv") {
                 None => respond.send(json!({ "cancelled": true })),
                 Some(file) => self.db_reply(respond, move |s| {
-                    let text = match std::fs::read(&file) {
-                        Ok(b) => String::from_utf8_lossy(&b).into_owned(),
-                        Err(e) => return json!({ "error": format!("reading {}: {e}", file.display()) }),
+                    let text = match read_password_csv(&file) {
+                        Ok(text) => text,
+                        Err(e) => return json!({ "error": e }),
                     };
                     let list = storage::passwords::parse_csv(&text);
                     if list.is_empty() {
@@ -559,7 +572,7 @@ impl Browser {
                         if let Err(e) = crate::google::save(s, &account).and_then(|_| s.set_setting("sync.types", &types)) {
                             return respond.send(json!({ "error": e }));
                         }
-                        let _ = proxy.send_event(Msg::Account(account.name.clone()));
+                        let _ = proxy.send_event(Msg::AccountProfile(account.name.clone(), s.setting("account.picture.path").unwrap_or_default()));
                         let _ = proxy.send_event(Msg::Synced(run_sync(s, tabs, &proxy).is_ok()));
                         respond.send(sync_status(s));
                     });
@@ -622,4 +635,23 @@ pub(crate) fn permission_name(kind: i32) -> &'static str {
 /// Open a page of the Windows Settings app (default apps, proxy).
 fn open_windows_settings(uri: &str) -> Result<(), String> {
     std::process::Command::new("explorer.exe").arg(uri).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod csv_tests {
+    use super::read_password_csv;
+
+    #[test]
+    fn password_csv_rejects_invalid_utf8_and_oversized_files() {
+        let path = std::env::temp_dir().join(format!("kakangkung-csv-input-{}.csv", std::process::id()));
+        std::fs::write(&path, [0xff, 0xfe]).unwrap();
+        assert!(read_password_csv(&path).unwrap_err().contains("UTF-8"));
+        let f = std::fs::File::create(&path).unwrap();
+        f.set_len(20 * 1024 * 1024 + 1).unwrap();
+        drop(f);
+        assert!(read_password_csv(&path).unwrap_err().contains("20 MiB"));
+        std::fs::write(&path, "url,username,password\nhttps://example.invalid,é,synthetic").unwrap();
+        assert!(read_password_csv(&path).unwrap().contains('é'));
+        let _ = std::fs::remove_file(path);
+    }
 }

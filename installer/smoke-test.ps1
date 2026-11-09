@@ -26,6 +26,9 @@ if ($p.ExitCode) { Get-Content $log -Tail 40; throw "setup exited with $($p.Exit
 
 Check (Test-Path $exe) "program installed in $app"
 Check ((Get-Item $exe).Length -gt 1MB) 'program file is the real build'
+foreach ($notice in @('THIRD_PARTY_NOTICES.md', 'LICENSE-MPL-2.0.txt', 'LICENSE-CC-BY-SA-3.0.txt')) {
+    Check (Test-Path (Join-Path $app $notice)) "third-party notice installed: $notice"
+}
 Check (Test-Path $link) 'Start menu shortcut'
 Check ((Get-ItemProperty $settingsKey -ErrorAction SilentlyContinue).Language -eq $Expect) "interface language '$Expect' from the installer"
 $entry = Get-ItemProperty $uninstallKey -ErrorAction SilentlyContinue

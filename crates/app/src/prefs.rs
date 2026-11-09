@@ -170,11 +170,13 @@ pub(crate) struct Prefs {
     pub(crate) settings: Settings,
     /// Signed-in account name, "" when signed out.
     pub(crate) account: String,
+    pub(crate) account_picture: String,
 }
 
 /// The settings the running browser applies live (re-read after every change).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Settings {
+    pub(crate) adblock_allowlist: String,
     /// "auto", "light" or "dark".
     pub(crate) theme: String,
     pub(crate) animations: bool,
@@ -261,6 +263,7 @@ impl Settings {
             _ => ui::NEWTAB_URL.into(),
         };
         Settings {
+            adblock_allowlist: get("privacy.adblock_allowlist").unwrap_or_default(),
             theme: v("appearance.theme"),
             animations: on("appearance.animations"),
             animation_speed: match v("appearance.animation_speed").as_str() {
@@ -397,6 +400,7 @@ impl Prefs {
             session_active: s.setting("session.active").and_then(|v| v.parse().ok()).unwrap_or(0),
             settings: Settings::read(|k| s.setting(k)),
             account: account(s).map(|a| a.0).unwrap_or_default(),
+            account_picture: if account(s).is_some() { s.setting("account.picture.path").unwrap_or_default() } else { String::new() },
         }
     }
 }

@@ -71,6 +71,33 @@ pub fn load_file(path: &std::path::Path) -> Option<String> {
     (get(&key).is_some() || load_file_as(path, &key)).then_some(key)
 }
 
+/// Small cached, circular profile photo; changes on disk get a new bitmap key.
+pub fn load_avatar_file(path: &std::path::Path) -> Option<String> {
+    if path.as_os_str().is_empty() { return None; }
+    let modified = path.metadata().ok()?.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos();
+    let key = format!("avatar:{}:{modified}", path.display());
+    if loaded(&key) { return Some(key); }
+    if !load_file_as(path, &key) { return None; }
+    let mut pixels = get(&key)?.as_ref().clone();
+    round_pixels(&mut pixels);
+    ICONS.with(|icons| {
+        let mut icons = icons.borrow_mut();
+        if icons.len() >= MAX { icons.clear(); }
+        icons.insert(key.clone(), Rc::new(pixels));
+    });
+    Some(key)
+}
+
+fn round_pixels(pixels: &mut [u8]) {
+    let radius = SIZE as f32 / 2.0;
+    for (i, pixel) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+        let x = (i as u32 % SIZE) as f32 + 0.5 - radius;
+        let y = (i as u32 / SIZE) as f32 + 0.5 - radius;
+        let coverage = (radius + 0.5 - x.hypot(y)).clamp(0.0, 1.0);
+        for channel in pixel { *channel = (*channel as f32 * coverage).round() as u8; }
+    }
+}
+
 /// Make the image file at `path` (PNG, ICO…) available to [`get`] under `key`; an icon file's
 /// largest picture is used. False when the file cannot be decoded.
 pub fn load_file_as(path: &std::path::Path, key: &str) -> bool {
@@ -117,5 +144,19 @@ fn scale(frame: &windows::Win32::Graphics::Imaging::IWICBitmapSource) -> windows
         let mut px = vec![0u8; (SIZE * SIZE * 4) as usize];
         bgra.CopyPixels(std::ptr::null(), SIZE * 4, &mut px)?;
         Ok(px)
+    }
+}
+
+#[cfg(test)]
+mod avatar_tests {
+    use super::*;
+    #[test]
+    fn avatar_rounding_keeps_center_and_clears_corners() {
+        let mut pixels = vec![255; (SIZE * SIZE * 4) as usize];
+        round_pixels(&mut pixels);
+        assert_eq!(&pixels[..4], &[0, 0, 0, 0]);
+        let center = ((SIZE / 2 * SIZE + SIZE / 2) * 4) as usize;
+        assert_eq!(&pixels[center..center + 4], &[255, 255, 255, 255]);
+        assert!(load_avatar_file(std::path::Path::new("")).is_none());
     }
 }

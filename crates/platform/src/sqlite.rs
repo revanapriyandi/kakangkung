@@ -24,6 +24,9 @@ extern "system" {
     fn sqlite3_column_int64(stmt: *mut c_void, i: c_int) -> i64;
     fn sqlite3_column_text(stmt: *mut c_void, i: c_int) -> *const u8;
     fn sqlite3_column_bytes(stmt: *mut c_void, i: c_int) -> c_int;
+    fn sqlite3_backup_init(dest: *mut c_void, dest_name: *const c_char, source: *mut c_void, source_name: *const c_char) -> *mut c_void;
+    fn sqlite3_backup_step(backup: *mut c_void, pages: c_int) -> c_int;
+    fn sqlite3_backup_finish(backup: *mut c_void) -> c_int;
 }
 
 const OK: c_int = 0;
@@ -96,6 +99,28 @@ impl Drop for Stmt {
 }
 
 impl Db {
+    /// Copy a consistent committed snapshot, including pages in the source WAL.
+    /// The source is opened read-only; the destination must be a separate file.
+    pub fn snapshot(source: &Path, destination: &Path) -> Result<(), String> {
+        if destination.exists() {
+            return Err("snapshot destination already exists".into());
+        }
+        let source = Self::open(source, true)?;
+        let destination = Self::open(destination, false)?;
+        let main = c"main";
+        // SAFETY: both connections and the NUL-terminated schema names remain alive through finish.
+        let backup = unsafe { sqlite3_backup_init(destination.0, main.as_ptr(), source.0, main.as_ptr()) };
+        if backup.is_null() {
+            return Err(destination.error());
+        }
+        // SAFETY: backup is a live handle returned above; finish releases it exactly once.
+        let (step, finish) = unsafe { (sqlite3_backup_step(backup, -1), sqlite3_backup_finish(backup)) };
+        if step != DONE || finish != OK {
+            return Err(format!("database snapshot failed ({step}/{finish}): {}", destination.error()));
+        }
+        Ok(())
+    }
+
     pub fn open(path: &Path, read_only: bool) -> Result<Db, String> {
         let file = CString::new(path.to_string_lossy().as_bytes()).map_err(|e| e.to_string())?;
         let flags = OPEN_FULLMUTEX | if read_only { OPEN_READONLY } else { OPEN_READWRITE | OPEN_CREATE };

@@ -298,8 +298,8 @@ fn performance(v: &Values, memory: &str) -> Section {
     section("performance", "Performance", "performance memory saver ram tabs speed fast freeze preload", vec![vec![
         Row::new("Memory Saver", "Frees memory from tabs you are not using. Their pages stay as they are and wake up when you return.", Control::None),
         mode("moderate", "Moderate", "Freeze tabs hidden for 2 hours"),
-        mode("balanced", "Balanced (recommended)", "Freeze tabs hidden for 5 minutes"),
-        mode("ultralite", "Maximum", "Freeze tabs hidden for 30 seconds"),
+        mode("balanced", "Balanced", "Freeze tabs hidden for 5 minutes"),
+        mode("ultralite", "Maximum (recommended)", "Freeze tabs hidden for 30 seconds; background scripts pause until you return"),
         mode("performance", "Off", "Keep every tab running"),
         v.toggle("performance.protect_media", "Keep calls running", "Never freeze tabs using the camera, microphone or screen sharing"),
         v.toggle("performance.protect_pinned", "Keep pinned tabs running", "Memory Saver leaves pinned tabs alone"),

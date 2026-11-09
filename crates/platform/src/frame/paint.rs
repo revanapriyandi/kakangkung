@@ -120,7 +120,7 @@ impl Inner {
         let s = self.state.clone();
         let p = palette(s.dark, s.incognito);
         let brush = self.gfx.brush.clone().expect("brush created with the target");
-        self.make_favicons(t, s.tabs.iter().map(|t| &t.favicon).chain(s.pinned.iter().map(|p| &p.icon)).collect());
+        self.make_favicons(t, s.tabs.iter().map(|t| &t.favicon).chain(s.pinned.iter().map(|p| &p.icon)).chain(std::iter::once(&s.avatar_image)).collect());
         let mut hits: Vec<(D2D_RECT_F, Hit)> = vec![];
         // SAFETY: drawing calls on a live render target between BeginDraw and EndDraw.
         unsafe {
@@ -348,9 +348,13 @@ impl Inner {
             if s.avatar.is_empty() {
                 text("\u{E77B}", av, &self.gfx.icons, p.muted);
             } else {
-                brush.SetColor(&color(0x7c3aed, 1.0));
-                t.FillEllipse(&disc, &brush);
-                text(&s.avatar, av, &self.gfx.text_bold, 0xffffff);
+                if let Some(bitmap) = self.gfx.favicons.get(&s.avatar_image) {
+                    t.DrawBitmap(bitmap, Some(&rect(disc.point.X - 12.0, disc.point.Y - 12.0, 24.0, 24.0)), 1.0, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
+                } else {
+                    brush.SetColor(&color(0x7c3aed, 1.0));
+                    t.FillEllipse(&disc, &brush);
+                    text(&s.avatar, av, &self.gfx.text_bold, 0xffffff);
+                }
                 if s.synced {
                     brush.SetColor(&color(0x22c55e, 1.0));
                     t.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: r_edge + BUTTON - 7.0, Y: y + BUTTON - 7.0 }, radiusX: 4.0, radiusY: 4.0 }, &brush);

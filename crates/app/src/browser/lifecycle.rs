@@ -1,6 +1,6 @@
 //! Tab lifecycle: open, show, hide, freeze (Memory Saver), split view and close.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tabs::{transition, Command, Event as TabEvent, Lifecycle};
 use ui::TabView;
@@ -37,6 +37,9 @@ impl Browser {
         let at = self.index(opener).map(|i| i + 1);
         let private = at.map_or(self.incognito, |i| self.tabs[i - 1].view.private);
         let mut tab = Tab::unloaded(TabView { id, url, title: String::new(), loading: true, private, muted: self.settings.mute_sites, ..Default::default() });
+        if let Err(error) = platform::prepare_adblock_script(&wv, None, self.settings.protection.adblock, &self.settings.adblock_allowlist) {
+            eprintln!("pop-up {id}: ad blocker: {error}");
+        }
         for e in platform::apply_protection(&wv, self.settings.protection) {
             eprintln!("pop-up {id}: {e}");
         }
@@ -104,13 +107,44 @@ impl Browser {
         let now = Instant::now();
         let mut next: Option<Instant> = None;
         for i in 0..self.tabs.len() {
+            // Audio/media, pin and site-exclusion signals can change while hidden.
+            // Reconcile before deciding whether this tab may freeze.
+            if self.tabs[i].state != Lifecycle::Discarded {
+                self.apply(i, TabEvent::ProtectionChanged);
+            }
+            if matches!(self.tabs[i].state, Lifecycle::LowMemory | Lifecycle::Suspended) {
+                let due = now + Duration::from_secs(5);
+                next = Some(next.map_or(due, |n| n.min(due)));
+            }
             let (state, since) = (self.tabs[i].state, self.tabs[i].hidden_since);
             if state != Lifecycle::Idle || self.tabs[i].view.id == self.active {
                 continue;
             }
             let Some(since) = since else { continue };
+            if self.compact_idle && self.memory_mode.compact_idle(now.duration_since(since), self.tabs[i].view.loading, false, self.tabs[i].compacted) {
+                if let Some(wv) = self.tabs[i].webview.as_ref() {
+                    let id = self.tabs[i].view.id;
+                    let started = Instant::now();
+                    match platform::collect_idle_garbage(wv, move |result| {
+                        eprintln!("idle GC tab {id}: {} in {} ms", if result.is_ok() { "completed" } else { "refused" }, started.elapsed().as_millis());
+                    }) {
+                        Ok(()) => self.tabs[i].compacted = true,
+                        Err(error) => { eprintln!("idle GC tab {id}: {error}"); self.tabs[i].compacted = true; }
+                    }
+                }
+            }
+            if self.compact_idle && !self.tabs[i].compacted && self.memory_mode == memory::Mode::UltraLite {
+                let due = (since + Duration::from_secs(10)).max(now + Duration::from_secs(1));
+                next = Some(next.map_or(due, |n| n.min(due)));
+            }
             if now >= since + after {
                 self.apply(i, TabEvent::SuspendDue);
+                // An immediate platform error leaves the tab idle. Retry later.
+                if self.tabs[i].state == Lifecycle::Idle {
+                    self.tabs[i].hidden_since = Some(now);
+                    let due = now + after;
+                    next = Some(next.map_or(due, |n| n.min(due)));
+                }
             } else {
                 let due = since + after;
                 next = Some(next.map_or(due, |n| n.min(due)));
@@ -132,8 +166,13 @@ impl Browser {
     }
 
     pub(crate) fn activate(&mut self, id: u64) {
+        if self.index(id).is_none() {
+            return;
+        }
         self.hide_overlay();
+        self.previews.hide();
         let before = self.visible_with(self.active);
+        if self.devtools.is_some() && self.devtools_tab != id { self.close_devtools(); }
         let after = self.visible_with(id);
         for old in before {
             if let (false, Some(i)) = (after.contains(&old), self.index(old)) {
@@ -153,18 +192,22 @@ impl Browser {
         }
         self.refresh_bookmark();
         self.render();
+        if self.active_webview().is_some() {
+            self.previews.capture_due=Some((id,Instant::now()+Duration::from_millis(500)));
+        }
     }
 
     /// Where tab `id` is drawn: the whole page area, or its half of the split view.
     pub(crate) fn tab_bounds(&self, id: u64) -> Rect {
-        let full = page_bounds(&self.window);
+        let full = self.content_bounds();
         let Some((l, _)) = self.split.filter(|&(l, r)| id == l || id == r) else { return full };
         let size = self.window.inner_size();
         let top = chrome_height(&self.window).min(size.height);
         let gap = (4.0 * self.window.scale_factor()).round() as u32;
         let half = size.width.saturating_sub(gap) / 2;
         let (x, w) = if id == l { (0, half) } else { (half + gap, size.width.saturating_sub(half + gap)) };
-        Rect { position: PhysicalPosition::new(x as i32, top as i32).into(), size: PhysicalSize::new(w, size.height - top).into() }
+        let height = full.size.to_physical::<u32>(self.window.scale_factor()).height;
+        Rect { position: PhysicalPosition::new(x as i32, top as i32).into(), size: PhysicalSize::new(w, height).into() }
     }
 
     /// Run the lifecycle state machine for tab `i` and execute its commands.
@@ -184,16 +227,23 @@ impl Browser {
                 return;
             }
         };
+        for cmd in cmds {
+            if let Err(e) = self.exec(i, cmd) {
+                eprintln!("tab {}: {cmd:?} failed: {e}", self.tabs[i].view.id);
+                return;
+            }
+            self.tabs[i].state = tabs::after_command(cmd);
+            self.tabs[i].hidden_since = match self.tabs[i].state {
+                Lifecycle::Active => None,
+                _ => self.tabs[i].hidden_since.or(Some(Instant::now())),
+            };
+        }
         self.tabs[i].state = next;
+        if next == Lifecycle::Active { self.tabs[i].compacted = false; }
         self.tabs[i].hidden_since = match next {
             Lifecycle::Active => None,
             _ => self.tabs[i].hidden_since.or(Some(Instant::now())),
         };
-        for cmd in cmds {
-            if let Err(e) = self.exec(i, cmd) {
-                eprintln!("tab {}: {cmd:?} failed: {e}", self.tabs[i].view.id);
-            }
-        }
     }
 
     pub(crate) fn exec(&mut self, i: usize, cmd: Command) -> Result<(), String> {
@@ -250,7 +300,11 @@ impl Browser {
                 }
                 wv.set_bounds(self.tab_bounds(id)).map_err(e)?;
                 wv.set_visible(true).map_err(e)?;
-                wv.focus().map_err(e)
+                // Visibility succeeded even if the OS denies keyboard focus.
+                if let Err(e) = wv.focus() {
+                    eprintln!("tab {id}: focus failed: {e}");
+                }
+                Ok(())
             }
             Command::Hide => wv.set_visible(false).map_err(e),
             Command::TrySuspend => {
@@ -290,6 +344,7 @@ impl Browser {
     /// of the same native page): rebuild what shows it.
     pub(crate) fn reload_kind(&mut self, i: usize) {
         let id = self.tabs[i].view.id;
+        if self.devtools.is_some() && self.devtools_tab == id { self.close_devtools(); }
         let url = self.tabs[i].view.url.clone();
         let native = crate::native::page_of(&url).is_some();
         if native && self.native.tab == id && self.tabs[i].webview.is_none() {
@@ -309,6 +364,7 @@ impl Browser {
     }
 
     pub(crate) fn close_tab(&mut self, id: u64) {
+        self.previews.forget(id);
         let Some(i) = self.index(id) else { return };
         self.hide_native(id);
         let mut partner = None;
@@ -328,6 +384,9 @@ impl Browser {
         }
         if !tab.view.url.is_empty() {
             self.closed.push(super::tab_search::ClosedTab { url: tab.view.url, title: tab.view.title, at: Instant::now() });
+            if self.closed.len() > 100 {
+                self.closed.drain(..self.closed.len() - 100);
+            }
         }
         if self.tabs.is_empty() {
             // "When the last tab is closed": keep the window with a new tab, or let it close.

@@ -13,7 +13,10 @@
   const add = (e) => {
     e.preventDefault();
     e.stopImmediatePropagation();
-    if (shown.state !== "ready") return;
+    if (shown.state !== "ready" || idOf() !== shown.id) return;
+    // Disable synchronously; IPC acknowledgement can arrive after a second click.
+    shown = { ...shown, state: "busy", text: "Checking..." };
+    render();
     const h1 = document.querySelector("h1");
     post("kk:store:add\t" + shown.id + "\t" + (h1 ? h1.textContent.trim().slice(0, 120) : ""));
   };

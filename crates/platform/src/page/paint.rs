@@ -405,6 +405,15 @@ impl Inner {
                 p.circle(x, mid, 20.0, if initial.is_empty() { c.off } else { c.brand }, None);
                 p.text(if initial.is_empty() { "?" } else { initial }, rect(x - 20.0, mid - 20.0, 40.0, 40.0), &f.button, c.on_brand);
             }
+            Control::AvatarImage { initial, path } => {
+                let x = t.left - 36.0;
+                let target = rect(x - 20.0, mid - 20.0, 40.0, 40.0);
+                let key = crate::favicon::load_avatar_file(std::path::Path::new(path));
+                if !key.is_some_and(|key| p.icon(target, &key)) {
+                    p.circle(x, mid, 20.0, if initial.is_empty() { c.off } else { c.brand }, None);
+                    p.text(if initial.is_empty() { "?" } else { initial }, target, &f.button, c.on_brand);
+                }
+            }
             Control::Toggle { id, on } => {
                 // A switch just flipped slides from where it was.
                 let t = self.toggles.iter().find(|(t, _)| t == id).map_or(1.0, |(_, at)| motion::eased(*at, 0.0, TOGGLE_MS));

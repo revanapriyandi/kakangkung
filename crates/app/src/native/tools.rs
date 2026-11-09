@@ -116,7 +116,7 @@ pub(crate) fn taskmanager_doc(m: &Json) -> PageDoc {
     let commit: i64 = procs.iter().map(|p| p["commit"].as_i64().unwrap_or(0)).sum();
     let n = |k: &str| m[k].as_u64().unwrap_or(0);
     let overview = vec![
-        Row::new("Memory in use", "Every Kakangkung process, counted like the Memory column of Windows Task Manager", Control::Value(size(total))),
+        Row::new("Memory in use", "Kakangkung and its WebView2 runtime processes, including browser, renderers and GPU", Control::Value(size(total))),
         Row::new("Tabs", &format!("{} running · {} frozen · {} not loaded", n("running"), n("frozen"), n("unloaded")), Control::Value((n("running") + n("frozen") + n("unloaded")).to_string())),
         Row::new("Memory Saver", m["mode"].as_str().unwrap_or(""), Control::Link { id: "open:settings/performance".into() }),
     ];
@@ -137,7 +137,7 @@ pub(crate) fn taskmanager_doc(m: &Json) -> PageDoc {
             section("processes", "Processes", rows),
             section("about", "", vec![Row::new(
                 "About these numbers",
-                "Memory is the private working set, the same number as the Memory column in Windows Task Manager. Renderer processes can be shared by several tabs of the same site, so memory is shown per process. Updated every 2 seconds.",
+                "Memory is the private working set; commit is shown separately. Windows Task Manager may list WebView2 under a separate group, so its Kakangkung group can show less than this total. Renderer processes can serve several tabs or frames, so these are process totals, not exact memory per tab. Updated every 2 seconds.",
                 Control::None,
             )]),
         ],

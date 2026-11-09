@@ -156,7 +156,7 @@ fn place_row(row: &Row, x: f32, w: f32, y: f32, m: &dyn Measure) -> (f32, D2D_RE
     let lead = if row.indent { INDENT } else { 0.0 }
         + match row.control {
             Control::Radio { .. } => LEAD_RADIO,
-            Control::Avatar { .. } => LEAD_AVATAR,
+            Control::Avatar { .. } | Control::AvatarImage { .. } => LEAD_AVATAR,
             Control::Entry { .. } => LEAD_RADIO,
             _ => 0.0,
         };

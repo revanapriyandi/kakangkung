@@ -52,6 +52,10 @@ with ⋮ > *Restart to update*. Details: [docs/INSTALL.md](docs/INSTALL.md),
   animation; submenus open beside the menu, and zoom sits in the menu as − 100% +.
 - **Tab search** (⌄ at the start of the tab strip, or Ctrl+Shift+A): open tabs by recent use and
   recently closed ones.
+- **Tab hover cards** show the title, address, last page snapshot and a memory measurement.
+  Eight small snapshots are retained in memory; hovering a sleeping tab does not wake it.
+  On runtimes affected by WebView2 frame-attribution crashes, the card explicitly shows only
+  the JavaScript heap, excluding images, video and GPU allocations.
 - **Address bar** with inline completion from history and bookmarks plus live search suggestions;
   search engine of your choice (Google, Bing, DuckDuckGo, Yahoo!, Ecosia, Brave, or your own).
 - **Built-in pages**, native and laid out like Chrome's: Settings (one page per section, with
@@ -68,7 +72,9 @@ with ⋮ > *Restart to update*. Details: [docs/INSTALL.md](docs/INSTALL.md),
   file from your PC, Kakangkung is offered under *Open with* for PDF files, and a downloaded PDF,
   picture or video opens in a tab.
 - **Memory Saver** freezes tabs you have not looked at for a while; tabs playing sound, in a call
-  or pinned are left alone. The **task manager** counts memory exactly like Windows Task Manager.
+  or pinned are left alone. New profiles use Maximum (30 seconds for unprotected hidden tabs).
+  The **task manager** totals private working set for the app and
+  its WebView2 runtime processes; Windows may display those processes in different groups.
   Measured against Chrome and Edge with 1 to 100 real sites: [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 - **Extensions from the Chrome Web Store**: on an extension's page the store's button reads
   *Add to Kakangkung*, and adding one asks first with what it can do, like Chrome. The toolbar's
@@ -79,8 +85,14 @@ with ⋮ > *Restart to update*. Details: [docs/INSTALL.md](docs/INSTALL.md),
 - **Sign in with Google**: bookmarks, history, open tabs and settings sync between your PCs through
   a hidden app folder in your Google Drive — see [docs/GOOGLE_SIGNIN.md](docs/GOOGLE_SIGNIN.md).
   Google's own sign-in works on websites, including sign-in pop-ups.
-- **Built-in ad blocker** (on by default, *Settings > Privacy and security > Block ads*): requests
-  to known ad networks never leave the browser. Tracking prevention handles trackers.
+- **Built-in ad blocker** (on by default): the toolbar shield controls global blocking and
+  exact-site exceptions. A shared native matcher uses bundled EasyList/EasyPrivacy network rules;
+  a small page helper hides clearly identified ad elements and removes known YouTube player ad
+  instructions. Filter coverage varies with site changes; embedded sponsorships and every ad on
+  every site are not guaranteed. [Filter sources and refresh](assets/filterlists/README.md).
+- **Developer tools inside the browser**: F12/Ctrl+Shift+I and the page's Inspect command open
+  a bottom panel. This uses Windows child-window hosting because WebView2 exposes a separate
+  DevTools window; if hosting fails, Kakangkung reports the error and closes that inspector.
 - **Incognito windows**, **import** of history, bookmarks and extensions from Chrome, Edge, Brave
   and Firefox.
 - **Every feature has a setting** — see [docs/SETTINGS.md](docs/SETTINGS.md) — including light/dark
@@ -97,11 +109,16 @@ with ⋮ > *Restart to update*. Details: [docs/INSTALL.md](docs/INSTALL.md),
 
 ## How it stays light
 
+Current feature behavior and verification limits, including the difference between
+Kakangkung sync and Chrome Sync: [docs/CHROME_PARITY.md](docs/CHROME_PARITY.md).
+
 WebView2 uses the same multi-process model as Chrome (browser, GPU, network, renderer processes),
 so a web page costs about what it costs in Chrome. The savings come from everything around it:
 
-- The interface is native: no web views for the tab strip, menus or built-in pages. The New Tab
-  page alone takes about 25 MB; one web page about 115–125 MB for all processes together.
+- The interface is native: no web views for the tab strip, menus or built-in pages. A native
+  New Tab needs no WebView2 process; opening a website starts the shared engine and its
+  renderer/GPU services. Current isolated whole-process measurements and their limits:
+  [bench/memory-probe-findings.md](bench/memory-probe-findings.md).
 - Small surfaces are drawn by the CPU, so the browser keeps no extra graphics devices.
 - The window shows in under 100 ms; the engine starts behind it.
 - Memory Saver freezes idle tabs; restored tabs stay unloaded until you open them.

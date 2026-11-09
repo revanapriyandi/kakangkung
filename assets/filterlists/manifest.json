@@ -1,0 +1,29 @@
+{
+  "retrieved_utc": "2026-11-08T16:40:46.479332+00:00",
+  "files": [
+    {
+      "file": "easylist.txt",
+      "source": "https://easylist.to/easylist/easylist.txt",
+      "bytes": 2086368,
+      "sha256": "e54769236b56508b7d17e0d2e597f77dd181da70de9e9108a346151e5d0ee5f6"
+    },
+    {
+      "file": "easyprivacy.txt",
+      "source": "https://easylist.to/easylist/easyprivacy.txt",
+      "bytes": 1513538,
+      "sha256": "ff0062bc60255120d0ede4b2fb5fc9cc0f6fb6cf616274a2d1a197c104275e87"
+    },
+    {
+      "file": "LICENSE-CC-BY-SA-3.0.txt",
+      "source": "https://raw.githubusercontent.com/cc-archive/legalcode-pre-2014-06-26/main/by-sa_3.0.txt",
+      "bytes": 22238,
+      "sha256": "f199af7e90e29e197a4be87b9a6d585a29ff5eae2b977503e590c4bd8fe6e8b3"
+    },
+    {
+      "file": "LICENSE-MPL-2.0.txt",
+      "source": "https://crates.io/api/v1/crates/adblock/0.13.5/download (LICENSE)",
+      "bytes": 16726,
+      "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04"
+    }
+  ]
+}

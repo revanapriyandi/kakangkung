@@ -42,9 +42,14 @@ pub(crate) enum Stage {
     WaitAboutAgain,
     WaitNewTab,
     WaitSuspend,
+    WaitRetained,
+    WaitPreview,
+    WaitPreviewSuspend,
+    WaitPreviewSleeping,
     WaitScript,
     WaitScriptPage,
     PollFeatures,
+    WaitAutocompleteFocus,
     WaitAutocomplete,
     WaitNative,
     WaitNativeSave,
@@ -59,6 +64,8 @@ pub(crate) enum Stage {
     /// Tab strip clicks: above the first tab, then the ⌄ button.
     WaitTopClick,
     WaitTabSearch,
+    PollYouTube,
+    WaitYouTubePreview,
     Done,
 }
 
@@ -216,6 +223,23 @@ pub(crate) const FEATURE_JS: &str = r#"window.__kakangkungTest = "";
       detail: `on: ad request blocked=${on === before + 1}, the page's own request let through=${ownSite === on}; ` +
               `off: ad request let through=${off === on}; switched back on=${back} (${off} blocked in total)` };
   });
+  await step("download", async () => {
+    const name = "kakangkung-download-selftest.txt";
+    const link = document.createElement("a");
+    const object = URL.createObjectURL(new Blob(["Kakangkung isolated download fixture\n"], { type: "text/plain" }));
+    link.href = object;
+    link.download = name;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    let saved;
+    for (let attempt = 0; attempt < 40 && !saved; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 250));
+      saved = (await api("downloads")).find(item => item.path.endsWith(name) && item.state === "Done");
+    }
+    URL.revokeObjectURL(object);
+    return { ok: !!saved, detail: `real blob download completed and persisted=${!!saved}` };
+  });
   await step("taskmanager", async () => {
     const m = await api("memory");
     const total = m.processes.reduce((a, p) => a + p.ws, 0);
@@ -330,6 +354,14 @@ pub(crate) struct SelfTest {
     typed: String,
     /// Native Settings: first look (passed, detail) and the switch's value before the test.
     native: (bool, String, bool),
+    youtube_started: Option<Instant>,
+    youtube_samples: Vec<Json>,
+    youtube_tab: u64,
+    youtube_background: u64,
+    youtube_switched: bool,
+    preview_tab: u64,
+    preview_webviews: usize,
+    youtube_result: (bool,String),
 }
 
 impl SelfTest {
@@ -346,6 +378,14 @@ impl SelfTest {
             poll_at: None,
             typed: String::new(),
             native: (false, String::new(), false),
+            youtube_started: None,
+            youtube_samples: vec![],
+            youtube_tab: 0,
+            youtube_background: 0,
+            youtube_switched: false,
+            preview_tab: 0,
+            preview_webviews: 0,
+            youtube_result: (false,String::new()),
             sync_folder: std::env::temp_dir().join(format!("kakangkung-test-sync-{}", std::process::id())),
         }
     }
@@ -372,6 +412,9 @@ impl SelfTest {
                 b.navigate(ABOUT);
             }
             (Stage::WaitAboutAgain, Observed::Loaded { url, .. }) if url == ABOUT => {
+                if let Some(wv) = b.active_webview() {
+                    let _ = wv.evaluate_script("window.__memoryRetained={nested:{value:'retained-state'}}; const field=document.createElement('input');field.id='memory-retained-field';field.value='unsaved draft';document.body.append(field);");
+                }
                 self.stage = Stage::WaitNewTab;
                 b.act(Action::NewTab); // Ctrl+T path
             }
@@ -393,6 +436,11 @@ impl SelfTest {
             }
             (Stage::WaitSuspend, Observed::Suspended { id: 1, ok }) => {
                 let frozen = b.tabs[0].webview.as_ref().and_then(|w| platform::is_suspended(w).ok()) == Some(true);
+                b.on_msg(Msg::Audio { id: 1, playing: true });
+                let protected_running = b.tabs[0].state == Lifecycle::LowMemory
+                    && b.tabs[0].webview.as_ref().and_then(|w| platform::is_suspended(w).ok()) == Some(false);
+                b.on_msg(Msg::Audio { id: 1, playing: false });
+                let protection_cleared = b.tabs[0].state == Lifecycle::Idle;
                 b.act(Action::PrevTab); // Ctrl+Shift+Tab: Resume + Show
                 let running = b.tabs[0].webview.as_ref().and_then(|w| platform::is_suspended(w).ok()) == Some(false);
                 let back_on_1 = b.active == 1 && b.tabs[0].state == Lifecycle::Active;
@@ -400,18 +448,24 @@ impl SelfTest {
                 b.act(Action::CloseTab); // Ctrl+W on the new tab
                 let one_left = b.tabs.len() == 1 && b.active == 1;
                 let hooks_after = b.hook_count();
-                // Tab 1's webview has its 6 handlers (keys, favicon, audio, downloads, permissions, ad blocker); the native New Tab page added and left none.
-                let ok = ok && frozen && running && back_on_1 && one_left && hooks_after == 6 && self.hooks_with_two_tabs == 6;
-                b.act(Action::Back); // back to the New Tab page for the toolbar check
+                // The native New Tab page adds no COM handlers.
+                let ok = ok && frozen && protected_running && protection_cleared && running && back_on_1 && one_left && hooks_after == 7 && self.hooks_with_two_tabs == 7;
                 self.steps.push((
                     "act",
                     ok,
                     format!(
-                        "{}; TrySuspend ok={ok}, IsSuspended={frozen}; Ctrl+Shift+Tab resumed it (running={running}, active={back_on_1}); Ctrl+W closed tab 2 (one tab left={one_left}); COM handlers {} -> {hooks_after}",
+                        "{}; TrySuspend ok={ok}, IsSuspended={frozen}; audio protection resumes hidden tab={protected_running}, cleared={protection_cleared}; Ctrl+Shift+Tab resumed it (running={running}, active={back_on_1}); Ctrl+W closed tab 2 (one tab left={one_left}); COM handlers {} -> {hooks_after}",
                         self.act_detail, self.hooks_with_two_tabs
                     ),
                 ));
-                // Read the tab strip once pending page events have landed (as a person would see it).
+                self.stage = Stage::WaitRetained;
+                self.poll_at = Some(Instant::now() + Duration::from_millis(800));
+            }
+            (Stage::WaitRetained, Observed::Script) => {
+                let value: Json = script.and_then(|raw| serde_json::from_str(&raw).ok()).unwrap_or(Json::Null);
+                let retained = value["object"] == "retained-state" && value["form"] == "unsaved draft";
+                self.steps.push(("memoryretained", retained, format!("live JS object and unsaved form retained after hidden GC/suspend/resume: {value}")));
+                b.act(Action::Back);
                 self.stage = Stage::WaitScript;
                 self.poll_at = Some(Instant::now() + Duration::from_millis(800));
             }
@@ -432,12 +486,23 @@ impl SelfTest {
                 b.navigate(ABOUT);
             }
             (Stage::WaitScriptPage, Observed::Loaded { url, .. }) if url == ABOUT => {
+                let downloads = self.sync_folder.with_extension("downloads");
+                if let Err(error) = std::fs::create_dir_all(&downloads).map_err(|e| e.to_string())
+                    .and_then(|_| b.active_webview().ok_or("missing download host".into())
+                        .and_then(|wv| platform::set_download_folder(wv, &downloads).map_err(|e| e.to_string()))) {
+                    return self.finish_with("download", false, error);
+                }
+                b.downloads_folder = Some(downloads);
+                b.downloads_visible = false;
+                b.toggle_devtools();
                 let folder = serde_json::to_string(&self.sync_folder.display().to_string()).unwrap_or_default();
-                let ext = test_store_extension(&self.sync_folder.with_extension("ext"));
+                let real_extension = std::env::var_os("KAKANGKUNG_TEST_EXTENSION").map(PathBuf::from);
+                let store_id = if real_extension.is_some() { "ddkjiahejlhfcafbddmgiahcphecmpfh" } else { TEST_STORE_ID };
+                let ext = real_extension.unwrap_or_else(|| test_store_extension(&self.sync_folder.with_extension("ext")));
                 let js = FEATURE_JS
                     .replace("__FOLDER__", &folder)
                     .replace("__STORE_EXT__", &serde_json::to_string(&ext.display().to_string()).unwrap_or_default())
-                    .replace("__STORE_ID__", TEST_STORE_ID);
+                    .replace("__STORE_ID__", store_id);
                 match b.active_webview().map(|wv| wv.evaluate_script(&js)) {
                     Some(Ok(())) => {
                         self.stage = Stage::PollFeatures;
@@ -454,7 +519,19 @@ impl SelfTest {
                     return false;
                 }
                 let r: Json = serde_json::from_str(&inner).unwrap_or(Json::Null);
-                for step in ["import", "extensions", "store", "sync", "browsers", "search", "privacy", "adblock", "taskmanager", "settings", "sitedata"] {
+                let docked = b.devtools_ready && b.devtools.as_ref().is_some_and(|panel| panel.caption_hidden());
+                self.steps.push(("devtools", docked, format!("real WebView2 DevTools hosted in a child viewport with its caption clipped={docked}")));
+                if docked {
+                    if let Some(dir) = std::env::var_os("KAKANGKUNG_SHOT_DIR") {
+                        let _ = platform::capture_window_png(b.window.hwnd(), &PathBuf::from(dir).join("devtools-docked.png"));
+                    }
+                }
+                b.close_devtools();
+                let ready = b.active_webview().is_some_and(platform::adblock_script_ready);
+                self.steps.push(("adblockscript", ready, format!("latest document-start filtering registration completed={ready}")));
+                let download_ready = b.downloads_visible && b.frame_state(false, false).pinned.iter().any(|p| p.id == "page:downloads");
+                self.steps.push(("downloadactivity", download_ready, format!("real WebView2 download event made toolbar button visible={download_ready}")));
+                for step in ["import", "extensions", "store", "sync", "browsers", "search", "privacy", "adblock", "download", "taskmanager", "settings", "sitedata"] {
                     let ok = r[step]["ok"].as_bool().unwrap_or(false);
                     let mut detail = r[step]["detail"].as_str().unwrap_or("no result").to_string();
                     if step == "sync" {
@@ -472,7 +549,16 @@ impl SelfTest {
                     "www.example.org/docs/start".into()
                 });
                 let typed: String = host.trim_start_matches("www.").chars().take(4).collect();
-                self.typed = typed.clone();
+                self.typed = typed;
+                // DevTools closes on its owning process's queue. Let the window/focus events
+                // finish before the next independent keyboard scenario starts.
+                self.stage = Stage::WaitAutocompleteFocus;
+                self.poll_at = Some(Instant::now() + Duration::from_millis(500));
+            }
+            (Stage::WaitAutocompleteFocus, Observed::Script) => {
+                let typed = self.typed.clone();
+                b.on_omnibox_blur();
+                b.frame.set_fixture_omnibox_focus(true);
                 // Into the native address bar, the way typing reaches the browser.
                 b.frame.focus_omnibox();
                 b.on_omnibox_focus();
@@ -492,6 +578,7 @@ impl SelfTest {
                 let rows = r["rows"].as_u64().unwrap_or(0);
                 let shown = b.overlay_open;
                 let ok = rows >= 2 && shown && value.len() > self.typed.len() && value.starts_with(&self.typed);
+                b.frame.set_fixture_omnibox_focus(false);
                 // Built-in pages reuse their tab instead of piling up new ones (like Chrome).
                 let n0 = b.tabs.len();
                 b.act(Action::TaskManager);
@@ -569,6 +656,7 @@ impl SelfTest {
                 // Settings, a native page: opened like the menu opens it.
                 b.open_after_active(&format!("{}settings", ui::INTERNAL));
                 self.stage = Stage::WaitNative;
+                b.navigate(&format!("{}settings/you",ui::INTERNAL));
                 self.poll_at = Some(Instant::now() + Duration::from_millis(1500));
             }
             (Stage::WaitNative, Observed::Script) => {
@@ -652,8 +740,149 @@ impl SelfTest {
             (Stage::WaitTabSearch, Observed::Script) => {
                 let (ok, detail) = native::tab_search_shown(b);
                 self.add_native(ok, detail);
+                let active = b.active;
+                let count = b.tabs.len();
+                let webviews = b.tabs.iter().filter(|t| t.webview.is_some()).count();
+                let extra: Vec<_> = (0..100).map(|_| b.open_tab_lazy("https://example.invalid/lazy")).collect();
+                let lazy = b.tabs.len() == count + 100 && b.tabs.iter().filter(|t| t.webview.is_some()).count() == webviews;
+                b.activate(u64::MAX);
+                let invalid_ignored = b.active == active;
+                for id in extra { b.close_tab(id); }
+                self.steps.push(("manytabs", lazy && invalid_ignored && b.tabs.len() == count,
+                    format!("100 background tabs created without extra WebViews={lazy}; unknown tab ignored={invalid_ignored}; tabs restored to {count}")));
+                b.settings.pinned_pages.retain(|page| *page != "downloads");
+                b.on_msg(Msg::DownloadsChanged);
+                let download_buttons = b.frame_state(false, false).pinned.iter().filter(|p| p.id == "page:downloads").count();
+                b.on_msg(Msg::DownloadsChanged);
+                let once = b.frame_state(false, false).pinned.iter().filter(|p| p.id == "page:downloads").count();
+                self.steps.push(("downloadbutton", download_buttons == 1 && once == 1,
+                    format!("download change automatically adds unpinned toolbar button={download_buttons}; repeated changes keep one button={once}")));
+                if let Some(path) = std::env::var_os("KAKANGKUNG_TEST_AVATAR") {
+                    b.on_msg(Msg::AccountProfile("Profile Fixture".into(), path.to_string_lossy().into_owned()));
+                    let state = b.frame_state(false, false);
+                    let photo = !state.avatar_image.is_empty() && platform::favicon_loaded(&state.avatar_image);
+                    self.steps.push(("profilephoto", photo && state.avatar == "P", format!("local profile image decoded for native toolbar={photo}; initial fallback={}", state.avatar)));
+                    if let Some(dir) = std::env::var_os("KAKANGKUNG_SHOT_DIR") {
+                        let _ = platform::capture_window_png(b.window.hwnd(), &PathBuf::from(dir).join("profile-toolbar.png"));
+                    }
+                }
+                let shield = b.frame_state(false, false).pinned.iter().any(|p| p.id == "adblock");
+                let was = b.settings.protection.adblock;
+                b.on_menu("adblock-global");
+                let toggled = b.settings.protection.adblock != was;
+                b.on_menu("adblock-global");
+                self.steps.push(("adblockcontrol", shield && toggled && b.settings.protection.adblock == was,
+                    format!("ad blocker toolbar control visible={shield}; global switch changes and restores setting={toggled}")));
+                b.show_adblock(1500.0, 82.0);
+                if let Some(dir) = std::env::var_os("KAKANGKUNG_SHOT_DIR") {
+                    let _ = platform::capture_window_png(b.window.hwnd(), &PathBuf::from(dir).join("adblock-toolbar.png"));
+                }
+                b.hide_overlay();
                 let (ok, detail) = (self.native.0, self.native.1.trim_start_matches("; ").to_string());
-                return self.finish_with("tabstrip", ok, detail);
+                self.steps.push(("tabstrip",ok,detail));
+                self.preview_tab = b.active;
+                self.preview_webviews = b.tabs.iter().filter(|tab|tab.webview.is_some()).count();
+                b.capture_tab_preview(b.active);
+                if !b.frame.hover_tab(b.active) { return self.finish_with("tabpreview",false,"tab has no native hit region".into()); }
+                self.stage = Stage::WaitPreview;
+                self.poll_at = Some(Instant::now()+Duration::from_secs(2));
+            }
+            (Stage::WaitPreview, Observed::Script) => {
+                let status = b.previews.status(self.preview_tab);
+                let pass = status["visible"]==true && status["thumbnail"]==true && status["memory"].as_u64().is_some_and(|bytes|bytes>0)
+                    && b.tabs.iter().filter(|tab|tab.webview.is_some()).count()==self.preview_webviews;
+                self.steps.push(("tabpreview",pass,format!("native mouse hover opened card with real snapshot and attributed renderer memory; no extra WebView: {status}")));
+                if let Some(dir) = std::env::var_os("KAKANGKUNG_SHOT_DIR") {
+                    if let Some(window) = &b.previews.window { let _ = window.capture_png(&PathBuf::from(dir).join("tab-hover.png")); }
+                }
+                b.previews.hide();
+                b.act(Action::NewTab);
+                if let Some(index) = b.index(self.preview_tab) { b.tabs[index].hidden_since = Instant::now().checked_sub(Duration::from_secs(31)); }
+                self.stage = Stage::WaitPreviewSuspend;
+                b.memory_tick();
+            }
+            (Stage::WaitPreviewSuspend, Observed::Suspended { id, ok }) if id == self.preview_tab => {
+                if !ok { return self.finish_with("sleepingpreview",false,"fixture tab refused suspension".into()); }
+                b.hover_tab(id,60.0,41.0);
+                self.stage = Stage::WaitPreviewSleeping;
+                self.poll_at = Some(Instant::now()+Duration::from_secs(1));
+            }
+            (Stage::WaitPreviewSleeping, Observed::Script) => {
+                let status = b.previews.status(self.preview_tab);
+                let sleeping = b.index(self.preview_tab).and_then(|i|b.tabs[i].webview.as_ref()).and_then(|wv|platform::is_suspended(wv).ok())==Some(true);
+                let pass = sleeping && status["visible"]==true && status["thumbnail"]==true
+                    && b.tabs.iter().filter(|tab|tab.webview.is_some()).count()==self.preview_webviews;
+                self.steps.push(("sleepingpreview",pass,format!("cached preview and memory card kept hidden tab suspended={sleeping}; {status}")));
+                b.previews.hide();
+                b.act(Action::CloseTab);
+                if std::env::var_os("KAKANGKUNG_YOUTUBE_PROBE").is_none() {
+                    return self.finish_with("previewcleanup",true,"native card hidden; fixture tab resumed".into());
+                }
+                self.stage = Stage::PollYouTube;
+                self.youtube_started = Some(Instant::now());
+                self.youtube_tab = b.active;
+                let fixture_views: Vec<_> = b.tabs.iter().filter(|tab|tab.webview.is_some() && tab.view.id!=self.youtube_tab).map(|tab|tab.view.id).collect();
+                for id in fixture_views { b.close_tab(id); }
+                if let Some(index)=b.index(self.youtube_tab) { b.tabs[index].view.pinned=false; }
+                b.settings.protect_media=true;
+                b.navigate("https://www.youtube.com/watch?v=aqz-KE-bpKQ");
+                if std::env::var_os("KAKANGKUNG_YOUTUBE_WORKLOAD").is_some() {
+                    for url in ["https://github.com/revanapriyandi","https://www.instagram.com/","https://www.facebook.com/"] {
+                        b.open_tab(url,None);
+                        if self.youtube_background==0 { self.youtube_background=b.active; }
+                    }
+                    b.activate(self.youtube_tab);
+                }
+                self.poll_at = Some(Instant::now()+Duration::from_secs(5));
+            }
+            (Stage::PollYouTube, Observed::Script) => {
+                let inner = script.and_then(|raw| serde_json::from_str::<String>(&raw).ok()).unwrap_or_default();
+                let mut sample: Json = serde_json::from_str(&inner).unwrap_or(Json::Null);
+                if !sample.is_object() { sample = json!({"error":"missing playback sample"}); }
+                sample["foreground"] = json!(b.active==self.youtube_tab);
+                if let Some(index) = b.index(self.youtube_tab) {
+                    sample["media"] = json!(b.tabs[index].view.media);
+                    sample["native"] = b.tabs[index].webview.as_ref().map(platform::memory_status).unwrap_or(Json::Null);
+                }
+                let memory = b.memory_snapshot();
+                sample["private_ws"] = memory["private_ws"].clone();
+                sample["commit"] = memory["commit"].clone();
+                self.youtube_samples.push(sample.clone());
+                eprintln!("YouTube playback probe: {sample}");
+                let elapsed = self.youtube_started.map_or(Duration::ZERO,|start|start.elapsed());
+                if self.youtube_background!=0 && elapsed>=Duration::from_secs(20) && !self.youtube_switched && sample["time"].as_f64().unwrap_or(0.0)>5.0 {
+                    self.youtube_switched=true;
+                    b.activate(self.youtube_background);
+                }
+                if self.youtube_switched && elapsed>=Duration::from_secs(55) && b.active!=self.youtube_tab { b.activate(self.youtube_tab); }
+                if elapsed >= Duration::from_secs(75) {
+                    let playing = self.youtube_samples.iter().any(|sample| sample["time"].as_f64().unwrap_or(0.0) > 5.0 && sample["ad"].as_bool() == Some(false));
+                    let helper = sample["helper"]["enabled"] == true && sample["helper"]["youtube"] == true;
+                    let background: Vec<_> = self.youtube_samples.iter().filter(|sample|sample["foreground"]==false).collect();
+                    let uninterrupted = background.iter().all(|sample| sample["native"]["suspended"]==false && sample["media"]==true && sample["paused"]==false && sample["error"]==0)
+                        && background.windows(2).all(|samples|samples[1]["time"].as_f64().unwrap_or(0.0)>samples[0]["time"].as_f64().unwrap_or(0.0));
+                    let expected_background = self.youtube_background==0 || background.len()>=6;
+                    self.steps.push(("backgroundvideo",uninterrupted && expected_background,
+                        format!("muted video continues while another site is active for >30s: {uninterrupted}; background samples={}",background.len())));
+                    self.youtube_result=(playing && helper && sample["error"]==0 && sample["paused"]==false,
+                        format!("public signed-out video advanced beyond 5s={playing}; helper active={helper}; samples={}; ad delivery varies, so playback alone does not prove every ad was blocked", Json::Array(self.youtube_samples.clone())));
+                    b.hide_overlay();
+                    b.hover_tab(self.youtube_tab,60.0,41.0);
+                    self.stage=Stage::WaitYouTubePreview;
+                    self.poll_at=Some(Instant::now()+Duration::from_secs(2));
+                    return false;
+                }
+                self.poll_at = Some(Instant::now() + Duration::from_secs(5));
+            }
+            (Stage::WaitYouTubePreview,Observed::Script) => {
+                let status=b.previews.status(self.youtube_tab);
+                self.steps.push(("youtubepreview",status["visible"]==true && status["thumbnail"]==true,format!("native card displays public video snapshot: {status}")));
+                if let Some(dir)=std::env::var_os("KAKANGKUNG_SHOT_DIR") {
+                    let _=platform::capture_window_png(b.window.hwnd(),&PathBuf::from(&dir).join("youtube-playback.png"));
+                    if let Some(window)=&b.previews.window { let _=window.capture_png(&PathBuf::from(dir).join("youtube-tab-hover.png")); }
+                }
+                let (passed,detail)=std::mem::take(&mut self.youtube_result);
+                return self.finish_with("youtube",passed,detail);
             }
             _ => {}
         }
@@ -677,7 +906,32 @@ impl SelfTest {
         let send = move |r: String| {
             let _ = p.send_event(Msg::Script(r));
         };
-        if self.stage == Stage::WaitScript {
+        if matches!(self.stage,Stage::WaitPreview|Stage::WaitPreviewSleeping|Stage::WaitYouTubePreview|Stage::WaitAutocompleteFocus) {
+            send(String::new());
+        } else if self.stage == Stage::WaitRetained {
+            if let Some(wv) = b.active_webview() {
+                let _ = wv.evaluate_script_with_callback("({object:window.__memoryRetained?.nested.value,form:document.getElementById('memory-retained-field')?.value})", send);
+            } else { send(String::new()); }
+        } else if self.stage == Stage::PollYouTube {
+            if let Some(wv) = b.index(self.youtube_tab).and_then(|index|b.tabs[index].webview.as_ref()) {
+                if platform::is_suspended(wv).ok()==Some(true) {
+                    send(serde_json::to_string(&json!({"error":"video tab unexpectedly suspended"}).to_string()).unwrap_or_default());
+                    return None;
+                }
+                let _ = wv.evaluate_script_with_callback(r#"(() => {
+                  const video = document.querySelector('video');
+                  if (video && !window.__kkProbePlayAttempted) {
+                    window.__kkProbePlayAttempted=true; video.muted=true; video.play().catch(() => {});
+                  }
+                  const quality=video?.getVideoPlaybackQuality?.();
+                  return JSON.stringify({helper:window.__kkAdblock?.status?.(), video:!!video,
+                    time:video?.currentTime || 0, ready:video?.readyState || 0, paused:video?.paused,
+                    dropped:quality?.droppedVideoFrames || 0,frames:quality?.totalVideoFrames || 0, width:video?.videoWidth || 0,height:video?.videoHeight || 0,
+                    error:video?.error?.code || 0, ad:!!document.querySelector('.html5-video-player.ad-showing'),
+                    playability:window.ytInitialPlayerResponse?.playabilityStatus?.status || ''});
+                })()"#, send);
+            } else { send(String::new()); }
+        } else if self.stage == Stage::WaitScript {
             send(hud(b).to_string());
         } else if self.stage == Stage::WaitAutocomplete {
             let rows = &b.omnibox.rows;

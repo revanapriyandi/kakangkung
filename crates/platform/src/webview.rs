@@ -45,6 +45,34 @@ pub fn is_suspended(wv: &WebView) -> Result<bool> {
     Ok(out.as_bool())
 }
 
+/// Read-only diagnostics; querying these properties does not resume a suspended document.
+pub fn memory_status(wv: &WebView) -> serde_json::Value {
+    let mut visible = BOOL(0);
+    let visible = unsafe { wv.controller().IsVisible(&mut visible) }.ok().map(|_| visible.as_bool());
+    let mut target = webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL::default();
+    let level = wv.webview().cast::<ICoreWebView2_19>().ok()
+        .and_then(|core| unsafe { core.MemoryUsageTargetLevel(&mut target) }.ok()).map(|_| target.0);
+    serde_json::json!({"visible":visible,"suspended":is_suspended(wv).ok(),"target":level})
+}
+
+/// Collect unreachable JavaScript objects in a quiet hidden document, retaining live state.
+pub fn collect_idle_garbage(wv: &WebView, done: impl FnOnce(Result<()>) + 'static) -> Result<()> {
+    let mut visible = BOOL(1);
+    let mut audio = BOOL(1);
+    unsafe {
+        wv.controller().IsVisible(&mut visible)?;
+        wv.webview().cast::<ICoreWebView2_8>()?.IsDocumentPlayingAudio(&mut audio)?;
+    }
+    if visible.as_bool() || audio.as_bool() || is_suspended(wv)? {
+        return Err(windows::core::Error::from(windows::Win32::Foundation::E_ABORT));
+    }
+    let handler = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |result, _| {
+        done(result);
+        Ok(())
+    }));
+    unsafe { wv.webview().CallDevToolsProtocolMethod(&HSTRING::from("HeapProfiler.collectGarbage"), &HSTRING::from("{}"), &handler) }
+}
+
 /// `ICoreWebView2::Stop`: stop loading (wry has no wrapper).
 pub fn stop(wv: &WebView) -> Result<()> {
     // SAFETY: plain COM call on a live interface from the UI thread.
