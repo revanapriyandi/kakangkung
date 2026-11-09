@@ -862,8 +862,10 @@ impl SelfTest {
                     let uninterrupted = background.iter().all(|sample| sample["native"]["suspended"]==false && sample["media"]==true && sample["paused"]==false && sample["error"]==0)
                         && background.windows(2).all(|samples|samples[1]["time"].as_f64().unwrap_or(0.0)>samples[0]["time"].as_f64().unwrap_or(0.0));
                     let expected_background = self.youtube_background==0 || background.len()>=6;
-                    self.steps.push(("backgroundvideo",uninterrupted && expected_background,
-                        format!("muted video continues while another site is active for >30s: {uninterrupted}; background samples={}",background.len())));
+                    if self.youtube_background != 0 {
+                        self.steps.push(("backgroundvideo",uninterrupted && expected_background,
+                            format!("muted video continues while another site is active for >30s: {uninterrupted}; background samples={}",background.len())));
+                    }
                     self.youtube_result=(playing && helper && sample["error"]==0 && sample["paused"]==false,
                         format!("public signed-out video advanced beyond 5s={playing}; helper active={helper}; samples={}; ad delivery varies, so playback alone does not prove every ad was blocked", Json::Array(self.youtube_samples.clone())));
                     b.hide_overlay();
