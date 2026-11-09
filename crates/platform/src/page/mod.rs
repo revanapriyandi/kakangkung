@@ -43,12 +43,17 @@ const TIMER_TOAST: usize = 2;
 const TIMER_ANIM: usize = 3;
 /// Animation lengths at normal speed (ms): the page coming in, a tile's own rise, a switch, a
 /// hover highlight fading in.
-const ENTER_MS: f32 = 280.0;
-const TILE_MS: f32 = 340.0;
-const TILE_DELAY_MS: f32 = 70.0;
-const TILE_STAGGER_MS: f32 = 35.0;
+// (New tabs open many times a day: the page and its tiles arrive quickly.)
+const ENTER_MS: f32 = 220.0;
+const TILE_MS: f32 = 260.0;
+const TILE_DELAY_MS: f32 = 40.0;
+const TILE_STAGGER_MS: f32 = 25.0;
 const TOGGLE_MS: f32 = 200.0;
-const HOVER_MS: f32 = 140.0;
+const HOVER_MS: f32 = 120.0;
+/// A pressed part's flash, and a message rising in or fading out.
+const PRESS_MS: f32 = 180.0;
+const TOAST_IN_MS: f32 = 200.0;
+const TOAST_OUT_MS: f32 = 160.0;
 /// The logo dropped in (once), and one hop of the waiting logo (on and on).
 const BOUNCE_MS: f32 = 1100.0;
 const HOP_MS: f32 = 560.0;
@@ -100,6 +105,12 @@ struct Inner {
     /// The page is coming in but no frame of it has been drawn yet.
     enter_pending: bool,
     hover_at: Instant,
+    /// What was hovered before `hover`: its highlight fades out as the new one fades in.
+    hover_prev: Option<input::Target>,
+    /// Strengths of (`hover`, `hover_prev`) when the pointer moved: the fades start from there.
+    hover_from: (f32, f32),
+    /// The part just pressed and when: it flashes a deeper tint for a moment.
+    press: Option<(input::Target, Instant)>,
     toggles: Vec<(String, Instant)>,
     /// The pointer is over the window (the scrollbar shows), over the scrollbar (it widens).
     mouse_in: bool,
@@ -107,7 +118,12 @@ struct Inner {
     /// Scrollbar drag: (pointer y, scroll) at the press.
     bar_drag: Option<(f32, f32)>,
     toast: String,
+    /// When the message appeared, and when it started leaving.
+    toast_at: Instant,
+    toast_out: Option<Instant>,
     factory: ID2D1Factory,
+    /// Kakangkung's own line icons, drawn for icon-font glyphs.
+    vector: crate::icons::Icons,
     rt: Option<ID2D1HwndRenderTarget>,
     brush: Option<ID2D1SolidColorBrush>,
     dw: IDWriteFactory,
@@ -173,6 +189,7 @@ impl Page {
             };
             RegisterClassExW(&class);
             let dw: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
+            let factory: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
             let inner = Box::new(RefCell::new(Inner {
                 hwnd: HWND::default(),
                 search: HWND::default(),
@@ -190,12 +207,18 @@ impl Page {
                 enter: crate::motion::long_ago(),
                 enter_pending: false,
                 hover_at: crate::motion::long_ago(),
+                hover_prev: None,
+                hover_from: (0.0, 0.0),
+                press: None,
                 toggles: vec![],
                 mouse_in: false,
                 bar_hover: false,
                 bar_drag: None,
                 toast: String::new(),
-                factory: D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?,
+                toast_at: crate::motion::long_ago(),
+                toast_out: None,
+                vector: crate::icons::Icons::new(&factory),
+                factory,
                 rt: None,
                 brush: None,
                 fonts: fonts(&dw)?,
@@ -226,6 +249,16 @@ impl Page {
     fn inner(&self) -> Option<&RefCell<Inner>> {
         // SAFETY: GWLP_USERDATA holds the boxed Inner from creation until WM_DESTROY.
         unsafe { (GetWindowLongPtrW(self.hwnd, GWLP_USERDATA) as *const RefCell<Inner>).as_ref() }
+    }
+
+    pub fn focus_search(&self) {
+        if let Some(cell) = self.inner() {
+            let i = cell.borrow();
+            if !i.doc.search.is_empty() {
+                // SAFETY: this page owns the live search edit control.
+                unsafe { let _ = windows::Win32::UI::Input::KeyboardAndMouse::SetFocus(Some(i.search)); }
+            }
+        }
     }
 
     pub fn hwnd(&self) -> isize {
@@ -281,6 +314,12 @@ impl Page {
             i.toast.clear();
         }
         if !doc.toast.is_empty() {
+            // A new message rises in (the same one shown again stays put).
+            if i.toast != doc.toast || i.toast_out.is_some() {
+                i.toast_at = Instant::now();
+                i.animate();
+            }
+            i.toast_out = None;
             i.toast = doc.toast.clone();
             // SAFETY: timer on our own window; it clears the message.
             unsafe {

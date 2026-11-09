@@ -23,6 +23,7 @@ mod profile;
 mod selftest;
 mod update;
 mod webstore;
+mod webapps;
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -69,6 +70,7 @@ const SETTLE: Duration = Duration::from_millis(2000);
 const TEST_TIMEOUT: Duration = Duration::from_secs(90);
 
 enum Run {
+    App(String),
     Normal(String),
     /// A further window (Ctrl+N, "Move tab to new window"): same profile, but it leaves session
     /// restore, sync and first-run work to the main window.
@@ -108,6 +110,7 @@ fn parse_args() -> (Run, Vec<String>) {
         }
     }
     let run = match args.as_slice() {
+        [flag] if flag.starts_with("--app-id=") => Run::App(flag[9..].into()),
         [flag, path, url, ..] if flag == "--screenshot" => Run::Screenshot(path.into(), url.clone()),
         [flag, path] if flag == "--screenshot" => Run::Screenshot(path.into(), home),
         [flag, path, ..] if flag == "--self-test" => Run::SelfTest(path.into()),
@@ -153,6 +156,12 @@ fn main() {
             eprintln!("setting the working folder to {}: {e}", dir.display());
         }
     }
+    let installed_app = if let Run::App(id) = &run {
+        match webapps::load(&storage::data_dir(), id) {
+            Ok(app) => Some(app),
+            Err(error) => { eprintln!("Cannot open web app: {error}"); std::process::exit(1); }
+        }
+    } else { None };
     let event_loop = EventLoopBuilder::<Msg>::with_user_event().build();
     timing("event loop");
     let proxy = event_loop.create_proxy();
@@ -160,7 +169,7 @@ fn main() {
         .with_title(APP)
         .with_inner_size(LogicalSize::new(1280.0, 800.0))
         .with_min_inner_size(LogicalSize::new(500.0, 300.0))
-        .with_decorations(false)
+        .with_decorations(installed_app.is_some())
         .with_undecorated_shadow(true)
         .with_background_color(frame_color(platform::dark_mode()))
         .with_window_icon(icon(32))
@@ -177,7 +186,7 @@ fn main() {
     timing("window built");
     // Tests get a throwaway profile so they always start fresh.
     let base = match run {
-        Run::Normal(_) | Run::Window { .. } => storage::data_dir(),
+        Run::Normal(_) | Run::Window { .. } | Run::App(_) => storage::data_dir(),
         // Test runs get a fresh profile; KAKANGKUNG_TEST_DIR reuses one (start-up timing checks).
         _ => std::env::var_os("KAKANGKUNG_TEST_DIR")
             .map(PathBuf::from)
@@ -220,7 +229,9 @@ fn main() {
             std::process::exit(1);
         }
     };
+    browser.installed_app = installed_app;
     let start_url = match &run {
+        Run::App(_) => browser.installed_app.as_ref().unwrap().start_url.clone(),
         // Like Chrome: the very first start opens the welcome tab, later starts a new tab.
         Run::Normal(url) if first_run && url == ui::NEWTAB_URL => WELCOME.into(),
         // An Incognito window starts on the Incognito page.
@@ -234,6 +245,7 @@ fn main() {
         browser.engine_setting = p.engine.clone();
         browser.memory_mode = p.memory;
         browser.settings = p.settings.clone();
+        (browser.devtools_side, browser.devtools_share) = (p.settings.devtools_dock, p.settings.devtools_share);
         browser.account_name = p.account.clone();
         browser.account_picture = platform::load_avatar_file(Path::new(&p.account_picture)).unwrap_or_default();
         browser.downloads_folder = Some(p.downloads.clone()).filter(|f| f.is_dir());

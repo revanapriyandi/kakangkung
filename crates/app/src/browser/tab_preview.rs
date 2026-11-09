@@ -21,6 +21,7 @@ pub(crate) struct Previews {
     images: VecDeque<Cached>,
     memory: HashMap<u64, (Instant, TabMemory)>,
     pending_image: Option<(u64, u64)>,
+    failures: HashMap<u64, u8>,
     memory_due: Option<Instant>,
     pub(crate) capture_due: Option<(u64, Instant)>,
 }
@@ -29,6 +30,8 @@ impl Previews {
     pub(crate) fn status(&self, id: u64) -> serde_json::Value {
         serde_json::json!({"visible":self.window.as_ref().is_some_and(|window|window.is_visible()),
             "thumbnail":self.images.iter().any(|entry|entry.tab==id),"memory":self.memory.get(&id).map(|(_,value)|value.private_ws),
+            "capture_pending":self.pending_image.is_some_and(|(tab,_)|tab==id),
+            "capture_failures":self.failures.get(&id).copied().unwrap_or(0),
             "cached":self.images.len(),"cache_bytes":self.images.iter().map(|entry|entry.image.pixels.len()).sum::<usize>()})
     }
     fn insert(&mut self, tab: u64, revision: u64, image: Thumbnail) {
@@ -42,6 +45,8 @@ impl Previews {
     pub(crate) fn forget(&mut self, tab: u64) {
         self.images.retain(|entry| entry.tab != tab);
         self.memory.remove(&tab);
+        self.failures.remove(&tab);
+        if self.capture_due.is_some_and(|(id,_)|id==tab) { self.capture_due=None; }
         if self.pending_image.is_some_and(|(id,_)|id==tab) { self.pending_image=None; }
         if self.hovered.is_some_and(|(id,_,_)| id == tab) { self.hide(); }
     }
@@ -54,16 +59,44 @@ impl Previews {
 }
 
 impl Browser {
+    pub(crate) fn preview_document_ready(&mut self, id: u64, url: &str) {
+        let Some(index) = self.index(id) else { return };
+        let tab = &mut self.tabs[index];
+        if tab.document_ready || tab.view.url.split('#').next() != url.split('#').next() { return; }
+        tab.document_ready = true;
+        self.previews.failures.remove(&id);
+        if self.visible_with(self.active).contains(&id) {
+            self.previews.capture_due = Some((id, Instant::now() + Duration::from_millis(700)));
+        }
+    }
+
     pub(crate) fn capture_tab_preview(&mut self, id: u64) {
         let Some(tab) = self.index(id).map(|i| &self.tabs[i]) else { return; };
-        if tab.view.loading || !self.visible_with(self.active).contains(&id) || self.previews.pending_image.is_some() { return; }
+        if !tab.document_ready || !self.visible_with(self.active).contains(&id) || self.previews.pending_image.is_some() { return; }
         let revision = tab.revision;
-        if self.previews.images.iter().any(|entry| entry.tab == id && entry.revision == revision && entry.at.elapsed() < REFRESH) { return; }
+        if let Some(entry) = self.previews.images.iter().find(|entry| entry.tab == id && entry.revision == revision && entry.at.elapsed() < REFRESH) {
+            self.previews.capture_due = Some((id, entry.at + REFRESH));
+            return;
+        }
+        if self.previews.failures.get(&id).copied().unwrap_or(0) >= 3 { return; }
         let Some(wv) = tab.webview.as_ref() else { return; };
         let proxy = self.proxy.clone();
-        if platform::capture_thumbnail(wv, move |result| {
+        match platform::capture_thumbnail(wv, move |result| {
             let _ = proxy.send_event(Msg::TabThumbnail { id, revision, result });
-        }).is_ok() { self.previews.pending_image = Some((id, revision)); }
+        }) {
+            Ok(()) => self.previews.pending_image = Some((id, revision)),
+            Err(error) => self.preview_capture_failed(id, error.to_string()),
+        }
+    }
+
+    fn preview_capture_failed(&mut self, id: u64, error: String) {
+        let attempts = self.previews.failures.entry(id).or_default();
+        *attempts = attempts.saturating_add(1);
+        let attempts = *attempts;
+        eprintln!("tab preview {id}: capture attempt {attempts}: {error}");
+        if attempts < 3 && self.visible_with(self.active).contains(&id) {
+            self.previews.capture_due = Some((id, Instant::now() + Duration::from_millis(500 * attempts as u64)));
+        }
     }
 
     fn request_preview_memory(&mut self, id: u64) {
@@ -90,7 +123,10 @@ impl Browser {
     pub(crate) fn thumbnail_ready(&mut self, id: u64, revision: u64, result: Result<Thumbnail, String>) {
         if self.previews.pending_image == Some((id, revision)) { self.previews.pending_image = None; }
         if !self.index(id).is_some_and(|i| self.tabs[i].revision == revision) { return; }
-        if let Ok(image) = result { self.previews.insert(id, revision, image); }
+        match result {
+            Ok(image) => { self.previews.failures.remove(&id); self.previews.insert(id, revision, image); }
+            Err(error) => self.preview_capture_failed(id, error),
+        }
         if self.previews.hovered.is_some_and(|(hover,_,_)| hover == id) { self.draw_tab_preview(); }
     }
 
@@ -115,8 +151,11 @@ impl Browser {
         let status = if thumbnail.is_some() { "Last captured preview" }
             else if crate::native::page_of(&tab.view.url).is_some() { "Browser page" }
             else if tab.webview.is_none() { "Open this tab to capture a preview" }
-            else if tab.view.loading { "Page is loading" }
-            else { "Preview not available" };
+        else if self.previews.pending_image.is_some_and(|(pending,_)|pending==id) { "Capturing preview…" }
+        else if !tab.document_ready { "Page is loading…" }
+        else if !self.visible_with(self.active).contains(&id) { "Open this tab to capture a preview" }
+        else if self.previews.failures.get(&id).copied().unwrap_or(0) >= 3 { "Preview unavailable for this page" }
+        else { "Preparing preview…" };
         let note = if self.previews.memory.get(&id).is_some_and(|(_,memory)|memory.heap_only) { "Excludes images, video and GPU memory" } else { "" };
         let site = if tab.view.url.starts_with("https://") || tab.view.url.starts_with("http://") {
             tab.view.url.split_once("://").map(|(_,rest)|rest.split(['/', '?', '#']).next().unwrap_or(rest)).unwrap_or_default().to_string()

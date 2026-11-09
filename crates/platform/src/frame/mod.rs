@@ -10,7 +10,7 @@ mod input;
 pub(crate) mod layout;
 pub(crate) mod paint;
 pub(crate) mod style;
-pub(crate) use self::input::{edit_text, lparam_point, scale_of};
+pub(crate) use self::input::{edit_shortcut, edit_text, lparam_point, scale_of};
 
 use std::cell::RefCell;
 use std::ffi::c_void;
@@ -26,6 +26,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{GetFocus, SetFocus};
 use windows::Win32::UI::Shell::SetWindowSubclass;
 use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer, CreateWindowExW, CS_DBLCLKS, DestroyWindow, ES_AUTOHSCROLL, GetWindowLongPtrW, GWLP_USERDATA, IDC_ARROW, LoadCursorW, MoveWindow, RegisterClassExW, SendMessageW, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN, WS_VISIBLE};
 use windows::core::w;
+use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMSBT_TABBEDWINDOW, DWMWA_SYSTEMBACKDROP_TYPE};
+use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GA_ROOT};
 
 use self::layout::{rect, Hit};
 use self::paint::{icon_family, text_format};
@@ -100,6 +102,7 @@ pub struct FrameState {
     pub chip: Chip,
     pub bookmarked: bool,
     pub show_star: bool,
+    pub installable: bool,
     /// The password manager's key in the address bar: the page has saved logins, or a login
     /// waits to be saved.
     pub key: bool,
@@ -120,10 +123,24 @@ pub struct FrameState {
 /// Frame timer of animations, and how long a new tab takes to widen (ms at normal speed).
 pub(super) const TIMER_ANIM: usize = 1;
 pub(super) const TAB_GROW_MS: f32 = 200.0;
-/// Timer of the loading spinners, and its interval: 20 frames a second is smooth enough for a
-/// spinner and keeps the CPU-drawn frame cheap while pages load.
+/// How long hover highlights take to fade, and tabs (and the selected tab's highlight) to slide
+/// to new places (ms at normal speed).
+pub(super) const HOVER_MS: f32 = 120.0;
+pub(super) const SLIDE_MS: f32 = 180.0;
+/// How long the address bar's focus ring takes to fade in or out.
+const FOCUS_MS: f32 = 150.0;
+
+/// Windows 11's glass (Mica Alt, as behind Windows Terminal's tabs) behind the browser window
+/// `root`; false where Windows has none (Windows 10), which keeps the solid frame.
+fn enable_glass(root: HWND) -> bool {
+    let kind = DWMSBT_TABBEDWINDOW;
+    // SAFETY: a documented DWM attribute set with a valid local of its type.
+    unsafe { DwmSetWindowAttribute(root, DWMWA_SYSTEMBACKDROP_TYPE, &kind as *const _ as *const c_void, std::mem::size_of_val(&kind) as u32) }.is_ok()
+}
+/// Timer of the loading spinners, and its interval: two Windows timer ticks (about 32 frames a
+/// second) turn smoothly while keeping the CPU-drawn frame cheap as pages load.
 pub(super) const TIMER_SPIN: usize = 2;
-const SPIN_MS: u32 = 50;
+const SPIN_MS: u32 = 31;
 pub(super) const TIMER_TAB_PREVIEW: usize = 3;
 
 struct Gfx {
@@ -138,6 +155,8 @@ struct Gfx {
     text_bold: IDWriteTextFormat,
     icons: IDWriteTextFormat,
     icons_small: IDWriteTextFormat,
+    /// Kakangkung's own line icons (they replace most icon-font glyphs).
+    vector: crate::icons::Icons,
 }
 
 struct Inner {
@@ -149,6 +168,8 @@ struct Inner {
     hover: Hit,
     pressed: Hit,
     preview_tab: Option<u64>,
+    /// A tab's hover card is showing (moving to another tab updates it at once).
+    preview_shown: bool,
     synthetic_hover: bool,
     synthetic_omnibox_focus: bool,
     tracking: bool,
@@ -167,6 +188,134 @@ struct Inner {
     scroll: f32,
     /// Scroll the selected tab into view at the next paint.
     reveal: bool,
+    /// What was hovered before `hover`, the highlight strengths of (`hover`, that) when the
+    /// pointer moved, and when: the two cross-fade from there, so a quick back-and-forth never jumps.
+    hover_prev: Hit,
+    hover_from: (f32, f32),
+    hover_at: std::time::Instant,
+    /// Where each tab was drawn last (id, offset in the strip, width); after the tabs change they
+    /// slide from there to their new places.
+    drawn: Vec<Placed>,
+    slide: Option<(Vec<Placed>, std::time::Instant)>,
+    /// The selected tab's highlight as drawn last (x, width), and where it glides from after
+    /// another tab is selected.
+    active_drawn: Option<(f32, f32)>,
+    active_slide: Option<((f32, f32), std::time::Instant)>,
+    /// The browser window, whether Windows' glass shows through the tab strip, and the glass
+    /// height (pixels) and dark setting last given to Windows.
+    root: HWND,
+    glass: bool,
+    glass_margin: i32,
+    glass_dark: Option<bool>,
+    /// The address bar is being edited, since when (its focus ring fades in and out).
+    omni_focus: bool,
+    omni_focus_at: std::time::Instant,
+}
+
+/// A tab as drawn: (id, offset in the strip, width).
+type Placed = (u64, f32, f32);
+
+/// Highlight strengths of the frame's parts as the hover cross-fades (0 = none, 1 = full).
+#[derive(Clone, Copy)]
+struct Fade {
+    hover: Hit,
+    prev: Hit,
+    from: (f32, f32),
+    t: f32,
+    pressed: Hit,
+}
+
+impl Fade {
+    /// Strength of the highlight of the parts `m` matches, without the pressed tint.
+    fn level(&self, m: impl Fn(Hit) -> bool) -> f32 {
+        let (from_now, from_was) = self.from;
+        match (m(self.hover), m(self.prev)) {
+            // Moving within one part (a tab's body to its close button): it stays lit.
+            (true, true) => {
+                let f = from_now.max(from_was);
+                f + (1.0 - f) * self.t
+            }
+            (true, false) => from_now + (1.0 - from_now) * self.t,
+            (false, true) => from_was * (1.0 - self.t),
+            _ => 0.0,
+        }
+    }
+
+    /// Strength of the highlight of the parts `m` matches; deeper while pressed (at once, no fade).
+    fn of(&self, m: impl Fn(Hit) -> bool) -> f32 {
+        let pressed = m(self.pressed) && m(self.hover);
+        self.level(m) * if pressed { 1.7 } else { 1.0 }
+    }
+
+    fn at(&self, h: Hit) -> f32 {
+        self.of(|x| x == h)
+    }
+}
+
+impl Inner {
+    fn fade(&self) -> Fade {
+        Fade { hover: self.hover, prev: self.hover_prev, from: self.hover_from, t: crate::motion::eased(self.hover_at, 0.0, HOVER_MS), pressed: self.pressed }
+    }
+
+    /// The pointer is over `h` now: start cross-fading the highlights.
+    fn set_hover(&mut self, h: Hit) {
+        if h == self.hover {
+            return;
+        }
+        let f = self.fade();
+        self.hover_from = (f.level(|x| x == h), f.level(|x| x == self.hover));
+        self.hover_prev = self.hover;
+        self.hover = h;
+        self.hover_at = std::time::Instant::now();
+        self.kick_animation();
+    }
+
+    /// Tabs were added, closed or moved: slide them from where they were drawn.
+    fn slide_tabs(&mut self) {
+        if !self.drawn.is_empty() {
+            self.slide = Some((self.drawn.clone(), std::time::Instant::now()));
+            self.kick_animation();
+        }
+    }
+
+    /// Whether anything in the frame is still moving.
+    fn animating(&self) -> bool {
+        let running = |at: std::time::Instant, ms: f32| crate::motion::progress(at, 0.0, ms) < 1.0;
+        self.appear.iter().any(|(_, at)| running(*at, TAB_GROW_MS))
+            || running(self.hover_at, HOVER_MS)
+            || self.slide.as_ref().is_some_and(|(_, at)| running(*at, SLIDE_MS))
+            || self.active_slide.is_some_and(|(_, at)| running(at, SLIDE_MS))
+            || running(self.omni_focus_at, FOCUS_MS)
+    }
+
+    /// The address bar gained or lost the keyboard: fade its focus ring from where it is.
+    fn set_omni_focus(&mut self, focused: bool) {
+        if focused == self.omni_focus {
+            return;
+        }
+        self.omni_focus = focused;
+        // Turn back from where the ring is, so a quick refocus never jumps.
+        self.omni_focus_at = crate::motion::reverse(self.omni_focus_at, FOCUS_MS);
+        self.kick_animation();
+    }
+
+    /// How strongly the address bar's focus ring shows (0..=1).
+    fn omni_focus_level(&self) -> f32 {
+        let t = crate::motion::progress(self.omni_focus_at, 0.0, FOCUS_MS);
+        let t = if self.omni_focus { crate::motion::ease_out(t) } else { 1.0 - crate::motion::ease_out(t) };
+        t.clamp(0.0, 1.0)
+    }
+
+    /// Run the frame timer of animations (and repaint now).
+    fn kick_animation(&self) {
+        // SAFETY: frame timer and repaint request on our own live window.
+        unsafe {
+            if crate::motion::enabled() {
+                SetTimer(Some(self.hwnd), TIMER_ANIM, crate::motion::FRAME_MS, None);
+            }
+            let _ = InvalidateRect(Some(self.hwnd), None, false);
+        }
+    }
 }
 
 /// The frame window. Dropping it destroys the window.
@@ -195,7 +344,9 @@ impl Frame {
             let factory: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
             let dw: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
             let icons = icon_family(&dw);
+            let vector = crate::icons::Icons::new(&factory);
             let gfx = Gfx {
+                vector,
                 factory,
                 target: None,
                 brush: None,
@@ -215,6 +366,7 @@ impl Frame {
                 hover: Hit::None,
                 pressed: Hit::None,
                 preview_tab: None,
+                preview_shown: false,
                 synthetic_hover: false,
                 synthetic_omnibox_focus: false,
                 tracking: false,
@@ -227,6 +379,19 @@ impl Frame {
                 appear: vec![],
                 scroll: 0.0,
                 reveal: true,
+                hover_prev: Hit::None,
+                hover_from: (0.0, 0.0),
+                hover_at: crate::motion::long_ago(),
+                drawn: vec![],
+                slide: None,
+                active_drawn: None,
+                active_slide: None,
+                root: GetAncestor(HWND(parent as _), GA_ROOT),
+                glass: enable_glass(GetAncestor(HWND(parent as _), GA_ROOT)),
+                glass_margin: -1,
+                glass_dark: None,
+                omni_focus: false,
+                omni_focus_at: crate::motion::long_ago(),
             }));
             let raw = Box::into_raw(inner);
             let hwnd = CreateWindowExW(
@@ -312,6 +477,18 @@ impl Frame {
         if i.state.active != state.active || i.state.tabs.len() != state.tabs.len() {
             i.reveal = true;
         }
+        // Tabs closed, opened, moved, pinned: the others slide into their new places, and the
+        // selected tab's highlight glides to the newly selected tab.
+        let order = |s: &FrameState| s.tabs.iter().map(|t| (t.id, t.pinned)).collect::<Vec<_>>();
+        if !i.state.tabs.is_empty() && order(&i.state) != order(&state) {
+            i.slide_tabs();
+        }
+        if i.state.active != state.active {
+            if let Some(from) = i.active_drawn {
+                i.active_slide = Some((from, std::time::Instant::now()));
+                i.kick_animation();
+            }
+        }
         // Spinners turn while any tab loads (they stand still when animations are off).
         // SAFETY: frame timer on our own live window.
         unsafe {
@@ -352,6 +529,24 @@ impl Frame {
     /// Keep the native fixture independent of focus in the person's other desktop windows.
     pub fn set_fixture_omnibox_focus(&self, focused: bool) {
         if let Some(inner) = self.inner() { inner.borrow_mut().synthetic_omnibox_focus = focused; }
+    }
+
+    /// Send a native edit key in an isolated fixture without changing desktop keyboard input.
+    pub fn fixture_omnibox_key(&self, vk: u16, ctrl: bool) -> Option<(u32, u32)> {
+        use windows::Win32::UI::{Controls::EM_GETSEL, Input::KeyboardAndMouse::{GetKeyboardState, SetKeyboardState, VK_CONTROL}};
+        let edit = self.inner()?.borrow().edit;
+        unsafe {
+            let mut saved = [0u8; 256];
+            GetKeyboardState(&mut saved).ok()?;
+            let mut keys = [0u8; 256];
+            keys[VK_CONTROL.0 as usize] = if ctrl { 0x80 } else { 0 };
+            SetKeyboardState(&keys).ok()?;
+            SendMessageW(edit, windows::Win32::UI::WindowsAndMessaging::WM_KEYDOWN, Some(WPARAM(vk as usize)), Some(LPARAM(0)));
+            let _ = SetKeyboardState(&saved);
+            let (mut start, mut end) = (0u32, 0u32);
+            SendMessageW(edit, EM_GETSEL, Some(WPARAM((&mut start as *mut u32) as usize)), Some(LPARAM((&mut end as *mut u32) as isize)));
+            Some((start, end))
+        }
     }
 
     /// The text in the address bar.
@@ -430,4 +625,27 @@ pub fn frame_to_screen(frame: isize, x: f32, y: f32) -> (i32, i32) {
         let _ = ClientToScreen(hwnd, &mut pt);
     }
     (pt.x, pt.y)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Fade, Hit};
+
+    #[test]
+    fn hover_cross_fades_without_jumps() {
+        let f = |t: f32, from: (f32, f32)| Fade { hover: Hit::Tab(2), prev: Hit::Tab(1), from, t, pressed: Hit::None };
+        // Moving to tab 2: it lights up while tab 1 fades out.
+        assert_eq!(f(0.0, (0.0, 1.0)).at(Hit::Tab(2)), 0.0);
+        assert_eq!(f(0.0, (0.0, 1.0)).at(Hit::Tab(1)), 1.0);
+        assert_eq!(f(1.0, (0.0, 1.0)).at(Hit::Tab(2)), 1.0);
+        assert_eq!(f(1.0, (0.0, 1.0)).at(Hit::Tab(1)), 0.0);
+        // Coming back halfway: the fade starts from where it was, not from zero.
+        assert_eq!(f(0.0, (0.4, 0.6)).at(Hit::Tab(2)), 0.4);
+        // Moving within a part never dims it.
+        let inner = Fade { hover: Hit::TabClose(1), prev: Hit::Tab(1), from: (0.0, 1.0), t: 0.3, pressed: Hit::None };
+        assert_eq!(inner.level(|h| matches!(h, Hit::Tab(1) | Hit::TabClose(1))), 1.0);
+        // Pressed: deeper at once.
+        let pressed = Fade { hover: Hit::Back, prev: Hit::None, from: (1.0, 0.0), t: 1.0, pressed: Hit::Back };
+        assert!(pressed.at(Hit::Back) > 1.5);
+    }
 }

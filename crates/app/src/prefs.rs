@@ -247,6 +247,28 @@ pub(crate) struct Settings {
     pub(crate) tab_search_button: bool,
     /// Clicking a tab's speaker icon mutes it.
     pub(crate) speaker_mutes: bool,
+    /// Where DevTools docks ("bottom", "right", "left") and the share of the page area it takes.
+    pub(crate) devtools_dock: &'static str,
+    pub(crate) devtools_share: f32,
+}
+
+/// Settings holding where DevTools docks and how much room it takes (kept from the dock's rail
+/// and splitter, not shown in Settings).
+pub(crate) const DEVTOOLS_DOCK: &str = "devtools.dock";
+pub(crate) const DEVTOOLS_SHARE: &str = "devtools.share";
+
+/// A saved dock side, or the bottom.
+pub(crate) fn dock_side(v: Option<&str>) -> &'static str {
+    match v {
+        Some("right") => "right",
+        Some("left") => "left",
+        _ => "bottom",
+    }
+}
+
+/// A saved panel share (15–85 % of the page area), or 40 %.
+pub(crate) fn dock_share(v: Option<&str>) -> f32 {
+    v.and_then(|v| v.parse::<f32>().ok()).filter(|v| v.is_finite()).map_or(0.4, |v| v.clamp(0.15, 0.85))
 }
 
 impl Settings {
@@ -324,6 +346,8 @@ impl Settings {
             pinned_extensions: get(PINNED_EXTENSIONS).map(|v| pinned_list(&v)).unwrap_or_default(),
             tab_search_button: on("appearance.tab_search_button"),
             speaker_mutes: on("tabs.speaker_mutes"),
+            devtools_dock: dock_side(get(DEVTOOLS_DOCK).as_deref()),
+            devtools_share: dock_share(get(DEVTOOLS_SHARE).as_deref()),
         }
     }
 
@@ -408,6 +432,17 @@ impl Prefs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_devtools_dock_falls_back_safely() {
+        assert_eq!(dock_side(Some("right")), "right");
+        assert_eq!(dock_side(Some("top")), "bottom");
+        assert_eq!(dock_side(None), "bottom");
+        assert_eq!(dock_share(Some("0.550")), 0.55);
+        assert_eq!(dock_share(Some("5")), 0.85);
+        assert_eq!(dock_share(Some("NaN")), 0.4);
+        assert_eq!(dock_share(Some("x")), 0.4);
+    }
 
     #[test]
     fn defaults_are_allowed_values() {

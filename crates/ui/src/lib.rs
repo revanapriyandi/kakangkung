@@ -357,6 +357,8 @@ pub enum Action {
     Home,
     /// Ctrl+O: open a file from this PC (PDF, page, image, media) in a tab.
     OpenFile,
+    MenuCommand(&'static str),
+    ReloadBypass,
 }
 
 /// Chrome's shortcuts on Windows. `vk` is a Win32 virtual-key code.
@@ -376,6 +378,14 @@ pub fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<Action> {
     const ESC: u32 = 0x1B;
     let ch = char::from_u32(vk).filter(|c| c.is_ascii_alphanumeric());
     match (ctrl, shift, alt, vk, ch) {
+        (true, false, false, _, Some('F')) => Some(MenuCommand("find")),
+        (true, false, false, _, Some('P')) => Some(MenuCommand("print")),
+        (true, true, false, _, Some('W')) => Some(MenuCommand("exit")),
+        (true, true, false, 0x2e, _) => Some(MenuCommand("clear")),
+        (true, _, false, 0xbb | 0x6b, _) => Some(MenuCommand("zoomin")),
+        (true, _, false, 0xbd | 0x6d, _) => Some(MenuCommand("zoomout")),
+        (true, false, false, _, Some('0')) => Some(MenuCommand("zoomreset")),
+        (true, true, false, _, Some('R')) | (true, false, false, F5, _) | (false, true, false, F5, _) => Some(ReloadBypass),
         (true, false, false, _, Some('T')) => Some(NewTab),
         (true, true, false, _, Some('N')) => Some(NewPrivateTab),
         (true, false, false, _, Some('N')) => Some(NewWindow),
@@ -629,16 +639,23 @@ mod tests {
         assert_eq!(k(b'I', true, true, false), Some(DevTools));
         assert_eq!(k(0x1B, false, true, false), Some(TaskManager));
         assert_eq!(k(0x1B, false, false, false), None, "plain Esc stays with the page");
-        // Zoom (Ctrl +/-/0), find (Ctrl+F) and print (Ctrl+P) are left to WebView2's own handling.
-        assert_eq!(k(0xBB, true, false, false), None);
-        assert_eq!(k(b'F', true, false, false), None);
-        assert_eq!(k(b'P', true, false, false), None);
+        // Browser commands also work while a native edit control has focus.
+        assert_eq!(k(0xBB, true, false, false), Some(MenuCommand("zoomin")));
+        assert_eq!(k(b'F', true, false, false), Some(MenuCommand("find")));
+        assert_eq!(k(b'P', true, false, false), Some(MenuCommand("print")));
         assert_eq!(k(b'9', true, false, false), Some(SelectTab(usize::MAX)));
-        // Keys the page must keep: plain letters, Ctrl+C/V, Ctrl+Shift+W.
+        // Plain text and editing shortcuts stay with the focused control.
         assert_eq!(k(b'T', false, false, false), None);
         assert_eq!(k(b'C', true, false, false), None);
         assert_eq!(k(b'V', true, false, false), None);
-        assert_eq!(k(b'W', true, true, false), None);
+        assert_eq!(k(b'W', true, true, false), Some(MenuCommand("exit")));
+        assert_eq!(k(b'F', true, false, false), Some(MenuCommand("find")));
+        assert_eq!(k(b'P', true, false, false), Some(MenuCommand("print")));
+        assert_eq!(k(0xbb, true, true, false), Some(MenuCommand("zoomin")));
+        assert_eq!(k(0xbd, true, false, false), Some(MenuCommand("zoomout")));
+        assert_eq!(k(b'0', true, false, false), Some(MenuCommand("zoomreset")));
+        assert_eq!(k(b'R', true, true, false), Some(ReloadBypass));
+        assert_eq!(k(b'A', true, false, false), None);
     }
 
     #[test]

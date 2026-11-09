@@ -126,7 +126,7 @@ impl Inner {
             let size = logo.right - logo.left;
             // Little shapes and sparkles around the logo, spread sideways (clear of the title).
             let k = size / LOGO;
-            super::art::decorations(p, f, x, y, 1.9 * k, 0.75 * k.max(1.4), motion::eased(self.enter, 120.0, 520.0), self.dark);
+            super::art::decorations(p, f, x, y, 1.9 * k, 0.75 * k.max(1.4), motion::eased(self.enter, 60.0, 360.0), self.dark);
             if self.doc.hero_icon.is_empty() {
                 // The brand mark's purple-to-indigo, bouncing when asked: its shadow on the ground
                 // shrinks and fades as it rises.
@@ -160,7 +160,7 @@ impl Inner {
             let typing = edit.is_some_and(|e| e == unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetFocus() });
             let filled = edit.is_some_and(|e| !crate::frame::edit_text(e).is_empty());
             p.fill(r, FAKEBOX_H / 2.0, if typing || filled { c.field } else { c.card }, 1.0);
-            let ring = if typing || self.hover == Some(Target::Fakebox) { c.brand } else { c.line };
+            let ring = if typing { c.brand } else { motion::mix(c.line, c.brand, self.lit(Target::Fakebox).min(1.0)) };
             p.outline(r, FAKEBOX_H / 2.0, ring, if typing { 2.0 } else { 1.0 });
             p.text(glyph::SEARCH, rect(r.left + 14.0, r.top, 28.0, FAKEBOX_H), &f.icons, if typing { c.brand } else { c.muted });
             if !typing && !filled {
@@ -169,8 +169,9 @@ impl Inner {
         }
         for (k, chip) in self.layout.chips.iter().enumerate() {
             let item = &self.doc.nav[k];
-            if self.hover == Some(Target::Nav(k)) {
-                p.fill(*chip, CHIP_H / 2.0, c.hover.0, c.hover.1 * 1.5);
+            let a = self.lit(Target::Nav(k));
+            if a > 0.001 {
+                p.fill(*chip, CHIP_H / 2.0, c.hover.0, c.hover.1 * 1.5 * a);
             }
             p.outline(*chip, CHIP_H / 2.0, c.line, 1.0);
             p.text(&item.icon, rect(chip.left + 12.0, chip.top, 24.0, CHIP_H), &f.icons, c.brand);
@@ -187,8 +188,14 @@ impl Inner {
         let dy = (1.0 - rise) * 22.0;
         let b = &RowBox { rect: shift(b.rect, dy), text: shift(b.text, dy), ..b.clone() };
         let card = inset(b.rect, 6.0);
-        p.fill(card, 16.0, c.card, if self.hover == Some(Target::Row(k)) { 1.0 } else { 0.55 });
-        if self.hover == Some(Target::Row(k)) {
+        // Hovered, a tile firms up, lifts a little and gains an edge.
+        let lit = self.lit(Target::Row(k)).min(1.0);
+        let card = shift(card, -2.0 * lit);
+        if lit > 0.001 {
+            p.fill(shift(card, 3.0), 16.0, 0x000000, (if self.dark { 0.18 } else { 0.05 }) * lit);
+        }
+        p.fill(card, 16.0, c.card, 0.55 + 0.45 * lit);
+        if lit > 0.001 {
             p.outline(card, 16.0, c.line, 1.0);
         }
         let name = row.sub.trim_start_matches("www.");

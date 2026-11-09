@@ -12,9 +12,13 @@ pub(crate) enum Msg {
     Ipc(String),
     /// A download started or moved on (for the Downloads page).
     DownloadsChanged,
+    WebAppFound { id: u64, url: String, data: String },
+    Security { id: u64, url: String, data: String },
+    PreviewReady { id: u64, url: String },
     TabThumbnail { id: u64, revision: u64, result: Result<platform::Thumbnail, String> },
     TabMemory { id: u64, revision: u64, result: Result<platform::TabMemory, String> },
-    Inspect(u64),
+    /// Item `cmd` of tab `id`'s page context menu was picked (`link`: the link under the pointer).
+    PageMenu { id: u64, cmd: &'static str, link: String },
     /// The updater moved on (checking, downloading, ready…).
     Update(crate::update::Status),
     /// An API answer for a native page: what was asked, the message to show when it worked.
@@ -79,6 +83,7 @@ pub(crate) enum Msg {
     Media { id: u64, frame: String, live: bool },
     Do(Action),
     OpenTab(String),
+    OpenExternal(String),
     Suspended { id: u64, ok: bool },
     Script(String),
 }

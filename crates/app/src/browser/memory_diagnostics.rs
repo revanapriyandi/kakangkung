@@ -11,6 +11,7 @@ impl Browser {
                 "hidden_ms":tab.hidden_since.map(|since|since.elapsed().as_millis() as u64),
                 "loading":view.loading,"audio":view.audio,"media":view.media,"pinned":view.pinned,
                 "excluded":self.settings.kept_active(&view.url),"compacted":tab.compacted,
+                "installable":tab.web_app.is_some(),"security":format!("{:?}",tab.connection.security(&view.url)),
                 "native":tab.webview.as_ref().map(platform::memory_status)})
         }).collect();
         let webviews: Vec<_> = self.tabs.iter().filter_map(|tab|tab.webview.as_ref()).collect();
@@ -19,7 +20,8 @@ impl Browser {
         let total_commit: u64 = processes.iter().map(|process|process.commit).sum();
         let processes: Vec<_> = processes.iter().map(|process|json!({"pid":process.pid,"kind":process.kind,
             "private_ws":process.private_ws,"commit":process.commit})).collect();
-        json!({"pid":std::process::id(),"mode":format!("{:?}",self.memory_mode),"compact_idle":self.compact_idle,
+        json!({"pid":std::process::id(),"app_window":self.installed_app.is_some(),"chrome_height":super::chrome_height(&self.window),"mode":format!("{:?}",self.memory_mode),"compact_idle":self.compact_idle,
+            "adblock":platform::adblock_memory_status(),
             "tabs":tabs,"processes":processes,"private_ws":total_ws,"commit":total_commit})
     }
 }

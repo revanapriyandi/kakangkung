@@ -15,7 +15,7 @@ use windows_numerics::{Matrix3x2, Vector2};
 use super::input::Target;
 use super::layout::{Measure, RowBox, HEADER_H, TOGGLE_H};
 use super::model::{ButtonStyle, Control};
-use super::{Fonts, Inner, ENTER_MS, HOVER_MS, TOGGLE_MS};
+use super::{Fonts, Inner, ENTER_MS, HOVER_MS, PRESS_MS, TOAST_IN_MS, TOAST_OUT_MS, TOGGLE_MS};
 use crate::motion;
 use crate::frame::layout::rect;
 use crate::frame::scale_of;
@@ -88,6 +88,7 @@ fn inset(r: D2D_RECT_F, by: f32) -> D2D_RECT_F {
 pub(super) struct Pen<'a> {
     t: &'a ID2D1HwndRenderTarget,
     b: &'a ID2D1SolidColorBrush,
+    v: &'a crate::icons::Icons,
     pub c: Colors,
 }
 
@@ -193,6 +194,10 @@ impl Pen<'_> {
         // SAFETY: as above.
         unsafe {
             self.b.SetColor(&color(rgb, alpha));
+            // An icon-font glyph is drawn as Kakangkung's own line icon where there is one.
+            if self.v.draw_glyph(self.t, self.b, s, r, f.GetFontSize()) {
+                return;
+            }
             self.t.DrawText(&w, f, &r, self.b, D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
         }
     }
@@ -202,6 +207,21 @@ impl Inner {
     /// How far a hover highlight has faded in.
     fn hover_in(&self) -> f32 {
         motion::eased(self.hover_at, 0.0, HOVER_MS)
+    }
+
+    /// Strength (0..=1) of `t`'s hover highlight, fading from where it was when the pointer moved.
+    pub(super) fn hover_level(&self, t: Target) -> f32 {
+        let e = self.hover_in();
+        let (now, was) = self.hover_from;
+        if self.hover == Some(t) { now + (1.0 - now) * e } else if self.hover_prev == Some(t) { was * (1.0 - e) } else { 0.0 }
+    }
+
+    /// Strength (0..=1, a little more just after a press) of `t`'s hover highlight: it fades in
+    /// on the new part as it fades out on the one the pointer left.
+    pub(super) fn lit(&self, t: Target) -> f32 {
+        let level = self.hover_level(t);
+        let flash = self.press.filter(|(p, _)| *p == t).map_or(0.0, |(_, at)| 1.0 - motion::eased(at, 0.0, PRESS_MS));
+        level + flash * 0.8
     }
 
     pub(super) fn paint(&mut self) -> windows::core::Result<()> {
@@ -235,7 +255,7 @@ impl Inner {
             t.Resize(&size)?;
             t.SetDpi(96.0 * scale, 96.0 * scale);
             t.BeginDraw();
-            let pen = Pen { t: &t, b: &b, c: colors(self.dark) };
+            let pen = Pen { t: &t, b: &b, v: &self.vector, c: colors(self.dark) };
             self.draw(&pen, size.width as f32 / scale, size.height as f32 / scale);
             if t.EndDraw(None, None).is_err() {
                 self.rt = None;
@@ -268,11 +288,17 @@ impl Inner {
         }
         self.draw_scrollbar(p, w, h);
         if !self.toast.is_empty() {
+            // The message rises in from below and fades; leaving, it fades and sinks a little.
+            let rise = motion::eased(self.toast_at, 0.0, TOAST_IN_MS);
+            let out = self.toast_out.map_or(0.0, |at| motion::eased(at, 0.0, TOAST_OUT_MS));
+            let a = rise * (1.0 - out);
             let m = Meter { dw: &self.dw, fonts: &self.fonts };
             let tw = m.width(&self.toast) + 40.0;
-            let r = rect((w - tw) / 2.0, h - 64.0, tw, 40.0);
-            p.fill(r, 20.0, c.text, 1.0);
-            p.text(&self.toast, r, &self.fonts.button, c.bg);
+            let y = h - 64.0 + (1.0 - rise) * 14.0 + out * 6.0;
+            let r = rect((w - tw) / 2.0, y, tw, 40.0);
+            p.fill(D2D_RECT_F { top: r.top + 4.0, bottom: r.bottom + 4.0, ..r }, 20.0, 0x000000, 0.18 * a);
+            p.fill(r, 20.0, c.text, a);
+            p.text_alpha(&self.toast, r, &self.fonts.button, c.bg, a);
         }
     }
 
@@ -287,10 +313,17 @@ impl Inner {
         }
         if !self.doc.search.is_empty() {
             let r = self.layout.search_box();
-            let focused = self.hover == Some(Target::Search) || unsafe { GetFocus() } == self.search;
+            // SAFETY: plain focus query.
+            let focused = unsafe { GetFocus() } == self.search;
             p.fill(r, 20.0, c.field, 1.0);
+            // A hairline that firms up on hover; the brand ring only while typing.
             if focused {
-                p.outline(r, 20.0, c.brand, 1.5);
+                p.outline(r, 20.0, c.brand, 2.0);
+            } else {
+                let hover = self.lit(Target::Search).min(1.0);
+                if hover > 0.001 {
+                    p.outline(r, 20.0, motion::mix(c.field, c.muted, 0.45 * hover), 1.0);
+                }
             }
             p.text(glyph::SEARCH, rect(r.left + 10.0, r.top, 28.0, 40.0), &self.fonts.icons, c.muted);
             if self.filter.is_empty() {
@@ -307,8 +340,11 @@ impl Inner {
             let on = current == Some(item.id.as_str());
             if on {
                 p.fill(r, 20.0, c.selected, 1.0);
-            } else if self.hover == Some(Target::Nav(k)) {
-                p.fill(r, 20.0, c.hover.0, c.hover.1 * self.hover_in());
+            } else {
+                let a = self.lit(Target::Nav(k));
+                if a > 0.001 {
+                    p.fill(r, 20.0, c.hover.0, c.hover.1 * a);
+                }
             }
             let fg = if on { c.brand } else { c.text };
             p.text(&item.icon, rect(r.left + 12.0, r.top, 24.0, r.bottom - r.top), &self.fonts.icons, fg);
@@ -343,8 +379,11 @@ impl Inner {
         }
         for &card in &self.layout.cards {
             if card.bottom > from && card.top < to {
-                p.fill(D2D_RECT_F { top: card.top + 1.0, bottom: card.bottom + 1.0, ..card }, 12.0, 0x000000, if self.dark { 0.25 } else { 0.06 });
+                // A soft two-step shadow, the card, and a hairline edge.
+                p.fill(D2D_RECT_F { top: card.top + 3.0, bottom: card.bottom + 3.0, ..card }, 12.0, 0x000000, if self.dark { 0.12 } else { 0.025 });
+                p.fill(D2D_RECT_F { top: card.top + 1.0, bottom: card.bottom + 1.0, ..card }, 12.0, 0x000000, if self.dark { 0.22 } else { 0.05 });
                 p.fill(card, 12.0, c.card, 1.0);
+                p.outline(card, 12.0, c.line, 1.0);
             }
         }
         for (k, b) in self.layout.rows.iter().enumerate() {
@@ -366,13 +405,14 @@ impl Inner {
         if b.divider {
             p.fill(rect(r.left + 20.0, r.top, r.right - r.left - 40.0, 1.0), 0.0, c.line, 1.0);
         }
-        if self.hover == Some(Target::Row(k)) {
-            p.fill(inset(r, 4.0), 8.0, c.hover.0, c.hover.1 * self.hover_in());
+        let row_lit = self.lit(Target::Row(k));
+        if row_lit > 0.001 {
+            p.fill(inset(r, 4.0), 8.0, c.hover.0, c.hover.1 * row_lit);
         }
         let t = b.text;
         if let Control::Illustration { glyph } = &row.control {
             // Empty state: the picture, then the title and text centred under it.
-            let come = motion::progress(self.enter, 80.0, 460.0);
+            let come = motion::progress(self.enter, 40.0, 340.0);
             super::art::illustration(p, f, r, glyph, come, self.dark);
             let top = r.top + super::art::ART_H + 8.0;
             p.text(&row.title, rect(r.left + 60.0, top, r.right - r.left - 120.0, 28.0), &f.title_center, c.text);
@@ -421,19 +461,21 @@ impl Inner {
                 let tr = b.control[0];
                 p.fill(tr, TOGGLE_H / 2.0, motion::mix(c.off, c.brand, pos), 1.0);
                 let kx = tr.left + 10.0 + (tr.right - tr.left - 20.0) * pos;
+                // The knob casts a faint shadow on the track.
+                p.dot(kx, mid + 0.75, 7.5, 0x000000, 0.2);
                 p.circle(kx, mid, 7.0, motion::mix(0xffffff, c.on_brand, pos), None);
             }
             Control::Select { value, options, .. } => {
                 let s = b.control[0];
                 p.fill(s, 8.0, c.field, 1.0);
-                p.outline(s, 8.0, if self.hover == Some(Target::Part(k, 0)) { c.brand } else { c.line }, 1.0);
+                p.outline(s, 8.0, motion::mix(c.line, c.brand, self.lit(Target::Part(k, 0)).min(1.0)), 1.0);
                 let label = options.iter().find(|(v, _)| v == value).map_or(value.as_str(), |(_, l)| l.as_str());
                 p.text(label, rect(s.left + 12.0, s.top, s.right - s.left - 40.0, s.bottom - s.top), &f.title, c.text);
                 p.text(glyph::DOWN, rect(s.right - 30.0, s.top, 20.0, s.bottom - s.top), &f.icons_small, c.muted);
             }
             Control::Buttons(buttons) => {
                 for (n, button) in buttons.iter().enumerate() {
-                    self.draw_button(p, b.control[n], &button.label, button.style, self.hover == Some(Target::Part(k, n)));
+                    self.draw_button(p, b.control[n], &button.label, button.style, self.lit(Target::Part(k, n)));
                 }
             }
             Control::Text { id, button, .. } => {
@@ -447,7 +489,7 @@ impl Inner {
                     }
                 }
                 if let Some(&r) = b.control.get(1) {
-                    self.draw_button(p, r, button, ButtonStyle::Normal, self.hover == Some(Target::Part(k, 1)));
+                    self.draw_button(p, r, button, ButtonStyle::Normal, self.lit(Target::Part(k, 1)));
                 }
             }
             Control::Link { .. } => {
@@ -458,8 +500,9 @@ impl Inner {
             Control::Entry { icon, .. } => {
                 p.text(icon, rect(t.left - 30.0, mid - 12.0, 24.0, 24.0), &f.icons, c.muted);
                 let x = b.control[0];
-                if self.hover == Some(Target::Part(k, 0)) {
-                    p.fill(x, 16.0, c.hover.0, c.hover.1 * 1.6);
+                let a = self.lit(Target::Part(k, 0));
+                if a > 0.001 {
+                    p.fill(x, 16.0, c.hover.0, c.hover.1 * 1.6 * a);
                 }
                 p.text(glyph::CLOSE, x, &f.icons_small, c.muted);
             }
@@ -467,7 +510,7 @@ impl Inner {
         }
     }
 
-    fn draw_button(&self, p: &Pen, r: D2D_RECT_F, label: &str, style: ButtonStyle, hover: bool) {
+    fn draw_button(&self, p: &Pen, r: D2D_RECT_F, label: &str, style: ButtonStyle, hover: f32) {
         let c = &p.c;
         let fg = match style {
             ButtonStyle::Primary => {
@@ -483,8 +526,10 @@ impl Inner {
                 c.brand
             }
         };
-        if hover {
-            p.fill(r, 16.0, c.hover.0, c.hover.1 * 1.5 * self.hover_in());
+        if hover > 0.001 {
+            // Filled buttons lighten (dark text on brand would vanish under a dark tint).
+            let tint = if matches!(style, ButtonStyle::Primary) { 0xffffff } else { c.hover.0 };
+            p.fill(r, 16.0, tint, if matches!(style, ButtonStyle::Primary) { 0.14 } else { c.hover.1 * 1.5 } * hover);
         }
         p.text(label, r, &self.fonts.button, fg);
     }

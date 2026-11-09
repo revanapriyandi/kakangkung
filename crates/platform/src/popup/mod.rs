@@ -12,6 +12,8 @@ mod paint;
 use std::cell::RefCell;
 use std::ffi::c_void;
 
+use windows::Win32::Foundation::COLORREF;
+use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetLayeredWindowAttributes, LWA_ALPHA, SWP_NOMOVE, SWP_NOSIZE, WS_EX_LAYERED};
 use windows::core::w;
 use windows::Win32::Foundation::{RECT, HWND, POINT};
 use windows::Win32::Graphics::Direct2D::{D2D1CreateFactory, ID2D1Factory, ID2D1HwndRenderTarget, ID2D1SolidColorBrush, D2D1_FACTORY_TYPE_SINGLE_THREADED};
@@ -62,6 +64,10 @@ const HEADER_ROW: f32 = 40.0;
 const TWO_LINE_ROW: f32 = 56.0;
 const BUTTONS_ROW: f32 = 56.0;
 const SEP_ROW: f32 = 9.0;
+/// A panel's plain lines: the first one (its title) and the others, which sit close together
+/// like a paragraph (a long line arrives wrapped over several rows).
+const NOTE_TITLE_ROW: f32 = 30.0;
+const NOTE_ROW: f32 = 22.0;
 /// A dialog's buttons: main and other button widths, and the gap between them.
 const MAIN_BUTTON_W: f32 = 136.0;
 const OTHER_BUTTON_W: f32 = 96.0;
@@ -73,9 +79,18 @@ const FILTER_LIST_MAX: f32 = 600.0;
 /// Width of a row's × at its right end.
 const CLOSE_W: f32 = 36.0;
 /// Opening animation: length at normal speed (ms) and the share of the height shown at once.
-const REVEAL_MS: f32 = 170.0;
-const REVEAL_FROM: f32 = 0.55;
+const REVEAL_MS: f32 = 150.0;
+/// How far (DIPs) an opening pop-up slides down into place as it fades in.
+const REVEAL_SLIDE: f32 = 6.0;
 const TIMER_REVEAL: usize = 1;
+/// Closing: its timer, how long it takes and how far (DIPs) it lifts while fading out. Quicker
+/// than opening: the person has already moved on.
+const TIMER_CLOSE: usize = 3;
+const CLOSE_MS: f32 = 100.0;
+const CLOSE_SLIDE: f32 = 4.0;
+/// Timer of the rows' hover fade, and how long it takes (ms at normal speed).
+const TIMER_HOVER: usize = 2;
+const HOVER_MS: f32 = 110.0;
 /// A menu taking the keyboard back right after opening (see WM_KILLFOCUS), and how long after
 /// opening that may happen.
 /// A menu ("menu"), or a submenu opened beside it ("submenu"): rows of 28, the keyboard.
@@ -99,10 +114,17 @@ struct Inner {
     shown: Vec<usize>,
     selected: Option<usize>,
     hover: Option<usize>,
+    /// The row hovered before `hover`, and when the pointer moved: their highlights cross-fade.
+    hover_prev: Option<usize>,
+    hover_at: std::time::Instant,
+    /// Strengths of (`hover`, `hover_prev`) when the pointer moved: the fades start from there.
+    hover_from: (f32, f32),
     scroll: usize,
     row_h: f32,
     dark: bool,
     factory: ID2D1Factory,
+    /// Kakangkung's own line icons, drawn for icon-font glyphs.
+    vector: crate::icons::Icons,
     target: Option<ID2D1HwndRenderTarget>,
     brush: Option<ID2D1SolidColorBrush>,
     text: IDWriteTextFormat,
@@ -120,6 +142,8 @@ struct Inner {
     mouse_x: f32,
     /// Opening: when, and the full height (px) the window grows to.
     reveal: Option<(std::time::Instant, i32)>,
+    /// Closing: when, its opacity (0..=1) then, and its top (px) then. It takes no input meanwhile.
+    closing: Option<(std::time::Instant, f32, i32)>,
     /// A menu with the keyboard (no filter box): losing it closes the menu.
     menu_focus: bool,
     /// When the menu on show opened.
@@ -156,6 +180,7 @@ impl Popup {
             RegisterClassExW(&class);
             let dw = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
             let icons = icon_family(&dw);
+            let factory: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
             let inner = Box::new(RefCell::new(Inner {
                 hwnd: HWND::default(),
                 owner: HWND(owner as _),
@@ -166,10 +191,14 @@ impl Popup {
                 shown: vec![],
                 selected: None,
                 hover: None,
+                hover_prev: None,
+                hover_at: crate::motion::long_ago(),
+                hover_from: (0.0, 0.0),
                 scroll: 0,
                 row_h: SUGGEST_ROW,
                 dark: false,
-                factory: D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?,
+                vector: crate::icons::Icons::new(&factory),
+                factory,
                 target: None,
                 brush: None,
                 text: text_format(&dw, w!("Segoe UI"), 13.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING)?,
@@ -179,6 +208,7 @@ impl Popup {
                 hover_close: false,
                 mouse_x: 0.0,
                 reveal: None,
+                closing: None,
                 input_mode: false,
                 menu_focus: false,
                 menu_opened: None,
@@ -191,7 +221,7 @@ impl Popup {
             }));
             let raw = Box::into_raw(inner);
             let hwnd = CreateWindowExW(
-                WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
                 w!("KakangkungPopup"),
                 w!(""),
                 WS_POPUP,
@@ -245,6 +275,7 @@ impl Popup {
         i.placeholder = "Search Tabs".into();
         i.hint = "Ctrl+Shift+A".into();
         i.hover = None;
+        i.hover_prev = None;
         i.scroll = 0;
         i.dark = dark;
         i.row_h = match kind {
@@ -290,12 +321,34 @@ impl Popup {
             let no_activate = WS_EX_NOACTIVATE.0 as isize;
             SetWindowLongPtrW(i.hwnd, GWL_EXSTYLE, if activate { ex & !no_activate } else { ex | no_activate });
             let flags = if activate { SWP_SHOWWINDOW } else { SWP_NOACTIVATE | SWP_SHOWWINDOW };
-            // Opening (not a refresh while shown): it unfolds downwards from part of its height.
+            // Opening (not a refresh while shown): at its full size from the start, it fades in
+            // while sliding a few pixels down into place. Moving a window is cheap for Windows to
+            // compose; resizing it every frame would also resize and redraw the list.
             let full = (height * scale) as i32;
-            let opening = !IsWindowVisible(i.hwnd).as_bool() && crate::motion::enabled();
-            let shown = if opening { (full as f32 * REVEAL_FROM) as i32 } else { full };
-            i.reveal = opening.then(|| (std::time::Instant::now(), full));
-            let _ = SetWindowPos(i.hwnd, Some(HWND_TOP), pt.x, pt.y, (width * scale) as i32, shown, flags);
+            // Reopened while it fades out: it fades back in from its current opacity.
+            let resumed = i.closing.take().map(|_| i.alpha_level());
+            if resumed.is_some() {
+                let _ = KillTimer(Some(i.hwnd), TIMER_CLOSE);
+                input::set_click_through(i.hwnd, false);
+            }
+            let hidden = !IsWindowVisible(i.hwnd).as_bool();
+            let opening = (hidden || resumed.is_some()) && crate::motion::enabled();
+            // Opening starts a little visible, so the first frame on screen is not an empty step.
+            let from = resumed.unwrap_or(0.0).max(crate::motion::FADE_FROM);
+            let start = crate::motion::fade_start_at(from, REVEAL_MS);
+            let lift = if opening { ((1.0 - crate::motion::eased(start, 0.0, REVEAL_MS)) * REVEAL_SLIDE * scale).round() as i32 } else { 0 };
+            i.reveal = opening.then_some((start, pt.y));
+            // A pop-up shown without the animation is opaque.
+            if opening || hidden || resumed.is_some() {
+                let alpha = if opening { (from * 255.0).round() as u8 } else { 255 };
+                let _ = SetLayeredWindowAttributes(i.hwnd, COLORREF(0), alpha, LWA_ALPHA);
+            }
+            // Placed and drawn while still hidden, then shown: the first frame on screen is complete.
+            let _ = SetWindowPos(i.hwnd, Some(HWND_TOP), pt.x, pt.y - lift, (width * scale) as i32, full, (flags & !SWP_SHOWWINDOW) | SWP_NOACTIVATE);
+            if hidden {
+                let _ = i.paint();
+            }
+            let _ = SetWindowPos(i.hwnd, Some(HWND_TOP), 0, 0, 0, 0, flags | SWP_NOMOVE | SWP_NOSIZE);
             if opening {
                 SetTimer(Some(i.hwnd), TIMER_REVEAL, crate::motion::FRAME_MS, None);
             }
@@ -384,16 +437,40 @@ impl Popup {
         }
     }
 
+    /// Close it: it fades out while lifting a little (taking no clicks meanwhile), then hides.
+    /// It counts as closed at once; reopening it during the fade picks up from there.
     pub fn hide(&self) {
-        // SAFETY: plain call on our own window.
+        // SAFETY: plain calls on our own window.
         unsafe {
-            let _ = ShowWindow(self.hwnd, SW_HIDE);
+            let fade = IsWindowVisible(self.hwnd).as_bool() && crate::motion::enabled();
+            let Some(Ok(mut i)) = self.inner().map(RefCell::try_borrow_mut).filter(|_| fade) else {
+                let _ = ShowWindow(self.hwnd, SW_HIDE);
+                return;
+            };
+            if i.closing.is_some() {
+                return;
+            }
+            let level = i.alpha_level();
+            i.reveal = None;
+            let _ = KillTimer(Some(self.hwnd), TIMER_REVEAL);
+            let mut rc = RECT::default();
+            let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(self.hwnd, &mut rc);
+            i.closing = Some((std::time::Instant::now(), level, rc.top));
+            i.menu_focus = false;
+            input::set_click_through(self.hwnd, true);
+            // The keyboard goes back to the browser now, not after the fade.
+            if windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() == self.hwnd {
+                let _ = SetForegroundWindow(i.owner);
+            }
+            SetTimer(Some(self.hwnd), TIMER_CLOSE, crate::motion::FRAME_MS, None);
         }
     }
 
+    /// Shown and not on its way out.
     pub fn is_visible(&self) -> bool {
+        let closing = self.inner().and_then(|c| c.try_borrow().ok().map(|i| i.closing.is_some())).unwrap_or(false);
         // SAFETY: plain query on our own window.
-        unsafe { IsWindowVisible(self.hwnd).as_bool() }
+        unsafe { IsWindowVisible(self.hwnd).as_bool() && !closing }
     }
 
     pub fn hwnd(&self) -> isize {

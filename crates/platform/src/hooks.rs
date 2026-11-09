@@ -32,12 +32,13 @@ pub struct Hooks {
     permission: Option<i64>,
     adblock: Option<i64>,
     context_menu: Option<i64>,
+    security: Option<(webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2DevToolsProtocolEventReceiver, i64)>,
 }
 
 impl Hooks {
     /// Number of live registrations (the self-test checks none are leaked).
     pub fn count(&self) -> usize {
-        [self.accel, self.favicon, self.audio, self.downloads, self.permission, self.adblock, self.context_menu].iter().flatten().count()
+        [self.accel, self.favicon, self.audio, self.downloads, self.permission, self.adblock, self.context_menu].iter().flatten().count() + usize::from(self.security.is_some())
     }
 }
 
@@ -55,12 +56,13 @@ pub fn hook(
     on_favicon: impl Fn(String) + 'static,
     mut on_audio: impl FnMut(bool) + 'static,
     on_download: impl Fn() + 'static,
-    on_inspect: impl Fn() + 'static,
+    page_menu: crate::devtools::PageMenu,
 ) -> Hooks {
+    let (menu_items, menu_visible, on_menu) = page_menu;
     let mut hooks = Hooks {
         downloads: crate::downloads::watch(wv, std::rc::Rc::new(on_download)),
         adblock: crate::adblock::watch(wv),
-        context_menu: crate::devtools::watch_context_menu(wv, on_inspect),
+        context_menu: crate::devtools::watch_context_menu(wv, menu_items, menu_visible, on_menu),
         ..Default::default()
     };
     let controller = wv.controller();
@@ -154,6 +156,10 @@ pub fn hook(
 
 /// Remove every registration in `hooks`. Call before the webview is dropped.
 pub fn unhook(wv: &WebView, hooks: &mut Hooks) {
+    if let Some((receiver, token)) = hooks.security.take() {
+        // SAFETY: token belongs to this receiver; remove its callback before closing the view.
+        let _ = unsafe { receiver.remove_DevToolsProtocolEventReceived(token) };
+    }
     crate::adblock_script::detach_adblock_script(wv);
     if let Some(t) = hooks.context_menu.take() {
         crate::devtools::unwatch_context_menu(wv, t);
@@ -187,5 +193,35 @@ pub fn unhook(wv: &WebView, hooks: &mut Hooks) {
         if let Err(e) = unsafe { c.remove_IsDocumentPlayingAudioChanged(t) } {
             eprintln!("unhook: IsDocumentPlayingAudioChanged: {e}");
         }
+    }
+}
+
+pub fn hook_security(wv: &WebView, hooks: &mut Hooks, changed: impl Fn(String, String) + 'static) {
+    use windows::core::HSTRING;
+    use webview2_com::DevToolsProtocolEventReceivedEventHandler;
+    let core = wv.webview();
+    // SAFETY: receiver and callback are owned by this UI thread and removed by unhook.
+    let result: windows::core::Result<_> = unsafe {
+        (|| {
+            let receiver = core.GetDevToolsProtocolEventReceiver(&HSTRING::from("Security.visibleSecurityStateChanged"))?;
+            let reader = core.clone();
+            let callback = DevToolsProtocolEventReceivedEventHandler::create(Box::new(move |_, args| {
+                if let Some(args) = args {
+                    let (mut json, mut source) = (PWSTR::null(), PWSTR::null());
+                    args.ParameterObjectAsJson(&mut json)?;
+                    let json = take_pwstr(json);
+                    reader.Source(&mut source)?;
+                    changed(take_pwstr(source), json);
+                }
+                Ok(())
+            }));
+            let mut token = 0;
+            receiver.add_DevToolsProtocolEventReceived(&callback, &mut token)?;
+            Ok((receiver, token))
+        })()
+    };
+    if let Ok(registration) = result {
+        hooks.security = Some(registration);
+        let _ = crate::webview::devtools_call(wv, "Security.enable", "{}");
     }
 }

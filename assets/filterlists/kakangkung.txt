@@ -1,0 +1,19 @@
+! Kakangkung site fixes, MIT. Observed 2026-11-09 on otakudesu.blog.
+! Restrict CDN image rules to the six confirmed banner assets; keep anime posters and video hosts available.
+||ads.desustream.com/ads/$script,domain=otakudesu.blog
+||blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgk9VZuLu-b-VebSn9IUwScuPqsGLYmhz98kumITfKaM27D-TJ2yYHp3rUE1H75iVwrJvFOELJ4wzLVdMFG-NdgAxJEKi7lM2Vp7tRgZIVqmgiiIgoX5zO3G3H7hNkN5tv01J7Z3awB187IZNElkLRaNm4yM0Oj3MTDlYIBMMOLJa7AHK2I7_dIvN6d5LQq/s800/Anime%20Sub%20Indo.gif$image,domain=otakudesu.blog
+||blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEi9wZ6HOjs-TX8yhyphenhyphenB31EMJDPAju87z9IMeJBb5pROFwpIqAkD2JltovfXul_CJdW51ej6mvvEBi3i3w6N4qfu3bx69Gw_W5RyTxTf-xw_d1EgNn8cLZtnRX4vCbFXzv-20Dejzx9HkIrBnc1qsdXfhFu6lcPNDcgKXXdMvbqrG9_QCoBLF3zpHcPHRIY79/s800/Download%20dan%20Streaming%20Anime%20Sub%20Indo.gif$image,domain=otakudesu.blog
+||blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEiha3NDzREuWQ2pbXegkUjpe9ytwV4LyaZVHcetM2bxcMB-BemCRfZEHGwI1PElDA-yA_qZCemztCicxuS2PrdWOSX21cUDSeaY4Ps-IM9FLI2EyuUhsg3VxvrC4Hr0k9x8DG1lElxaSHTmFDXo3x-J9TA6s9h5tbWd0B_may3M5KdsLzSpdLGmT80GKHhA/s800/Otakudesu.gif$image,domain=otakudesu.blog
+||blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgb6vBaKtuUJhfhGj9GWEwjxSPmkUaCJONFRhS6se9grmjsZh6l-1p93Rh5sXBYJ8caF8T_0Ea1QxXpwHbM5WMEESmqdYAKVywl2uNtF3MkbRiSOH8TDqsB1CMSwlSZzHdNPT330QnyEISRUIFypN1f7Kx-Pv6tdOpW5LarjXANnBi9C9GbGEdM1s9kHRT2/s800/Otakudesu%20Ads.gif$image,domain=otakudesu.blog
+||blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEiW_2jr8rdlSU-2c1h1bow3s5XYRXEYuZt110BwuBhW5imj49ta9tHCZ14sZ-nTVm3OJHblsuo7eD-exCmzdmCwnboe-VDNIa3RvVCmiBuF8WXU4lu9ifC_32M_0UXj7DqpAiduWg3XY4sqv3GAsiqKxAHHzmhh_qG0M98d92q-xfiDvKpWcP15NvG48dOc/s720/Otakudesu.gif$image,domain=otakudesu.blog
+||blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEiqHkQp_SlexFAW2we8k8lWqipmm5Xd16piHolOclYg6dk1ZW_73-vvpLA8O_2o0egw7t0RcVd59g5sxO9Io-9y5Glffg3fnz2EQt_BET6XNTG8mCh-KJiIPf7F2n7nffzvye8Ur3qLHGTOqgz9gtE8Me9SPM7oV2mMDGqCB8mYyKHO3aqh_47IOUGE6v7r/s720/Nonton%20Download%20Streaming%20Anime.gif$image,domain=otakudesu.blog
+! Element hiding for the banner containers (formerly hard-coded in adblock.js). Banner images
+! rotate, so match the site's iklan* containers and its bit.ly/OTAKU* ad links instead.
+otakudesu.blog##[class^="iklan"]
+otakudesu.blog##[id^="iklan"]
+otakudesu.blog##a[href^="https://bit.ly/OTAKU"]
+otakudesu.blog##.bloxkln
+otakudesu.blog##.box_item_ads_popup
+! detik.com, observed 2026-11-09: fixed-size wrappers stay as blank boxes once their GPT slot is blocked.
+detik.com##.header__leaderboard
+detik.com##div:has(> center > div[id^="div-gpt-ad"])

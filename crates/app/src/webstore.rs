@@ -237,14 +237,44 @@ pub(crate) fn commit_install(staged: &Path, id: &str, root: &Path) -> Result<Ins
 /// The page an installed extension shows from its toolbar button (`action.default_popup`, or
 /// the Manifest V2 names), else its options page: `(page, is_popup)`.
 pub(crate) fn button_page(folder: &Path) -> Option<(String, bool)> {
-    let text = std::fs::read_to_string(folder.join("manifest.json")).ok()?;
-    let m: Json = serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
-    let page = |v: &Json| v.as_str().filter(|s| !s.is_empty()).map(|s| s.trim_start_matches('/').to_string());
+    let m = manifest(folder)?;
     ["action", "browser_action", "page_action"]
         .iter()
-        .find_map(|k| page(&m[k]["default_popup"]))
+        .find_map(|k| manifest_page(&m[k]["default_popup"]))
         .map(|p| (p, true))
-        .or_else(|| page(&m["options_ui"]["page"]).or_else(|| page(&m["options_page"])).map(|p| (p, false)))
+        .or_else(|| options_of(&m).map(|p| (p, false)))
+}
+
+/// An installed extension's options page (`options_ui.page`, else `options_page`).
+pub(crate) fn options_page(folder: &Path) -> Option<String> {
+    options_of(&manifest(folder)?)
+}
+
+/// An installed extension's name as Chrome shows it: `name`, with a `__MSG_key__` name read
+/// from the default locale's messages.json.
+pub(crate) fn display_name(folder: &Path) -> Option<String> {
+    let m = manifest(folder)?;
+    let name = m["name"].as_str()?.trim();
+    let Some(key) = name.strip_prefix("__MSG_").and_then(|k| k.strip_suffix("__")) else { return Some(name.to_string()) };
+    let locale = m["default_locale"].as_str().unwrap_or("en");
+    let text = std::fs::read_to_string(folder.join("_locales").join(locale).join("messages.json")).ok()?;
+    let msgs: Json = serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
+    // Message keys are case-insensitive.
+    let msgs = msgs.as_object()?;
+    msgs.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).and_then(|(_, v)| v["message"].as_str()).map(str::to_string)
+}
+
+fn manifest(folder: &Path) -> Option<Json> {
+    let text = std::fs::read_to_string(folder.join("manifest.json")).ok()?;
+    serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()
+}
+
+fn manifest_page(v: &Json) -> Option<String> {
+    v.as_str().filter(|s| !s.is_empty()).map(|s| s.trim_start_matches('/').to_string())
+}
+
+fn options_of(m: &Json) -> Option<String> {
+    manifest_page(&m["options_ui"]["page"]).or_else(|| manifest_page(&m["options_page"]))
 }
 
 /// What an unpacked extension may do, in Chrome's words for its install dialog ("It can:"),
@@ -468,6 +498,21 @@ mod tests {
         assert_eq!(button_page(&dir), Some(("opts.html".into(), false)));
         write(r#"{"name":"x"}"#);
         assert_eq!(button_page(&dir), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn menu_reads_name_and_options() {
+        let dir = std::env::temp_dir().join(format!("kk-webstore-name-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("_locales/id")).unwrap();
+        let write = |m: &str| std::fs::write(dir.join("manifest.json"), m).unwrap();
+        write(r#"{"name":"Plain","action":{"default_popup":"p.html"},"options_ui":{"page":"o.html"}}"#);
+        assert_eq!(display_name(&dir).as_deref(), Some("Plain"));
+        assert_eq!(options_page(&dir).as_deref(), Some("o.html"));
+        std::fs::write(dir.join("_locales/id/messages.json"), r#"{"AppName":{"message":"Nama Lokal"}}"#).unwrap();
+        write(r#"{"name":"__MSG_appName__","default_locale":"id"}"#);
+        assert_eq!(display_name(&dir).as_deref(), Some("Nama Lokal"));
+        assert_eq!(options_page(&dir), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

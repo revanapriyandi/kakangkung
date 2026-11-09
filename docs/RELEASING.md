@@ -12,8 +12,8 @@ ARM64.
 3. Commit, then tag and push:
 
    ```powershell
-   git tag -a v0.3.0 -m "Kakangkung 0.3.0"
-   git push origin main v0.3.0
+   git tag -a v0.4.0 -m "Kakangkung 0.4.0"
+   git push origin main v0.4.0
    ```
 
 4. The workflow builds both architectures, makes the installers and portable zips, writes
@@ -43,7 +43,7 @@ MPL-2.0 and CC BY-SA 3.0 license texts for the bundled ad-blocking components.
 
 ### Code signing
 
-`installeruild.ps1` signs `kakangkung.exe`, the installer and its uninstaller (SHA-256,
+`installer/build.ps1` signs `kakangkung.exe`, the installer and its uninstaller (SHA-256,
 timestamped) when the repository has two secrets:
 
 - `SIGN_PFX_BASE64`: the code-signing certificate as a base64 `.pfx`

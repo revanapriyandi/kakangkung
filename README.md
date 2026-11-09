@@ -19,6 +19,11 @@
   <img src="docs/images/new-tab.png" width="820" alt="Kakangkung's New Tab page">
 </p>
 
+<p align="center">
+  <a href="docs/videos/kakangkung-promo.mp4"><img src="docs/images/promo-poster.jpg" width="640" alt="Kakangkung promo video"></a><br>
+  <a href="docs/videos/kakangkung-promo.mp4"><b>▶ Watch the 30-second promo</b></a>
+</p>
+
 Kakangkung draws its whole interface itself — tab strip, toolbar, address bar, menus, pop-ups and
 every built-in page — with Direct2D, like Chrome and Edge do. Only web pages are rendered by the
 engine, Microsoft Edge WebView2 (Chromium). There is no HTML in the browser's own UI, so a tab that

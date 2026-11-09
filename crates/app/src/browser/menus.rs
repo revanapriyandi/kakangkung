@@ -44,7 +44,7 @@ impl Browser {
         }
         rows.push(json!({ "id": "adblock-global", "label": "Block ads on all sites", "checked": self.settings.protection.adblock }));
         rows.push(json!({ "id": "privacy", "label": "Privacy settings" }));
-        rows.push(json!({ "note": true, "label": "EasyList + EasyPrivacy and YouTube player filtering. Some ads and sponsored content may remain." }));
+        rows.push(json!({ "note": true, "label": "EasyList + EasyPrivacy: requests, ad frames, pop-ups and element hiding, plus YouTube ad filtering. Some ads and sponsored content may remain." }));
         self.menu_at = (right, top);
         let _ = self.native_popup(rows, right, top, true);
     }
@@ -96,22 +96,23 @@ impl Browser {
     /// What the lock / tune chip says when clicked (like Chrome's page info bubble).
     pub(crate) fn show_site_info(&mut self, left: f64, top: f64) -> Option<String> {
         let t = self.tabs.iter().find(|t| t.view.id == self.active)?;
-        let host = ui::host(&t.view.url);
-        let (head, detail) = match ui::Security::of(&t.view.url) {
-            ui::Security::Secure => ("Connection is secure", "Information you send to this site (passwords, card numbers) is encrypted."),
-            ui::Security::Insecure => ("Connection is not secure", "Don't enter passwords or payment details: others on the network could read them."),
-            ui::Security::Local => ("Local page", "This page is on your computer or local network."),
-            ui::Security::Internal => ("Kakangkung page", "A built-in page of the browser."),
-        };
-        let mut rows = vec![json!({ "id": "", "label": if host.is_empty() { head.to_string() } else { format!("{host}: {head}") }, "key": "" })];
-        rows.push(json!({ "id": "", "label": detail, "key": "" }));
-        if t.view.private {
-            rows.push(json!({ "id": "", "label": "Incognito: nothing from this tab is saved", "key": "" }));
+        let internal = ui::Security::of(&t.view.url) == ui::Security::Internal;
+        let (icon, head, detail) = t.connection.description(&t.view.url);
+        let mut rows = vec![json!({"label": if internal { "Kakangkung" } else { ui::host(&t.view.url) }}),
+            json!({"id":"connection","label":head,"sub":detail,"icon":icon})];
+        if !internal {
+            rows.push(json!({"id":"privacy","label":"Site permissions","sub":"Camera, microphone, location and more","icon":"settings"}));
+            rows.push(json!({"id":"site-data","label":"Cookies and site data","sub":"Manage stored data and permissions","icon":"cookie"}));
+            let on = self.settings.protection.adblock && !platform::adblock_site_allowed(&t.view.url);
+            rows.push(json!({"id":"site-adblock","label":"Ad blocker","sub":if on {"On for this site"} else {"Off for this site"},"icon":"shield"}));
+            if let Some(app) = t.web_app.as_ref().filter(|_| !t.view.private) {
+                let installed = app.id().ok().is_some_and(|id| crate::webapps::load(self.web_app_base(), &id).is_ok());
+                rows.push(json!({"id":"site-install","label":if installed {"Open app…"} else {"Install app…"},"sub":app.name,"icon":"install"}));
+            }
         }
-        let level = ["off", "basic", "balanced", "strict"][self.settings.protection.tracking.min(3) as usize];
-        rows.push(json!({ "id": "", "label": format!("Tracking prevention: {level} · Safe Browsing: {}", if self.settings.protection.safe_browsing { "on" } else { "off" }), "key": "" }));
-        rows.push(json!({ "sep": true }));
-        rows.push(json!({ "id": "privacy", "label": "Privacy and security settings", "key": "" }));
+        rows.push(json!({"sep":true}));
+        rows.push(json!({"id":"privacy","label":"Privacy and security settings","icon":"lock"}));
+        self.menu_at = (left, top);
         self.native_popup(rows, left, top, false)
     }
 
@@ -223,7 +224,10 @@ impl Browser {
         self.overlay_open = true;
         self.overlay_kind = format!("menu@{x},{y}");
         let dark = self.dark_ui();
-        let left = if align_right { (x - w).max(4.0) } else { x };
+        // Kept inside the window: a menu opened near the right edge (a right-click on a pinned
+        // button or a tab) would otherwise hang out past the window.
+        let width = self.window.inner_size().width as f64 / self.window.scale_factor();
+        let left = if align_right { x - w } else { x }.min(width - w - 4.0).max(4.0);
         self.popup.show("menu", left as f32, y as f32, w as f32, items, None, false, dark);
     }
 
@@ -275,6 +279,7 @@ impl Browser {
                 let _ = platform::zoom(wv, f);
             }
         };
+        if id.starts_with("webapp-") { self.web_app_action(id); return true; }
         if let Some(n) = id.strip_prefix("submenu:") {
             match n.parse::<usize>() {
                 Ok(n) => self.open_submenu(n),
@@ -303,6 +308,35 @@ impl Browser {
             self.unpin(pin);
             return true;
         }
+        if let Some(pin) = id.strip_prefix("pinopen:") {
+            let (pin, (x, y)) = (pin.to_string(), self.menu_at);
+            self.open_pinned(&pin, x, y);
+            return true;
+        }
+        if let Some(ext) = id.strip_prefix("extsite:") {
+            if crate::webstore::valid_id(ext) {
+                self.open_tab(&format!("https://{}/detail/{ext}", crate::webstore::HOST), None);
+            }
+            return true;
+        }
+        if let Some(ext) = id.strip_prefix("extremove:") {
+            self.ask_remove_extension(ext);
+            return true;
+        }
+        if let Some(ext) = id.strip_prefix("extremoveok:") {
+            self.remove_extension(ext);
+            return true;
+        }
+        if let Some(ext) = id.strip_prefix("extinspect:") {
+            self.inspect_bubble(ext);
+            return true;
+        }
+        if let Some(ext) = id.strip_prefix("extoptions:") {
+            if let Some(page) = crate::webstore::options_page(&self.paths.extensions.join(ext)) {
+                self.open_tab(&format!("chrome-extension://{ext}/{page}"), None);
+            }
+            return true;
+        }
         if let Some(url) = id.strip_prefix("closed:") {
             self.reopen_closed(url);
             return !self.tabs.is_empty();
@@ -319,6 +353,12 @@ impl Browser {
             return !self.tabs.is_empty();
         }
         match id {
+            "dismiss" => self.hide_overlay(),
+            "connection" => self.show_connection(),
+            "siteinfo-back" => { self.show_site_info(self.menu_place.0, self.menu_place.1); }
+            "site-adblock" => self.show_adblock(self.menu_place.0 + 400.0, self.menu_place.1),
+            "site-install" => self.show_web_app(self.menu_place.0 + 400.0, self.menu_place.1),
+            "site-data" => self.open_after_active(&format!("{}settings#privacy", ui::INTERNAL)),
             "newtab" => return self.act(Action::NewTab),
             "newwindow" => return self.act(Action::NewWindow),
             "incognito" => return self.act(Action::NewPrivateTab),
@@ -364,6 +404,8 @@ impl Browser {
                         settings.protection.adblock = next;
                         self.apply_settings(settings);
                         self.db(move |s| s.set_setting("privacy.adblock", if next { "1" } else { "0" }));
+                        // Hidden elements and already-loaded ads only change on a fresh load.
+                        if let Some(wv) = self.active_webview() { let _ = wv.reload(); }
                     }
                     return true;
                 };
@@ -392,6 +434,7 @@ impl Browser {
             "passwords" => self.open_after_active(&format!("{}passwords", ui::INTERNAL)),
             "clear" => self.open_after_active(&format!("{}settings#privacy", ui::INTERNAL)),
             "find" => {
+                if self.native.tab == self.active { self.page.focus_search(); }
                 if let Some(wv) = self.active_webview() {
                     if let Err(e) = platform::open_find(wv) {
                         eprintln!("find: {e}");
@@ -656,7 +699,10 @@ fn menu_icon(id: &str) -> &'static str {
         ["downloads"] | ["save"] => "download",
         ["openfile"] => "url",
         ["bookmarks"] | ["reader"] => "bookmarks",
-        ["extensions"] | ["extbubble", _] => "extension",
+        ["extensions"] | ["extbubble", _] | ["pinopen", "ext"] => "extension",
+        ["extoptions", _] => "settings",
+        ["extremove", _] => "delete",
+        ["extinspect", _] => "tools",
         ["clear"] => "delete",
         ["print"] => "print",
         ["find"] | ["tabsearch"] => "find",

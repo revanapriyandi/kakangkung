@@ -11,6 +11,39 @@ const player = () => ({
   playabilityStatus: { status: "OK" }, captions: { captionTracks: [{ languageCode: "id" }] },
   playerAds: [{ ad: true }], adPlacements: [{ placement: true }], adSlots: [{ slot: true }],
 });
+
+test("native element-hiding sheets follow runtime pause and resume", () => {
+  const p = page("otakudesu.blog", { enabled: false });
+  const native = new p.context.CSSStyleSheet();
+  native.replaceSync(".iklan{display:none!important}");
+  p.context.__kkCosmetic = [native];
+  p.apply({ enabled: true });
+  assert.ok(p.context.document.adoptedStyleSheets.includes(native));
+  p.apply({ enabled: true, allowedSites: ["otakudesu.blog"] });
+  assert.equal(p.context.document.adoptedStyleSheets.length, 0);
+  p.apply({ enabled: true });
+  assert.equal(p.context.document.adoptedStyleSheets.filter(sheet => sheet === native).length, 1);
+});
+
+test("YouTube ad fallback seeks only a marked ad and stops when paused", () => {
+  const p = page();
+  const listeners = p.listeners;
+  let clicked = 0;
+  const player = { classList: { contains: name => name === "ad-showing" }, querySelector: () => ({ click: () => clicked++ }) };
+  const video = { tagName: "VIDEO", duration: 15, currentTime: 1, closest: () => player };
+  listeners.get("timeupdate")({ target: video });
+  assert.equal(video.currentTime, 15);
+  assert.equal(clicked, 1);
+  assert.equal(p.context.__kkAdblock.status().skippedAds, 1);
+  const content = { tagName: "VIDEO", duration: 600, currentTime: 5,
+    closest: () => ({ classList: { contains: () => false }, querySelector: () => null }) };
+  listeners.get("timeupdate")({ target: content });
+  assert.equal(content.currentTime, 5, "ordinary video is untouched");
+  p.apply({ enabled: false });
+  assert.equal(listeners.has("timeupdate"), false);
+  assert.equal(page("news.example.com").listeners.has("timeupdate"), false);
+});
+
 function page(host = "www.youtube.com", config = { enabled: true, allowedSites: [] }) {
   const listeners = new Map(), requests = [];
   class StyleSheet { replaceSync(css) { this.css = css; } }
@@ -33,7 +66,7 @@ function page(host = "www.youtube.com", config = { enabled: true, allowedSites: 
   const apply = vm.runInContext(`(${source})`, context);
   apply(config);
   const parse = input => vm.runInContext(`JSON.parse(${JSON.stringify(input)})`, context);
-  return { context, parse, apply, requests, originalParse, originalFetch,
+  return { context, parse, apply, requests, originalParse, originalFetch, listeners,
     currentParse: () => vm.runInContext("JSON.parse", context) };
 }
 
@@ -150,7 +183,7 @@ test("document-start helper leaves subframes alone so top-level pause stays cons
 
 test("diagnostics count only actual deleted ad fields and expose no page data", () => {
   const p = page();
-  assert.equal(JSON.stringify(p.context.__kkAdblock.status()), '{"enabled":true,"youtube":true,"prunedPlayerFields":0}');
+  assert.equal(JSON.stringify(p.context.__kkAdblock.status()), '{"enabled":true,"youtube":true,"prunedPlayerFields":0,"skippedAds":0}');
   p.context.ytInitialPlayerResponse = player();
   p.context.ytInitialPlayerResponse = p.context.ytInitialPlayerResponse;
   p.context.ytInitialPlayerResponse = Object.freeze(player());

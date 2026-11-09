@@ -1,6 +1,7 @@
 //! The browser window: the native frame (tab strip, toolbar, address bar) plus one webview per tab.
 
 mod api;
+mod site_info;
 mod events;
 mod devtools;
 mod extensions;
@@ -53,6 +54,12 @@ pub(crate) const MEDIA_WATCH_JS: &str = include_str!("../../../../assets/media-w
 const STORE_JS: &str = include_str!("../../../../assets/webstore.js");
 /// The password manager's page side.
 const PASSWORDS_JS: &str = include_str!("../../../../assets/passwords.js");
+const PREVIEW_READY_JS: &str = r#"(() => {
+  if (window.top !== window || !window.ipc) return;
+  const ready = () => window.ipc.postMessage('kk:preview-ready');
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ready, { once: true });
+  else ready();
+})();"#;
 
 /// Run-wide locations.
 pub(crate) struct Paths {
@@ -70,6 +77,9 @@ pub(crate) struct Tab {
     pub(crate) compacted: bool,
     pub(crate) media_frames: media::MediaFrames,
     pub(crate) revision: u64,
+    pub(crate) document_ready: bool,
+    pub(crate) web_app: Option<crate::webapps::WebApp>,
+    pub(crate) connection: site_info::Connection,
     /// Addresses left by switching between a native page and a web page: Back returns to them
     /// once the webview has no history of its own.
     pub(crate) before: Vec<String>,
@@ -78,12 +88,13 @@ pub(crate) struct Tab {
 impl Tab {
     /// A tab without a webview yet: activating it creates one (restored and background tabs).
     pub(crate) fn unloaded(view: TabView) -> Self {
-        Self { view, webview: None, hooks: platform::Hooks::default(), state: Lifecycle::Discarded, hidden_since: None, compacted: false, media_frames: media::MediaFrames::default(), revision: 0, before: vec![] }
+        Self { view, webview: None, hooks: platform::Hooks::default(), state: Lifecycle::Discarded, hidden_since: None, compacted: false, media_frames: media::MediaFrames::default(), revision: 0, document_ready: false, web_app: None, connection: Default::default(), before: vec![] }
     }
 }
 
 pub(crate) struct Browser {
     pub(crate) window: Window,
+    pub(crate) installed_app: Option<crate::webapps::WebApp>,
     /// Tab strip, toolbar and address bar (native, Direct2D).
     pub(crate) frame: Frame,
     /// Profile folder of the tabs; the first tab creates the shared WebView2 environment from it.
@@ -142,6 +153,11 @@ pub(crate) struct Browser {
     pub(crate) devtools: Option<platform::DockedDevTools>,
     pub(crate) devtools_tab: u64,
     pub(crate) devtools_ready: bool,
+    /// Where DevTools is docked ("bottom", "right", "left"), the share of the page area it takes,
+    /// and its button rail and splitter (made the first time it opens).
+    pub(crate) devtools_side: &'static str,
+    pub(crate) devtools_share: f32,
+    pub(crate) devtools_dock: Option<platform::DockControls>,
     /// Latest address-bar request: local rows (once known) and the engine's suggestions.
     pub(crate) suggest_state: (u64, Option<Json>, Vec<String>),
     pub(crate) jobs: mpsc::Sender<Job>,
@@ -172,6 +188,11 @@ pub(crate) struct Browser {
     pub(crate) ext_bubble: Option<WebView>,
     /// Where the extensions button is (DIPs: right edge, bottom), the pop-up hangs from it.
     pub(crate) bubble_at: (f64, f64),
+    /// The pop-up has DevTools open ("Inspect popup"): losing focus does not close it.
+    pub(crate) bubble_inspect: bool,
+    /// Which switchable page context-menu items show: (reading mode, translate, Incognito);
+    /// shared with every tab's menu, kept current by `apply_settings`.
+    pub(crate) page_menu_on: std::rc::Rc<std::cell::Cell<(bool, bool, bool)>>,
     /// New Tab tile hosts whose icon was looked for (once per run).
     pub(crate) site_icons_asked: std::collections::HashSet<String>,
     /// A store extension waiting for the install dialog's answer.
@@ -196,7 +217,7 @@ pub(crate) fn set_default_zoom(wv: &WebView, zoom: f64) {
 }
 
 pub(crate) fn chrome_height(window: &Window) -> u32 {
-    (ui::CHROME_HEIGHT_DIP * window.scale_factor()).round() as u32
+    if window.is_decorated() { 0 } else { (ui::CHROME_HEIGHT_DIP * window.scale_factor()).round() as u32 }
 }
 
 pub(crate) fn page_bounds(window: &Window) -> Rect {
@@ -230,6 +251,7 @@ impl Browser {
         extra_args: &str,
     ) -> wry::Result<Self> {
         timing("window created");
+        devtools::quiet_devtools_welcome(&data_dir);
         let ctx = WebContext::new(Some(data_dir));
         let dark = platform::dark_mode();
         let page_bg = if dark { (0x1c, 0x1a, 0x21, 255) } else { (255, 255, 255, 255) };
@@ -258,6 +280,7 @@ impl Browser {
         timing("native frame created");
         let browser_args = format!("{BROWSER_ARGS}{extra_args}");
         Ok(Self {
+            installed_app: None,
             window,
             frame,
             ctx,
@@ -298,6 +321,9 @@ impl Browser {
             devtools: None,
             devtools_tab: 0,
             devtools_ready: false,
+            devtools_side: "bottom",
+            devtools_share: 0.4,
+            devtools_dock: None,
             suggest_state: (0, None, vec![]),
             jobs,
             token: random_hex(),
@@ -317,6 +343,8 @@ impl Browser {
             next_popup: std::rc::Rc::new(std::cell::Cell::new(FIRST_POPUP_ID)),
             ext_bubble: None,
             bubble_at: (0.0, 0.0),
+            bubble_inspect: false,
+            page_menu_on: std::rc::Rc::new(std::cell::Cell::new((true, true, true))),
             site_icons_asked: Default::default(),
             pending_install: None,
             downloads_visible: false,
@@ -333,6 +361,7 @@ impl Browser {
             focus_highlight: self.settings.focus_highlight,
             page_bg: self.page_bg,
             theme: self.settings.wry_theme(),
+            app: self.installed_app.clone(),
             parent: self.window.hwnd(),
             bounds: page_bounds(&self.window),
             next_popup: self.next_popup.clone(),
@@ -341,6 +370,10 @@ impl Browser {
 
     pub(crate) fn build_tab_webview(&mut self, id: u64, url: &str, visible: bool, private: bool) -> wry::Result<WebView> {
         let kit = self.tab_kit();
+        // WebView2 started early while the address bar was typed in (see `prewarm_webview2`).
+        if self.env.is_none() {
+            self.env = platform::take_prewarmed_environment();
+        }
         let builder = match &self.env {
             Some(env) => WebViewBuilder::new().with_environment(env.clone()),
             None => WebViewBuilder::new_with_web_context(&mut self.ctx)
@@ -392,6 +425,7 @@ pub(crate) struct TabKit {
     parent: isize,
     bounds: Rect,
     next_popup: std::rc::Rc<std::cell::Cell<u64>>,
+    app: Option<crate::webapps::WebApp>,
 }
 
 impl TabKit {
@@ -425,16 +459,37 @@ impl TabKit {
         let p = self.proxy.clone();
         let (p1, p2, p3, p4) = (p.clone(), p.clone(), p.clone(), p.clone());
         let kit = self.clone();
-        builder
+        let app = self.app.clone(); let navigation = self.proxy.clone();
+        builder.with_navigation_handler(move |url| {
+            if let Some(app) = &app {
+                if url != "about:blank" && !app.contains(&url) {
+                    if url.starts_with("https://") || url.starts_with("http://") { let _ = navigation.send_event(Msg::OpenExternal(url)); }
+                    return false;
+                }
+            }
+            true
+        })
             .with_initialization_script(MEDIA_WATCH_JS)
             .with_initialization_script(focus_script(self.focus_highlight))
             .with_initialization_script(STORE_JS)
             .with_initialization_script(PASSWORDS_JS)
+            .with_initialization_script(PREVIEW_READY_JS)
+            .with_initialization_script(include_str!("../../../../assets/webapps.js"))
             // Pages can only send these messages. A page claiming "live" merely keeps itself
             // from being frozen, which it could also do by playing sound; store messages count
             // only from the Chrome Web Store, and installing still asks the person first.
             .with_ipc_handler(move |req| {
                 let body = req.body().as_str();
+                if body == "kk:preview-ready" {
+                    let _ = p4.send_event(Msg::PreviewReady { id, url: req.uri().to_string() });
+                    return;
+                }
+                if let Some(data) = body.strip_prefix("kk:webapp:") {
+                    if data.len() <= 32_768 && !private {
+                        let _ = p4.send_event(Msg::WebAppFound { id, url: req.uri().to_string(), data: data.into() });
+                    }
+                    return;
+                }
                 // Password manager: the page's own origin comes from the browser (the message's
                 // source), never from what the page says.
                 if let Some(what) = body.strip_prefix("kk:pw:") {
@@ -492,6 +547,11 @@ impl TabKit {
             // `window.open` with a size is a pop-up that keeps `window.opener` (sign-in and
             // payment pop-ups); everything else opens as a new tab.
             .with_new_window_req_handler(move |url, features| {
+                if platform::adblock_blocks_popup(&features.opener.webview, &url) { return NewWindowResponse::Deny; }
+                if kit.app.is_some() {
+                    if url.starts_with("https://") || url.starts_with("http://") { let _ = p3.send_event(Msg::OpenExternal(url)); }
+                    return NewWindowResponse::Deny;
+                }
                 if features.size.is_some() {
                     return kit.popup(id, private, url, features);
                 }
@@ -505,7 +565,7 @@ impl Browser {
 
     pub(crate) fn hook_tab(&self, id: u64, wv: &WebView) -> platform::Hooks {
         let (p1, p2, p3, p4) = (self.proxy.clone(), self.proxy.clone(), self.proxy.clone(), self.proxy.clone());
-        platform::hook(
+        let mut hooks = platform::hook(
             wv,
             key_handler(&self.proxy),
             move |uri| {
@@ -517,10 +577,57 @@ impl Browser {
             move || {
                 let _ = p3.send_event(Msg::DownloadsChanged);
             },
-            move || {
-                let _ = p4.send_event(Msg::Inspect(id));
-            },
-        )
+            self.page_menu(id, p4),
+        );
+        let p = self.proxy.clone();
+        platform::hook_security(wv, &mut hooks, move |url, data| { let _ = p.send_event(Msg::Security { id, url, data }); });
+        hooks
+    }
+
+    /// The browser's items in tab `id`'s page context menu (like Chrome's), and where a pick goes.
+    /// ponytail: labels are fixed when the tab is made; a language change shows on new tabs.
+    fn page_menu(&self, id: u64, proxy: tao::event_loop::EventLoopProxy<Msg>) -> platform::PageMenu {
+        use platform::{MenuPlace::*, PageMenuItem};
+        let item = |cmd, label: &str, place| PageMenuItem { cmd, label: crate::i18n::tr(label).into_owned(), place };
+        let items = vec![
+            item("linktab", "Open link in new tab", Link),
+            item("linkincognito", "Open link in Incognito window", Link),
+            item("reader", "Open in reading mode", Page),
+            item("translate", "Translate page", Page),
+            item("viewsource", "View page source", Source),
+        ];
+        let on = self.page_menu_on.clone();
+        let visible = move |cmd: &str| {
+            let (reader, translate, incognito) = on.get();
+            match cmd {
+                "reader" => reader,
+                "translate" => translate,
+                "linkincognito" => incognito,
+                _ => true,
+            }
+        };
+        let pick = move |cmd, link| {
+            let _ = proxy.send_event(Msg::PageMenu { id, cmd, link });
+        };
+        (items, Box::new(visible), Box::new(pick))
+    }
+
+    /// An item of tab `id`'s page context menu was picked; `link` is the link under the pointer.
+    pub(crate) fn on_page_menu(&mut self, id: u64, cmd: &str, link: String) {
+        let page = self.index(id).map(|i| self.tabs[i].view.url.clone()).unwrap_or_default();
+        match cmd {
+            "inspect" if id == self.active && self.devtools.is_none() => self.toggle_devtools(),
+            "linktab" if !link.is_empty() => {
+                let at = self.index(id).map_or(self.tabs.len(), |i| i + 1);
+                self.open_tab_background(&link, at);
+            }
+            "linkincognito" if !link.is_empty() => self.open_window(&link, true),
+            "reader" | "translate" if id == self.active => {
+                self.on_menu(cmd);
+            }
+            "viewsource" if !page.is_empty() && !page.starts_with("view-source:") => self.open_tab(&format!("view-source:{page}"), None),
+            _ => {}
+        }
     }
 
     pub(crate) fn index(&self, id: u64) -> Option<usize> {
@@ -542,6 +649,7 @@ impl Browser {
 
     /// Apply changed appearance/privacy settings to every open webview.
     pub(crate) fn apply_settings(&mut self, settings: Settings) {
+        self.page_menu_on.set((settings.reader, settings.translate, settings.incognito || self.incognito));
         platform::configure_adblock_sites(&settings.adblock_allowlist);
         let theme = settings.wry_theme();
         platform::motion::set_motion(settings.animations.then_some(settings.animation_speed), settings.smooth_scrolling);
@@ -656,9 +764,29 @@ impl Browser {
     }
 
     pub(crate) fn act(&mut self, a: Action) -> bool {
+        if self.installed_app.is_some() {
+            match a {
+                Action::FocusOmnibox => { let url = self.tabs.iter().find(|t| t.view.id == self.active).map(|t|t.view.url.clone()).unwrap_or_default(); self.open_window(&url, false); return true; }
+                Action::CloseTab => return false,
+                Action::NewTab | Action::NewWindow => { self.open_window(ui::NEWTAB_URL, false); return true; }
+                Action::TabSearch | Action::NextTab | Action::PrevTab | Action::SelectTab(_) | Action::ReopenClosed => return true,
+                _ => {}
+            }
+        }
         let pos = self.index(self.active).unwrap_or(0);
         let n = self.tabs.len();
         match a {
+            Action::MenuCommand(command @ ("zoomin" | "zoomout" | "zoomreset")) => {
+                if let Some(wv) = self.active_webview() {
+                    let factor = match command { "zoomin" => Some(1.1), "zoomout" => Some(1.0 / 1.1), _ => None };
+                    let _ = platform::zoom(wv, factor);
+                }
+            }
+            Action::MenuCommand(command) => return self.on_menu(command),
+            Action::ReloadBypass => {
+                if let Some(wv) = self.active_webview() { let _ = platform::devtools_call(wv, "Page.reload", r#"{"ignoreCache":true}"#); }
+                else { return self.act(Action::Reload); }
+            }
             Action::NewTab => self.open_new_tab(),
             // Incognito opens its own window (like Chrome); inside one it is just a new tab.
             // Incognito always opens its own window, also from an Incognito window (like Chrome).
@@ -763,7 +891,8 @@ impl Browser {
         if let Some(t) = self.tabs.iter().find(|t| t.view.id == self.active) {
             let title = if t.view.title.is_empty() { "New Tab" } else { &t.view.title };
             let mode = if self.incognito { " (Incognito)" } else { "" };
-            self.window.set_title(&format!("{title} - {APP}{mode}"));
+            let app_origin = self.installed_app.as_ref().map(|app| format!(" - {}", ui::host(&app.start_url))).unwrap_or_default();
+            self.window.set_title(&format!("{title}{app_origin} - {APP}{mode}"));
         }
         if !self.ui_ready {
             return;
@@ -827,13 +956,14 @@ impl Browser {
             loading: active.is_some_and(|v| v.loading),
             display: if set.full_urls && !internal { url.to_string() } else { ui::display_url(url) },
             url: if internal { ui::display_url(url) } else { url.to_string() },
-            chip: match ui::Security::of(url) {
+            chip: match self.tabs.iter().find(|t| t.view.id == self.active).map(|t| t.connection.security(url)).unwrap_or_else(|| ui::Security::of(url)) {
                 ui::Security::Secure => Chip::Secure,
                 ui::Security::Insecure => Chip::Insecure,
                 ui::Security::Local => Chip::Local,
                 ui::Security::Internal => Chip::Internal,
             },
             bookmarked: self.bookmarked,
+            installable: self.tabs.iter().any(|t| t.view.id == self.active && t.web_app.is_some() && !t.view.private),
             show_star: set.bookmark_star && storage::storable(url),
             key: self.key_shown(),
             show_home: set.home_button,
@@ -852,8 +982,7 @@ impl Browser {
         self.hide_overlay();
         let size = self.window.inner_size();
         self.frame.set_bounds(0, 0, size.width as i32, chrome_height(&self.window) as i32);
-        let bounds = self.devtools_bounds();
-        if let Some(panel) = self.devtools.as_mut() { let _ = panel.resize(bounds); }
+        self.place_devtools();
         for id in self.visible_with(self.active) {
             if let Some(wv) = self.index(id).and_then(|i| self.tabs[i].webview.as_ref()) {
                 let _ = wv.set_bounds(self.tab_bounds(id));

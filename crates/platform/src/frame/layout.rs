@@ -26,6 +26,7 @@ pub(super) enum Hit {
     Reload,
     Home,
     Chip,
+    InstallApp,
     Star,
     Key,
     Extensions,

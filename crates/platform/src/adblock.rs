@@ -1,12 +1,13 @@
-//! Shared native EasyList/EasyPrivacy request filtering with exact-host exceptions.
-//! Document requests stay navigable; filtering does not inspect response bodies.
+//! Shared native EasyList/EasyPrivacy filtering with exact-host exceptions: subresource
+//! requests, ad iframes, `$popup` windows and script redirects, plus element hiding.
+//! Typed/link navigations stay navigable; filtering does not inspect response bodies.
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use webview2_com::Microsoft::Web::WebView2::Win32::*;
-use webview2_com::{take_pwstr, WebResourceRequestedEventHandler};
-use windows::core::{Interface, HSTRING, PWSTR};
+use webview2_com::{take_pwstr, DOMContentLoadedEventHandler, ExecuteScriptCompletedHandler, NavigationStartingEventHandler, WebResourceRequestedEventHandler};
+use windows::core::{Interface, IUnknown, BOOL, HSTRING, PWSTR};
 use wry::{WebView, WebViewExtWindows};
 
 const LIST: &str = include_str!("adblock-domains.txt");
@@ -15,9 +16,12 @@ const MAX_COUNTED_SITES: usize = 200;
 thread_local! {
     static ON: Cell<bool> = const { Cell::new(false) };
     static BLOCKED: Cell<u64> = const { Cell::new(0) };
+    static WATCHED_VIEWS: Cell<usize> = const { Cell::new(0) };
     static DOMAINS: HashSet<&'static str> = domains().collect();
     static ALLOWED_SITES: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
     static BLOCKED_BY_SITE: RefCell<VecDeque<(String, u64)>> = const { RefCell::new(VecDeque::new()) };
+    /// Per-view tokens for FrameNavigationStarting, NavigationStarting and DOMContentLoaded.
+    static NAV_TOKENS: RefCell<HashMap<usize, [i64; 3]>> = RefCell::new(HashMap::new());
 }
 
 fn domains() -> impl Iterator<Item = &'static str> {
@@ -26,6 +30,8 @@ fn domains() -> impl Iterator<Item = &'static str> {
 
 pub(crate) fn set_enabled(on: bool) {
     let changed = ON.with(|c| c.replace(on) != on);
+    if !on { crate::filter_engine::release_unused(); }
+    else if changed && WATCHED_VIEWS.with(Cell::get) > 0 { crate::filter_engine::warm_up(); }
     if changed { refresh_scripts(); }
 }
 
@@ -137,9 +143,135 @@ fn resource_kind(context: COREWEBVIEW2_WEB_RESOURCE_CONTEXT) -> &'static str {
     }
 }
 
+fn source(core: &ICoreWebView2) -> String {
+    let mut page = PWSTR::null();
+    // SAFETY: WebView2 allocates the string with CoTaskMemAlloc; take_pwstr copies and frees it.
+    unsafe { core.Source(&mut page).map(|()| take_pwstr(page)).unwrap_or_default() }
+}
+
+/// Whether a new window requested by the page in `opener` is an ad pop-up (a `$popup` rule
+/// matches). Counted as a block when refused.
+pub fn adblock_blocks_popup(opener: &ICoreWebView2, url: &str) -> bool {
+    if !ON.with(Cell::get) { return false; }
+    let page = source(opener);
+    let blocked = !adblock_site_allowed(&page) && crate::filter_engine::blocks_popup(&page, url);
+    if blocked { record_block(&page); }
+    blocked
+}
+
+fn identity(core: &ICoreWebView2) -> usize {
+    core.cast::<IUnknown>().map_or(0, |unknown| unknown.as_raw() as usize)
+}
+
+/// Collects class and id names once, at DOMContentLoaded (no observers), for generic rules.
+const COLLECT: &str = "(()=>{const c=new Set,i=new Set;for(const e of document.querySelectorAll('[id],[class]')){if(e.id)i.add(e.id);for(const n of e.classList)c.add(n);if(c.size+i.size>8000)break}return{c:[...c],i:[...i],s:Array.isArray(window.__kkCosmetic)}})()";
+
+/// Adds a hiding sheet the page helper can remove when the blocker is paused.
+fn inject(core: &ICoreWebView2, css: &str) {
+    if css.is_empty() { return; }
+    let css = serde_json::to_string(css).unwrap_or_default();
+    let script = format!("(()=>{{try{{const s=new CSSStyleSheet;s.replaceSync({css});\
+        (window.__kkCosmetic=Array.isArray(window.__kkCosmetic)?window.__kkCosmetic:[]).push(s);\
+        if(!window.__kkAdblock||window.__kkAdblock.status().enabled)document.adoptedStyleSheets=[...document.adoptedStyleSheets,s]}}catch(_){{}}}})()");
+    let done = ExecuteScriptCompletedHandler::create(Box::new(|_, _| Ok(())));
+    // SAFETY: live core on the UI thread; WebView2 retains the completion handler.
+    if let Err(error) = unsafe { core.ExecuteScript(&HSTRING::from(script), &done) } {
+        eprintln!("ad blocker: element hiding: {error}");
+    }
+}
+
+/// Names from COLLECT, and whether the navigation-time sheet is already present.
+fn names(json: &str) -> Option<(Vec<String>, Vec<String>, bool)> {
+    let value: serde_json::Value = serde_json::from_str(json).ok()?;
+    let list = |key| value.get(key)?.as_array().map(|items| items.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect());
+    Some((list("c")?, list("i")?, value.get("s")?.as_bool()?))
+}
+
+/// Generic class/id hiding (and the site-specific sheet if navigation-time injection missed).
+fn hide_generic(core: &ICoreWebView2) {
+    let page = source(core);
+    if !ON.with(Cell::get) || !adblock_site_enabled(&page) { return; }
+    let Some(resources) = crate::filter_engine::cosmetic(&page) else { return };
+    let target = core.clone();
+    let done = ExecuteScriptCompletedHandler::create(Box::new(move |result, json| {
+        let Some((classes, ids, present)) = result.ok().and_then(|()| names(&json)) else { return Ok(()) };
+        if source(&target) != page { return Ok(()); }
+        let mut css = if present { String::new() } else { crate::filter_engine::hide_css(&resources.hide_selectors) };
+        if !resources.generichide {
+            css += &crate::filter_engine::hide_css(&crate::filter_engine::generic_selectors(&classes, &ids, &resources.exceptions));
+        }
+        inject(&target, &css);
+        Ok(())
+    }));
+    // SAFETY: live core on the UI thread; WebView2 retains the completion handler.
+    if let Err(error) = unsafe { core.ExecuteScript(&HSTRING::from(COLLECT), &done) } {
+        eprintln!("ad blocker: element names: {error}");
+    }
+}
+
+fn navigation(args: &ICoreWebView2NavigationStartingEventArgs) -> windows::core::Result<(String, bool)> {
+    let (mut url, mut user, mut redirected) = (PWSTR::null(), BOOL(0), BOOL(0));
+    // SAFETY: plain COM getters on live event args; take_pwstr frees the URI.
+    unsafe {
+        args.Uri(&mut url)?;
+        let url = take_pwstr(url);
+        args.IsUserInitiated(&mut user)?;
+        args.IsRedirected(&mut redirected)?;
+        Ok((url, user.as_bool() || redirected.as_bool()))
+    }
+}
+
+/// Ad iframes (subdocument rules), page-script redirects to `$popup` targets, and the
+/// site-specific hiding sheet, which ExecuteScript after NavigationStarting puts into the new document.
+fn watch_navigation(core: &ICoreWebView2) -> windows::core::Result<[i64; 3]> {
+    let frames = NavigationStartingEventHandler::create(Box::new(|sender, args| {
+        let (Some(sender), Some(args)) = (sender, args) else { return Ok(()) };
+        if !ON.with(Cell::get) { return Ok(()); }
+        let page = source(&sender);
+        if adblock_site_allowed(&page) { return Ok(()); }
+        let (url, _) = navigation(&args)?;
+        if crate::filter_engine::blocks_with_method(&page, &url, "subdocument", "GET") {
+            // SAFETY: cancelling a pending frame navigation from its own event.
+            unsafe { args.SetCancel(true)?; }
+            record_block(&page);
+        }
+        Ok(())
+    }));
+    let pages = NavigationStartingEventHandler::create(Box::new(|sender, args| {
+        let (Some(sender), Some(args)) = (sender, args) else { return Ok(()) };
+        if !ON.with(Cell::get) { return Ok(()); }
+        let page = source(&sender);
+        let (url, by_user) = navigation(&args)?;
+        if !by_user && !adblock_site_allowed(&page) && host(&page) != host(&url)
+            && crate::filter_engine::blocks_popup(&page, &url) {
+            // SAFETY: cancelling a pending top-level navigation from its own event.
+            unsafe { args.SetCancel(true)?; }
+            record_block(&page);
+            return Ok(());
+        }
+        if adblock_site_enabled(&url) {
+            if let Some(resources) = crate::filter_engine::cosmetic(&url) {
+                inject(&sender, &crate::filter_engine::hide_css(&resources.hide_selectors));
+            }
+        }
+        Ok(())
+    }));
+    let loaded = DOMContentLoadedEventHandler::create(Box::new(|sender, _| {
+        if let Some(sender) = sender { hide_generic(&sender); }
+        Ok(())
+    }));
+    let mut tokens = [0i64; 3];
+    // SAFETY: valid handlers and writable token slots on the UI thread.
+    unsafe {
+        core.add_FrameNavigationStarting(&frames, &mut tokens[0])?;
+        core.add_NavigationStarting(&pages, &mut tokens[1])?;
+        core.cast::<ICoreWebView2_2>()?.add_DOMContentLoaded(&loaded, &mut tokens[2])?;
+    }
+    Ok(tokens)
+}
+
 /// Add one request filter per scheme, using worker/frame coverage where the runtime supports it.
 pub(crate) fn watch(wv: &WebView) -> Option<i64> {
-    crate::filter_engine::warm_up();
     let core = wv.webview();
     for pattern in ["https://*", "http://*"] {
         // SAFETY: live WebView2 interfaces and strings on the UI thread.
@@ -197,7 +329,15 @@ pub(crate) fn watch(wv: &WebView) -> Option<i64> {
     let mut token = 0i64;
     // SAFETY: handler is a valid COM object; token is a writable local.
     match unsafe { core.add_WebResourceRequested(&handler, &mut token) } {
-        Ok(()) => Some(token),
+        Ok(()) => {
+            match watch_navigation(&core) {
+                Ok(tokens) => { NAV_TOKENS.with(|all| all.borrow_mut().insert(identity(&core), tokens)); }
+                Err(e) => eprintln!("ad blocker: navigation filters: {e}"),
+            }
+            WATCHED_VIEWS.with(|count| count.set(count.get() + 1));
+            if ON.with(Cell::get) { crate::filter_engine::warm_up(); }
+            Some(token)
+        },
         Err(e) => {
             eprintln!("ad blocker: WebResourceRequested registration failed: {e}");
             None
@@ -206,15 +346,50 @@ pub(crate) fn watch(wv: &WebView) -> Option<i64> {
 }
 
 pub(crate) fn unwatch(wv: &WebView, token: i64) {
+    let core = wv.webview();
     // SAFETY: token came from add_WebResourceRequested on this webview.
-    if let Err(e) = unsafe { wv.webview().remove_WebResourceRequested(token) } {
+    if let Err(e) = unsafe { core.remove_WebResourceRequested(token) } {
         eprintln!("unhook: WebResourceRequested: {e}");
     }
+    if let Some([frames, pages, loaded]) = NAV_TOKENS.with(|all| all.borrow_mut().remove(&identity(&core))) {
+        // SAFETY: tokens came from the matching add_* calls on this webview.
+        unsafe {
+            let _ = core.remove_FrameNavigationStarting(frames);
+            let _ = core.remove_NavigationStarting(pages);
+            if let Ok(core2) = core.cast::<ICoreWebView2_2>() { let _ = core2.remove_DOMContentLoaded(loaded); }
+        }
+    }
+    WATCHED_VIEWS.with(|count| {
+        count.set(count.get().saturating_sub(1));
+        if count.get() == 0 {
+            crate::filter_engine::release_unused();
+            crate::processes::defer_heap_cleanup();
+        }
+    });
 }
+
+pub fn adblock_memory_status() -> serde_json::Value {
+    let sites: serde_json::Map<String, serde_json::Value> = BLOCKED_BY_SITE.with(|counts| counts.borrow().iter()
+        .map(|(site, count)| (site.clone(), (*count).into())).collect());
+    serde_json::json!({"watched_views":WATCHED_VIEWS.with(Cell::get),"engine_loaded":crate::filter_engine::loaded(),"heap_cleanups":crate::processes::heap_cleanup_count(),
+        "blocked":ads_blocked(),"blocked_by_site":sites})
+}
+
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disabling_blocker_releases_engine_without_enabling_it_on_native_pages() {
+        set_enabled(true);
+        crate::filter_engine::warm_up();
+        assert!(crate::filter_engine::loaded());
+        set_enabled(false);
+        assert!(!crate::filter_engine::loaded(), "disabled blocking must not retain its compiled rules");
+        set_enabled(true);
+        assert!(!crate::filter_engine::loaded(), "native-only windows need no network matcher");
+    }
 
     #[test]
     fn hosts() {

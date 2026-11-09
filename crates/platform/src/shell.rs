@@ -5,6 +5,39 @@ use windows::core::{HSTRING, PWSTR};
 use windows::Win32::Foundation::HWND;
 use crate::Result;
 
+pub fn create_app_shortcut(path: &Path, exe: &Path, id: &str, profile: &Path, title: &str) -> Result<()> {
+    use windows::core::Interface;
+    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, IPersistFile, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
+    use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+    fn quote(value: &str) -> String {
+        let mut result = String::from("\"");
+        let mut slashes = 0;
+        for c in value.chars() {
+            if c == '\\' { slashes += 1; continue; }
+            result.extend(std::iter::repeat_n('\\', slashes * if c == '"' { 2 } else { 1 }));
+            if c == '"' { result.push('\\'); }
+            result.push(c); slashes = 0;
+        }
+        result.extend(std::iter::repeat_n('\\', slashes * 2));
+        result.push('"'); result
+    }
+    // SAFETY: interfaces stay on this thread. Balance only successful COM initialization;
+    // an existing apartment may also create the shell link.
+    unsafe {
+        let initialized = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
+        let result = (|| {
+            let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
+            link.SetPath(&HSTRING::from(exe.as_os_str()))?;
+            link.SetArguments(&HSTRING::from(format!("--app-id={id} {}", quote(&format!("--user-data-dir={}", profile.display())))))?;
+            link.SetDescription(&HSTRING::from(title))?;
+            link.SetIconLocation(&HSTRING::from(exe.as_os_str()), 0)?;
+            link.cast::<IPersistFile>()?.Save(&HSTRING::from(path.as_os_str()), true)
+        })();
+        if initialized { CoUninitialize(); }
+        result
+    }
+}
+
 /// Windows' own folder picker. `None` when the person cancels.
 pub fn pick_folder(owner: isize, title: &str) -> Option<std::path::PathBuf> {
     use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_INPROC_SERVER};

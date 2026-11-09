@@ -17,6 +17,7 @@ serde_json.workspace = true
 ui = { path = "../ui" }
 wry.workspace = true
 tao.workspace = true
+url = "=2.5.8"
 
 [build-dependencies]
 ui = { path = "../ui" }

@@ -36,6 +36,16 @@ pub(super) fn set_edit_text(i: &mut Inner, text: &str) {
     i.quiet = false;
 }
 
+pub(crate) fn edit_shortcut(hwnd: HWND, msg: u32, key: WPARAM) -> bool {
+    let select_all = unsafe { GetKeyState(VK_CONTROL.0 as i32) < 0 && GetKeyState(VK_SHIFT.0 as i32) >= 0 && GetKeyState(VK_MENU.0 as i32) >= 0 };
+    if !select_all { return false; }
+    if msg == WM_KEYDOWN && key.0 == b'A' as usize {
+        unsafe { SendMessageW(hwnd, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1))); }
+        return true;
+    }
+    msg == WM_CHAR && key.0 == 1
+}
+
 pub(crate) fn scale_of(hwnd: HWND) -> f32 {
     // SAFETY: plain query for a live window.
     let dpi = unsafe { GetDpiForWindow(hwnd) };
@@ -51,6 +61,7 @@ pub(crate) fn lparam_point(l: LPARAM, scale: f32) -> (f32, f32) {
 impl Inner {
     fn cancel_preview(&mut self) {
         unsafe { let _ = KillTimer(Some(self.hwnd), super::TIMER_TAB_PREVIEW); }
+        self.preview_shown = false;
         if self.preview_tab.take().is_some() { self.send("tabhover\t0".into()); }
     }
 
@@ -90,6 +101,7 @@ impl Inner {
             Hit::Reload => if self.state.loading { "stop".into() } else { "reload".into() },
             Hit::Home => "home".into(),
             Hit::Star => "bookmark".into(),
+            Hit::InstallApp => format!("installapp\t{}\t{}", place.0.round(), (place.1 + 6.0).round()),
             Hit::Key => format!("pwkey\t{}\t{}", place.0.round(), (place.1 + 6.0).round()),
             Hit::Extensions => format!("extensions\t{}\t{}", place.0.round(), (place.1 + 2.0).round()),
             Hit::Profile => format!("profile\t{}\t{}", place.0.round(), (place.1 + 2.0).round()),
@@ -149,6 +161,7 @@ pub(super) unsafe extern "system" fn frame_proc(hwnd: HWND, msg: u32, wp: WPARAM
                     if i.drag.is_none() && i.state.tabs.iter().any(|t| t.id == id) {
                         if let Some((r, _)) = i.hits.iter().find(|(_, h)| *h == Hit::Tab(id)) {
                             let cmd = format!("tabhover\t{id}\t{}\t{}\t{}", r.left, STRIP_H, r.right - r.left);
+                            i.preview_shown = true;
                             i.send(cmd);
                         }
                     }
@@ -157,8 +170,10 @@ pub(super) unsafe extern "system" fn frame_proc(hwnd: HWND, msg: u32, wp: WPARAM
             }
             WM_ERASEBKGND => return LRESULT(1),
             WM_TIMER if wp.0 == super::TIMER_ANIM => {
-                if !i.appear.iter().any(|(_, at)| crate::motion::progress(*at, 0.0, super::TAB_GROW_MS) < 1.0) {
+                if !i.animating() {
                     i.appear.clear();
+                    i.slide = None;
+                    i.active_slide = None;
                     let _ = KillTimer(Some(hwnd), super::TIMER_ANIM);
                 }
                 let _ = InvalidateRect(Some(hwnd), None, false);
@@ -215,7 +230,7 @@ pub(super) unsafe extern "system" fn frame_proc(hwnd: HWND, msg: u32, wp: WPARAM
                                 let tab = i.state.tabs.remove(from);
                                 i.state.tabs.insert(to, tab);
                                 i.send(format!("move\t{id}\t{to}"));
-                                let _ = InvalidateRect(Some(hwnd), None, false);
+                                i.slide_tabs();
                             }
                         }
                     }
@@ -223,29 +238,31 @@ pub(super) unsafe extern "system" fn frame_proc(hwnd: HWND, msg: u32, wp: WPARAM
                 let h = i.hit(x, y);
                 let tab = if i.drag.is_none() { match h { Hit::Tab(id) | Hit::TabClose(id) | Hit::TabAudio(id) => Some(id), _ => None } } else { None };
                 if tab != i.preview_tab {
-                    i.cancel_preview();
-                    i.preview_tab = tab;
-                    if tab.is_some() { SetTimer(Some(hwnd), super::TIMER_TAB_PREVIEW, 450, None); }
+                    if i.preview_shown && tab.is_some() {
+                        // A card is open: the next tab's card follows at once, without a second wait.
+                        i.preview_tab = tab;
+                        SetTimer(Some(hwnd), super::TIMER_TAB_PREVIEW, 1, None);
+                    } else {
+                        i.cancel_preview();
+                        i.preview_tab = tab;
+                        if tab.is_some() { SetTimer(Some(hwnd), super::TIMER_TAB_PREVIEW, 450, None); }
+                    }
                 }
-                if h != i.hover {
-                    i.hover = h;
-                    let _ = InvalidateRect(Some(hwnd), None, false);
-                }
+                i.set_hover(h);
             }
             WM_MOUSELEAVE => {
                 if i.synthetic_hover { return LRESULT(0); }
                 i.cancel_preview();
                 i.tracking = false;
-                if i.hover != Hit::None {
-                    i.hover = Hit::None;
-                    let _ = InvalidateRect(Some(hwnd), None, false);
-                }
+                i.set_hover(Hit::None);
             }
             WM_LBUTTONDOWN => {
                 i.cancel_preview();
                 let (x, y) = lparam_point(lp, scale);
                 let h = i.hit(x, y);
                 i.pressed = h;
+                // The pressed part darkens at once.
+                let _ = InvalidateRect(Some(hwnd), None, false);
                 if y < 4.0 && !i.state.maximized {
                     let width = i.hits.iter().map(|(r, _)| r.right).fold(0.0f32, f32::max);
                     let dir = if x < 8.0 { "nw" } else if x > width - 8.0 { "ne" } else { "n" };
@@ -281,6 +298,7 @@ pub(super) unsafe extern "system" fn frame_proc(hwnd: HWND, msg: u32, wp: WPARAM
                     i.click(h, x, y);
                 }
                 i.pressed = Hit::None;
+                let _ = InvalidateRect(Some(hwnd), None, false);
             }
             WM_LBUTTONDBLCLK => {
                 i.cancel_preview();
@@ -303,8 +321,11 @@ pub(super) unsafe extern "system" fn frame_proc(hwnd: HWND, msg: u32, wp: WPARAM
                     Hit::Tab(id) | Hit::TabClose(id) | Hit::TabAudio(id) => i.send(format!("tabmenu\t{id}\t{}\t{}", x.round(), y.round())),
                     Hit::Group(id) => i.send(format!("groupmenu\t{id}\t{}\t{}", x.round(), y.round())),
                     Hit::Pinned(n) => {
+                        // Under the button's lower right corner, like a left click's pop-up.
+                        let hit = Hit::Pinned(n);
+                        let (right, bottom) = i.hits.iter().find(|(_, h)| *h == hit).map_or((x, y), |(r, _)| (r.right, r.bottom));
                         if let Some(id) = i.state.pinned.get(n).map(|p| p.id.clone()) {
-                            i.send(format!("pinnedmenu\t{id}\t{}\t{}", x.round(), y.round()));
+                            i.send(format!("pinnedmenu\t{id}\t{}\t{}", right.round(), (bottom + 2.0).round()));
                         }
                     }
                     _ => {}
@@ -346,6 +367,7 @@ pub(super) unsafe extern "system" fn frame_proc(hwnd: HWND, msg: u32, wp: WPARAM
 pub(super) unsafe extern "system" fn edit_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM, _id: usize, data: usize) -> LRESULT {
     // SAFETY: `data` is the frame's boxed RefCell<Inner>, alive while the frame (our parent) is.
     unsafe {
+        if edit_shortcut(hwnd, msg, wp) { return LRESULT(0); }
         let cell = (data as *const RefCell<Inner>).as_ref();
         let report = |cmd: String| {
             if let Some(Ok(mut i)) = cell.map(RefCell::try_borrow_mut) {
@@ -359,9 +381,10 @@ pub(super) unsafe extern "system" fn edit_proc(hwnd: HWND, msg: u32, wp: WPARAM,
                 // the box keeps handling them too (Ctrl+A/C/V/X/Z are not browser shortcuts).
                 let down = |vk: u16| GetKeyState(vk as i32) < 0;
                 let (ctrl, shift, alt) = (down(VK_CONTROL.0), down(VK_SHIFT.0), down(VK_MENU.0));
-                if ctrl || alt || (0x70..=0x7B).contains(&key) {
+                if ctrl || alt || (shift && key == VK_ESCAPE.0) || (0x70..=0x7B).contains(&key) {
                     report(format!("key\t{key}\t{}\t{}\t{}", ctrl as u8, shift as u8, alt as u8));
                 }
+                if shift && key == VK_ESCAPE.0 { return LRESULT(0); }
                 let name = match key {
                     k if k == VK_RETURN.0 => Some("enter"),
                     k if k == VK_ESCAPE.0 => Some("escape"),
@@ -378,12 +401,16 @@ pub(super) unsafe extern "system" fn edit_proc(hwnd: HWND, msg: u32, wp: WPARAM,
             WM_CHAR if wp.0 == 13 || wp.0 == 27 => return LRESULT(0),
             WM_SETFOCUS => {
                 let r = DefSubclassProc(hwnd, msg, wp, lp);
+                if let Some(Ok(mut i)) = cell.map(RefCell::try_borrow_mut) { i.set_omni_focus(true); }
                 report("omnifocus".into());
                 // Select everything once the click that focused us is done.
                 let _ = PostMessageW(Some(hwnd), EM_SETSEL, WPARAM(0), LPARAM(-1));
                 return r;
             }
-            WM_KILLFOCUS => report("omniblur".into()),
+            WM_KILLFOCUS => {
+                if let Some(Ok(mut i)) = cell.map(RefCell::try_borrow_mut) { i.set_omni_focus(false); }
+                report("omniblur".into());
+            }
             _ => {}
         }
         DefSubclassProc(hwnd, msg, wp, lp)

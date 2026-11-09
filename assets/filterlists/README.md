@@ -1,4 +1,4 @@
-# Bundled network filter lists
+# Bundled filter lists
 
 EasyList and EasyPrivacy are copyright The EasyList authors
 (https://easylist.to/). These unmodified snapshots are distributed under
@@ -13,12 +13,16 @@ https://github.com/brave/adblock-rust/ (crate version pinned in Cargo.toml).
 See LICENSE-MPL-2.0.txt. Kakangkung's adapter is separate from the dependency;
 no upstream source files are modified.
 
-Only network rules are compiled, with the engine's embedded public suffix
-resolver and regular-expression support enabled. The engine handles supported
-ABP network syntax and exceptions. Unsupported syntax is ignored by the engine.
+Network and element-hiding (cosmetic) rules are compiled, with the engine's
+embedded public suffix resolver and regular-expression support enabled. The
+engine handles supported ABP network syntax, `##`/`#@#` hiding rules and
+exceptions; unsupported syntax is ignored. `$popup` rules, which adblock-rust
+does not support, are rewritten as `$document` rules into a second small engine
+that only checks new windows and page-script top-level redirects. Hiding CSS is
+injected by the app; procedural (`:-abp-*`, `:has-text`) rules are not applied.
 This adapter does not implement scriptlet injection, remote code execution,
 redirect-resource replacement, CSP response modification or response-body
-rewriting. Cosmetic rules in the source files are not loaded into this engine.
+rewriting. `kakangkung.txt` holds Kakangkung's own site fixes (MIT).
 
 The app does not currently download list updates. From the app directory, run
 `python bench/update-adblock-lists.py` to download and validate both official

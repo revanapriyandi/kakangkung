@@ -26,7 +26,7 @@ use super::layout::{layout, HEADER_H};
 use super::model::Control;
 use super::paint::{colors, Meter};
 use super::model::Bounce;
-use super::{Inner, BOUNCE_MS, HOP_MS, ENTER_MS, HOVER_MS, TILE_DELAY_MS, TILE_MS, TILE_STAGGER_MS, TIMER_ANIM, TIMER_SCROLL, TIMER_TOAST, TOGGLE_MS};
+use super::{Inner, BOUNCE_MS, HOP_MS, ENTER_MS, HOVER_MS, PRESS_MS, TILE_DELAY_MS, TILE_MS, TILE_STAGGER_MS, TIMER_ANIM, TIMER_SCROLL, TIMER_TOAST, TOAST_IN_MS, TOAST_OUT_MS, TOGGLE_MS};
 use crate::motion;
 use crate::frame::layout::inside;
 use crate::frame::{edit_text, lparam_point, scale_of};
@@ -122,6 +122,9 @@ impl Inner {
             || motion::progress(self.enter, 0.0, ENTER_MS.max(tiles)) < 1.0
             || motion::progress(self.hover_at, 0.0, HOVER_MS) < 1.0
             || self.toggles.iter().any(|(_, at)| motion::progress(*at, 0.0, TOGGLE_MS) < 1.0)
+            || self.press.is_some_and(|(_, at)| motion::progress(at, 0.0, PRESS_MS) < 1.0)
+            || (!self.toast.is_empty() && motion::progress(self.toast_at, 0.0, TOAST_IN_MS) < 1.0)
+            || self.toast_out.is_some()
     }
 
     pub(super) fn scroll_smooth(&mut self, to: f32) {
@@ -280,8 +283,10 @@ impl Inner {
                         *on = !*on;
                         let cmd = format!("page\ttoggle\t{id}\t{}", if *on { "1" } else { "0" });
                         let id = id.clone();
+                        // A switch flipped back while still sliding turns from where its knob is.
+                        let start = self.toggles.iter().find(|(t, _)| *t == id).map_or_else(Instant::now, |(_, at)| motion::reverse(*at, TOGGLE_MS));
                         self.toggles.retain(|(t, at)| *t != id && motion::progress(*at, 0.0, TOGGLE_MS) < 1.0);
-                        self.toggles.push((id, Instant::now()));
+                        self.toggles.push((id, start));
                         self.animate();
                         cmd
                     }
@@ -365,7 +370,7 @@ fn shortcut(vk: u16) -> Option<String> {
     // SAFETY: plain keyboard-state queries.
     let down = |k: u16| unsafe { GetKeyState(k as i32) } < 0;
     let (ctrl, shift, alt) = (down(VK_CONTROL.0), down(VK_SHIFT.0), down(VK_MENU.0));
-    (ctrl || alt || (0x70..=0x7B).contains(&vk)).then(|| format!("key\t{vk}\t{}\t{}\t{}", ctrl as u8, shift as u8, alt as u8))
+    (ctrl || alt || (shift && vk == VK_ESCAPE.0) || (0x70..=0x7B).contains(&vk)).then(|| format!("key\t{vk}\t{}\t{}\t{}", ctrl as u8, shift as u8, alt as u8))
 }
 
 pub(super) unsafe extern "system" fn page_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
@@ -414,6 +419,11 @@ pub(super) unsafe extern "system" fn page_proc(hwnd: HWND, msg: u32, wp: WPARAM,
                 return LRESULT(0);
             }
             WM_TIMER if wp.0 == TIMER_ANIM => {
+                // A leaving message is gone once it has faded out.
+                if i.toast_out.is_some_and(|at| motion::progress(at, 0.0, TOAST_OUT_MS) >= 1.0) {
+                    i.toast.clear();
+                    i.toast_out = None;
+                }
                 if !i.animating() {
                     let _ = KillTimer(Some(hwnd), TIMER_ANIM);
                 }
@@ -422,7 +432,13 @@ pub(super) unsafe extern "system" fn page_proc(hwnd: HWND, msg: u32, wp: WPARAM,
             }
             WM_TIMER if wp.0 == TIMER_TOAST => {
                 let _ = KillTimer(Some(hwnd), TIMER_TOAST);
-                i.toast.clear();
+                // Fade the message out (at once when animations are off).
+                if motion::enabled() {
+                    i.toast_out = Some(Instant::now());
+                    i.animate();
+                } else {
+                    i.toast.clear();
+                }
                 i.repaint();
                 return LRESULT(0);
             }
@@ -453,6 +469,8 @@ pub(super) unsafe extern "system" fn page_proc(hwnd: HWND, msg: u32, wp: WPARAM,
                 let bar = hover == Some(Target::Bar);
                 if hover != i.hover || bar != i.bar_hover {
                     if hover != i.hover {
+                        i.hover_from = (hover.map_or(0.0, |t| i.hover_level(t)), i.hover.map_or(0.0, |t| i.hover_level(t)));
+                        i.hover_prev = i.hover;
                         i.hover_at = Instant::now();
                         i.animate();
                     }
@@ -464,12 +482,22 @@ pub(super) unsafe extern "system" fn page_proc(hwnd: HWND, msg: u32, wp: WPARAM,
             WM_MOUSELEAVE => {
                 i.mouse_in = false;
                 i.bar_hover = false;
+                if i.hover.is_some() {
+                    i.hover_from = (0.0, i.hover.map_or(0.0, |t| i.hover_level(t)));
+                    i.hover_prev = i.hover;
+                    i.hover_at = Instant::now();
+                    i.animate();
+                }
                 i.hover = None;
                 i.repaint();
             }
             WM_LBUTTONDOWN => {
                 let (x, y) = lparam_point(lp, scale);
                 let target = i.target_at(x, y);
+                if let Some(t) = target.filter(|t| *t != Target::Bar) {
+                    i.press = Some((t, Instant::now()));
+                    i.animate();
+                }
                 if target == Some(Target::Bar) {
                     let scroll = i.scroll;
                     i.bar_drag = Some((y, scroll));
@@ -549,6 +577,7 @@ pub(super) unsafe extern "system" fn page_proc(hwnd: HWND, msg: u32, wp: WPARAM,
 pub(super) unsafe extern "system" fn edit_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM, _id: usize, data: usize) -> LRESULT {
     // SAFETY: `data` is the page's boxed RefCell<Inner>, alive while the page (our parent) is.
     unsafe {
+        if crate::frame::edit_shortcut(hwnd, msg, wp) { return LRESULT(0); }
         let Some(cell) = (data as *const RefCell<Inner>).as_ref() else { return DefSubclassProc(hwnd, msg, wp, lp) };
         match msg {
             WM_KEYDOWN | WM_SYSKEYDOWN => {
@@ -557,6 +586,7 @@ pub(super) unsafe extern "system" fn edit_proc(hwnd: HWND, msg: u32, wp: WPARAM,
                 if let Some(cmd) = shortcut(vk) {
                     i.send(cmd);
                 }
+                if vk == VK_ESCAPE.0 && GetKeyState(windows::Win32::UI::Input::KeyboardAndMouse::VK_SHIFT.0 as i32) < 0 { return LRESULT(0); }
                 if i.fakebox_edit() == Some(hwnd) && (vk == VK_UP.0 || vk == VK_DOWN.0 || vk == VK_ESCAPE.0) {
                     let key = if vk == VK_UP.0 { "up" } else if vk == VK_DOWN.0 { "down" } else { "escape" };
                     i.send(format!("page\tkey\t{}\t{key}", super::FAKEBOX));

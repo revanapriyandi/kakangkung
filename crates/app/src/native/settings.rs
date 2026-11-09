@@ -152,7 +152,7 @@ pub(crate) fn settings_doc(s: &Json, permissions: Option<&[Json]>) -> PageDoc {
             Row::new("Restore settings to their original defaults", "Your account, history, bookmarks and downloads stay", buttons(&[("reset-all", "Reset settings", ButtonStyle::Danger)])),
         ]]),
         section("about", "About Kakangkung", "about version update updates webview2", vec![vec![
-            Row::new("Kakangkung", &format!("Version {} · Microsoft Edge WebView2 {}", text("version"), text("webview2")), Control::Avatar { initial: "K".into() }),
+            Row::new("Kakangkung", &format!("Version {} · Chromium {}", text("version"), text("webview2")), Control::Avatar { initial: "K".into() }),
             update_row(&s["update"], v.on("system.auto_update")),
             Row::new("Source code, help and releases", "github.com/revanapriyandi/kakangkung", Control::Link { id: "visit:https://github.com/revanapriyandi/kakangkung".into() }),
         ]]),
@@ -269,7 +269,7 @@ fn privacy(v: &Values, permissions: Option<&[Json]>) -> Section {
         v.toggle("privacy.clear_on_exit", "Clear browsing data when you exit", "History, cookies, cache and site data are removed when Kakangkung closes"),
         Row::heading("Security"),
         v.toggle("privacy.safe_browsing", "Safe Browsing", "Microsoft Defender SmartScreen warns about dangerous sites and downloads"),
-        v.toggle("privacy.adblock", "Block ads", "Built-in ad blocker: requests to known ad networks are refused; switch off if a site breaks"),
+        v.toggle("privacy.adblock", "Block ads", "Built-in ad blocker: ad and tracker requests, ad frames, pop-ups and leftover ad boxes are blocked; pause it per site from the shield if a site breaks"),
         v.toggle("privacy.https_first", "Always use secure connections", "HTTPS-First: typed http:// addresses open over https://"),
         v.select("privacy.tracking", "Tracking prevention", "Blocks trackers from sites you haven't visited; Strict may break some sites", &[("0", "Off"), ("1", "Basic"), ("2", "Balanced (recommended)"), ("3", "Strict")]),
         Row::new("Manage certificates", "Windows certificate store", buttons(&[("certs", "Open", ButtonStyle::Normal)])),

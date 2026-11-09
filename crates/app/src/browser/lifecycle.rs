@@ -8,11 +8,12 @@ use wry::{MemoryUsageLevel, Rect, WebViewExtWindows};
 use wry::dpi::{PhysicalPosition, PhysicalSize};
 
 use crate::timing;
-use crate::browser::{chrome_height, page_bounds, set_default_zoom, Browser, Tab};
+use crate::browser::{page_bounds, set_default_zoom, Browser, Tab};
 use crate::msg::Msg;
 
 impl Browser {
     pub(crate) fn open_tab(&mut self, url: &str, at: Option<usize>) {
+        if self.installed_app.is_some() && !self.tabs.is_empty() { self.open_window(url, false); return; }
         let id = self.next_id;
         self.next_id += 1;
         let muted = self.settings.mute_sites;
@@ -176,6 +177,7 @@ impl Browser {
         let after = self.visible_with(id);
         for old in before {
             if let (false, Some(i)) = (after.contains(&old), self.index(old)) {
+                self.capture_tab_preview(old);
                 self.apply(i, TabEvent::Deactivate);
             }
         }
@@ -201,13 +203,13 @@ impl Browser {
     pub(crate) fn tab_bounds(&self, id: u64) -> Rect {
         let full = self.content_bounds();
         let Some((l, _)) = self.split.filter(|&(l, r)| id == l || id == r) else { return full };
-        let size = self.window.inner_size();
-        let top = chrome_height(&self.window).min(size.height);
-        let gap = (4.0 * self.window.scale_factor()).round() as u32;
+        // The halves share the pages' area (beside DevTools docked at a side).
+        let scale = self.window.scale_factor();
+        let (at, size) = (full.position.to_physical::<i32>(scale), full.size.to_physical::<u32>(scale));
+        let gap = (4.0 * scale).round() as u32;
         let half = size.width.saturating_sub(gap) / 2;
-        let (x, w) = if id == l { (0, half) } else { (half + gap, size.width.saturating_sub(half + gap)) };
-        let height = full.size.to_physical::<u32>(self.window.scale_factor()).height;
-        Rect { position: PhysicalPosition::new(x as i32, top as i32).into(), size: PhysicalSize::new(w, height).into() }
+        let (x, w) = if id == l { (at.x, half) } else { (at.x + (half + gap) as i32, size.width.saturating_sub(half + gap)) };
+        Rect { position: PhysicalPosition::new(x, at.y).into(), size: PhysicalSize::new(w, size.height).into() }
     }
 
     /// Run the lifecycle state machine for tab `i` and execute its commands.

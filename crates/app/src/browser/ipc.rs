@@ -25,6 +25,12 @@ impl Browser {
             self.hover_tab(id,x,bottom);
             return true;
         }
+        // DevTools' dock rail and splitter.
+        if matches!(cmd, "dockclose" | "docksplit" | "dockdone" | "dockmenu") {
+            let b = parts.next().unwrap_or("");
+            self.dock_command(cmd, arg, b);
+            return true;
+        }
         self.previews.hide();
         // Any use of the frame closes an open extension pop-up (the extensions button toggles it).
         if self.ext_bubble.is_some() && !matches!(cmd, "overlaysel" | "omnichange") {
@@ -128,6 +134,7 @@ impl Browser {
             // The native address bar.
             "omnichange" => {
                 self.omnibox.in_page = false;
+                self.prewarm_webview2();
                 let text = msg.split_once('\t').map_or("", |(_, t)| t).to_string();
                 self.on_omnibox_change(&text);
             }
@@ -172,6 +179,11 @@ impl Browser {
                 if let Some(pick) = self.show_profile(right, top) {
                     return self.on_menu(&pick) && !self.tabs.is_empty();
                 }
+            }
+            "installapp" => {
+                let right = arg.parse().unwrap_or(0.0);
+                let top = parts.next().unwrap_or("").parse().unwrap_or(0.0);
+                self.hide_overlay(); self.show_web_app(right, top);
             }
             "siteinfo" => {
                 let left: f64 = arg.parse().unwrap_or(0.0);

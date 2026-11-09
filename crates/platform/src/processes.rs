@@ -3,6 +3,7 @@
 //! even when they are outside the current app tree. Windows Task Manager may group them separately.
 
 use std::collections::{HashMap, HashSet};
+use std::cell::Cell;
 
 use windows::core::Interface;
 use windows::Win32::Foundation::{CloseHandle, FILETIME, HANDLE};
@@ -10,6 +11,43 @@ use windows::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot,Pro
 use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX2};
 use windows::Win32::System::Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
 use wry::{WebView, WebViewExtWindows};
+
+thread_local! {
+    static HEAP_TIMER: Cell<usize> = const { Cell::new(0) };
+    static HEAP_CLEANUPS: Cell<u64> = const { Cell::new(0) };
+}
+
+pub(crate) fn cancel_heap_cleanup() {
+    let timer = HEAP_TIMER.with(|timer| timer.replace(0));
+    if timer != 0 { unsafe { let _ = windows::Win32::UI::WindowsAndMessaging::KillTimer(None, timer); } }
+}
+
+pub(crate) fn defer_heap_cleanup() {
+    cancel_heap_cleanup();
+    let timer = unsafe { windows::Win32::UI::WindowsAndMessaging::SetTimer(None, 0, 3_000, Some(cleanup_idle_heap)) };
+    HEAP_TIMER.with(|slot| slot.set(timer));
+}
+
+unsafe extern "system" fn cleanup_idle_heap(_: windows::Win32::Foundation::HWND, _: u32, timer: usize, _: u32) {
+    if HEAP_TIMER.with(Cell::get) != timer { return; }
+    cancel_heap_cleanup();
+    match release_free_heap_memory() {
+        Ok(()) => HEAP_CLEANUPS.with(|count| count.set(count.get().saturating_add(1))),
+        Err(error) => eprintln!("idle heap cleanup: {error}"),
+    }
+}
+
+pub(crate) fn heap_cleanup_count() -> u64 { HEAP_CLEANUPS.with(Cell::get) }
+
+/// Return unused host heap pages to Windows; live allocations and child processes are untouched.
+fn release_free_heap_memory() -> windows::core::Result<()> {
+    use windows::Win32::System::Memory::{HeapOptimizeResources, HeapSetInformation};
+    // HEAP_OPTIMIZE_RESOURCES_INFORMATION, version 1: two DWORD fields, no optional flags.
+    #[repr(C)]
+    struct Options { version: u32, flags: u32 }
+    let options = Options { version: 1, flags: 0 };
+    unsafe { HeapSetInformation(None, HeapOptimizeResources, Some((&options as *const Options).cast()), std::mem::size_of::<Options>()) }
+}
 
 /// One process of the browser, for the task manager.
 #[derive(Debug, Clone)]
@@ -157,6 +195,13 @@ pub fn processes(webviews: &[&WebView]) -> Vec<ProcessMemory> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn optimizing_unused_heap_pages_preserves_live_allocations() {
+        let live = vec![0x5au8; 1_048_576];
+        release_free_heap_memory().expect("Windows heap optimization");
+        assert!(live.iter().all(|byte| *byte == 0x5a));
+    }
 
     #[test]
     fn this_process_is_in_its_own_tree() {

@@ -33,7 +33,7 @@ jobs:
         run: cargo test --workspace --locked
 
       - name: Password form regressions
-        run: node --test assets/passwords.test.js assets/webstore.test.js assets/adblock.test.js assets/media-watch.test.js
+        run: node --test assets/passwords.test.js assets/webstore.test.js assets/adblock.test.js assets/media-watch.test.js assets/webapps.test.js
 
   self-test:
     name: Self-test (drives the real browser)

@@ -9,9 +9,10 @@ use crate::{
     tab_data::Thumbnail,
 };
 use std::{cell::RefCell, ffi::c_void, rc::Rc};
+use windows_numerics::Matrix3x2;
 use windows::{
     Win32::{
-        Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+        Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::{
             Direct2D::{Common::*, *},
             DirectWrite::*,
@@ -39,6 +40,14 @@ pub struct TabPreviewData {
 }
 
 const CARD_WIDTH: f32 = 320.0;
+/// Margin of the snapshot's rounded frame from the card's sides (and above the footer).
+const IMAGE_INSET: f32 = 10.0;
+/// Fade-in of the card: its timer, and how long it takes (ms at normal speed).
+const FADE_TIMER: usize = 1;
+const FADE_MS: f32 = 120.0;
+/// Fade-out of the card when it closes: its timer and length.
+const CLOSE_TIMER: usize = 2;
+const CLOSE_MS: f32 = 90.0;
 const HEADER_HEIGHT: f32 = 84.0;
 const IMAGE_HEIGHT: f32 = 180.0;
 const FOOTER_HEIGHT: f32 = 44.0;
@@ -57,6 +66,14 @@ struct Inner {
     bold: IDWriteTextFormat,
     small: IDWriteTextFormat,
     icon: IDWriteTextFormat,
+    /// Centred small text (the reason a snapshot is missing).
+    center: IDWriteTextFormat,
+    /// When the card appeared: it fades in from there.
+    shown_at: Option<std::time::Instant>,
+    /// Closing: when, and its opacity (0..=1) then.
+    closing: Option<(std::time::Instant, f32)>,
+    /// Kakangkung's own line icons.
+    vector: Option<crate::icons::Icons>,
 }
 pub struct TabPreview {
     hwnd: HWND,
@@ -86,11 +103,15 @@ impl TabPreview {
             bold.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
             let ellipsis = dw.CreateEllipsisTrimmingSign(&bold)?;
             bold.SetTrimming(&DWRITE_TRIMMING { granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER, ..Default::default() }, &ellipsis)?;
+            let factory: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
             let raw = Box::into_raw(Box::new(RefCell::new(Inner {
                 hwnd: HWND::default(),
                 data: TabPreviewData::default(),
                 dark: false,
-                factory: D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?,
+                shown_at: None,
+                closing: None,
+                vector: Some(crate::icons::Icons::new(&factory)),
+                factory,
                 target: None,
                 bitmap: None,
                 bold,
@@ -102,9 +123,10 @@ impl TabPreview {
                     DWRITE_TEXT_ALIGNMENT_LEADING,
                 )?,
                 icon: text_format(&dw, icon_family(&dw), 16.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING)?,
+                center: { let f = text_format(&dw, w!("Segoe UI"), 12.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER)?; f.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)?; f },
             })));
             let hwnd = match CreateWindowExW(
-                WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT,
+                WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT | WS_EX_LAYERED,
                 w!("KakangkungTabPreview"),
                 w!(""),
                 WS_POPUP,
@@ -182,25 +204,52 @@ impl TabPreview {
                 i.paint()?;
             }
             let _ = InvalidateRect(Some(self.hwnd), None, false);
+            // A card that was hidden fades in; one already shown (moving between tabs) just
+            // changes its content.
+            // Hovered again while fading out: it fades back in from its current opacity.
+            let cell = (GetWindowLongPtrW(self.hwnd, GWLP_USERDATA) as *const RefCell<Inner>).as_ref();
+            let resumed = cell.and_then(|c| c.borrow_mut().closing.take()).map(|(at, from)| from * (1.0 - crate::motion::fade(at, CLOSE_MS)));
+            if resumed.is_some() {
+                let _ = KillTimer(Some(self.hwnd), CLOSE_TIMER);
+            }
+            if !IsWindowVisible(self.hwnd).as_bool() || resumed.is_some() {
+                let fading = crate::motion::enabled();
+                let from = resumed.unwrap_or(0.0).max(crate::motion::FADE_FROM);
+                let _ = SetLayeredWindowAttributes(self.hwnd, COLORREF(0), if fading { (from * 255.0).round() as u8 } else { 255 }, LWA_ALPHA);
+                if fading {
+                    if let Some(cell) = cell {
+                        cell.borrow_mut().shown_at = Some(crate::motion::fade_start_at(from, FADE_MS));
+                    }
+                    SetTimer(Some(self.hwnd), FADE_TIMER, crate::motion::FRAME_MS, None);
+                }
+            }
             let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
             Ok(())
         }
     }
+    /// Close the card: it fades out quickly, then hides and lets go of its snapshot and drawing
+    /// surface. It counts as closed at once.
     pub fn hide(&self) {
         unsafe {
-            let _ = ShowWindow(self.hwnd, SW_HIDE);
             let ptr = GetWindowLongPtrW(self.hwnd, GWLP_USERDATA) as *const RefCell<Inner>;
-            if let Some(cell) = ptr.as_ref() {
-                if let Ok(mut i) = cell.try_borrow_mut() {
-                    i.data = TabPreviewData::default();
-                    i.bitmap = None;
-                    i.target = None;
+            let fade = IsWindowVisible(self.hwnd).as_bool() && crate::motion::enabled();
+            if let (true, Some(Ok(mut i))) = (fade, ptr.as_ref().map(RefCell::try_borrow_mut)) {
+                if i.closing.is_none() {
+                    let level = i.shown_at.map_or(1.0, |at| crate::motion::fade(at, FADE_MS));
+                    i.closing = Some((std::time::Instant::now(), level));
+                    let _ = KillTimer(Some(self.hwnd), FADE_TIMER);
+                    SetTimer(Some(self.hwnd), CLOSE_TIMER, crate::motion::FRAME_MS, None);
                 }
+                return;
             }
+            close_now(self.hwnd);
         }
     }
+    /// Shown and not on its way out.
     pub fn is_visible(&self) -> bool {
-        unsafe { IsWindowVisible(self.hwnd).as_bool() }
+        let ptr = unsafe { GetWindowLongPtrW(self.hwnd, GWLP_USERDATA) } as *const RefCell<Inner>;
+        let closing = unsafe { ptr.as_ref() }.and_then(|c| c.try_borrow().ok().map(|i| i.closing.is_some())).unwrap_or(false);
+        unsafe { IsWindowVisible(self.hwnd).as_bool() && !closing }
     }
     pub fn capture_png(&self, path: &std::path::Path) -> std::io::Result<()> {
         crate::capture_window_png(self.hwnd.0 as isize,path)
@@ -298,7 +347,10 @@ impl Inner {
                 p.muted,
             );
             let footer = HEADER_HEIGHT + IMAGE_HEIGHT;
-            text("\u{e9d9}", &self.icon, rect(16.0, footer + 11.0, 18.0, 22.0), p.muted);
+            brush.SetColor(&color(p.muted, 1.0));
+            if !self.vector.as_ref().is_some_and(|v| v.draw(t, &brush, "\u{E9D9}", rect(16.0, footer + 11.0, 18.0, 22.0), 16.0, 1.5)) {
+                text("\u{e9d9}", &self.icon, rect(16.0, footer + 11.0, 18.0, 22.0), p.muted);
+            }
             text(
                 &self.data.memory,
                 &self.small,
@@ -306,35 +358,43 @@ impl Inner {
                 p.text,
             );
             text(&self.data.note,&self.small,rect(16.0,footer+35.0,288.0,18.0),p.muted);
+            // The page snapshot sits in a rounded frame inset from the card's edges.
+            let frame = rect(IMAGE_INSET, HEADER_HEIGHT, CARD_WIDTH - 2.0 * IMAGE_INSET, IMAGE_HEIGHT - IMAGE_INSET);
+            let rounded = D2D1_ROUNDED_RECT { rect: frame, radiusX: 8.0, radiusY: 8.0 };
             brush.SetColor(&color(p.omni, 1.0));
-            t.FillRectangle(&rect(0.0, HEADER_HEIGHT, CARD_WIDTH, IMAGE_HEIGHT), &brush);
+            t.FillRoundedRectangle(&rounded, &brush);
             if let Some(bitmap) = &self.bitmap {
-                let image_size=bitmap.GetPixelSize();
-                let factor=(320.0/image_size.width as f32).min(180.0/image_size.height as f32);
-                let (width,height)=(image_size.width as f32*factor,image_size.height as f32*factor);
+                let image_size = bitmap.GetPixelSize();
+                let (fw, fh) = (frame.right - frame.left, frame.bottom - frame.top);
+                // Fill the frame (cropping the overflow), like Chrome's hover cards.
+                let factor = (fw / image_size.width as f32).max(fh / image_size.height as f32);
+                let (width, height) = (image_size.width as f32 * factor, image_size.height as f32 * factor);
+                let clip = self.factory.CreateRoundedRectangleGeometry(&rounded).ok();
+                if let Some(clip) = &clip {
+                    let params = D2D1_LAYER_PARAMETERS { contentBounds: frame, geometricMask: std::mem::ManuallyDrop::new(Some(clip.clone().into())), maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, maskTransform: Matrix3x2::identity(), opacity: 1.0, opacityBrush: std::mem::ManuallyDrop::new(None), layerOptions: D2D1_LAYER_OPTIONS_NONE };
+                    t.PushLayer(&params, None);
+                }
                 t.DrawBitmap(
                     bitmap,
-                    Some(&rect((CARD_WIDTH-width)/2.0,HEADER_HEIGHT+(IMAGE_HEIGHT-height)/2.0,width,height)),
+                    Some(&rect(frame.left + (fw - width) / 2.0, frame.top, width, height)),
                     1.0,
                     D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
                     None,
                 );
+                if clip.is_some() {
+                    t.PopLayer();
+                }
             } else {
-                text(
-                    &self.data.status,
-                    &self.small,
-                    rect(18.0, HEADER_HEIGHT + 60.0, 284.0, 60.0),
-                    p.muted,
-                );
+                // No snapshot yet: a faint page icon over the reason, centred in the frame.
+                let mid = (frame.left + frame.right) / 2.0;
+                brush.SetColor(&color(p.muted, 0.55));
+                let _ = self.vector.as_ref().is_some_and(|v| v.draw(t, &brush, "\u{E737}", rect(mid - 16.0, frame.top + 46.0, 32.0, 32.0), 30.0, 1.6));
+                text(&self.data.status, &self.center, rect(frame.left + 12.0, frame.top + 90.0, frame.right - frame.left - 24.0, 40.0), p.muted);
             }
-            brush.SetColor(&color(p.sep, 0.65));
-            t.DrawLine(
-                windows_numerics::Vector2 { X: 0.0, Y: footer + 0.5 },
-                windows_numerics::Vector2 { X: CARD_WIDTH, Y: footer + 0.5 },
-                &brush,
-                1.0,
-                None,
-            );
+            // A hairline round the snapshot keeps light pages apart from the card.
+            brush.SetColor(&color(if self.dark { 0xffffff } else { 0x000000 }, if self.dark { 0.08 } else { 0.10 }));
+            t.DrawRoundedRectangle(&rounded, &brush, 1.0, None);
+
             if let Err(e) = t.EndDraw(None, None) {
                 self.target = None;
                 self.bitmap = None;
@@ -344,6 +404,20 @@ impl Inner {
         }
     }
 }
+/// Hide the card now and let go of its snapshot and drawing surface.
+fn close_now(hwnd: HWND) {
+    unsafe {
+        let _ = ShowWindow(hwnd, SW_HIDE);
+        let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const RefCell<Inner>;
+        if let Some(Ok(mut i)) = ptr.as_ref().map(RefCell::try_borrow_mut) {
+            i.closing = None;
+            i.data = TabPreviewData::default();
+            i.bitmap = None;
+            i.target = None;
+        }
+    }
+}
+
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     unsafe {
         if msg == WM_NCCREATE {
@@ -369,6 +443,29 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         }
         if msg == WM_ERASEBKGND {
             return LRESULT(1);
+        }
+        if msg == WM_TIMER && wp.0 == CLOSE_TIMER {
+            let closing = ptr.as_ref().and_then(|cell| cell.try_borrow().ok().and_then(|i| i.closing));
+            let Some((at, from)) = closing else {
+                let _ = KillTimer(Some(hwnd), CLOSE_TIMER);
+                return LRESULT(0);
+            };
+            let t = crate::motion::fade(at, CLOSE_MS);
+            let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), (from * (1.0 - t) * 255.0).round() as u8, LWA_ALPHA);
+            if t >= 1.0 {
+                let _ = KillTimer(Some(hwnd), CLOSE_TIMER);
+                close_now(hwnd);
+            }
+            return LRESULT(0);
+        }
+        if msg == WM_TIMER && wp.0 == FADE_TIMER {
+            let at = ptr.as_ref().and_then(|cell| cell.try_borrow().ok().and_then(|i| i.shown_at));
+            let t = at.map_or(1.0, |at| crate::motion::fade(at, FADE_MS));
+            let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), (t * 255.0).round() as u8, LWA_ALPHA);
+            if t >= 1.0 {
+                let _ = KillTimer(Some(hwnd), FADE_TIMER);
+            }
+            return LRESULT(0);
         }
         if msg == WM_PAINT {
             let mut ps = PAINTSTRUCT::default();

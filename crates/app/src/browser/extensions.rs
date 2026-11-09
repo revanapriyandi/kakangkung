@@ -332,10 +332,90 @@ impl Browser {
         }
     }
 
-    /// Right-click on a pinned button: its menu (Unpin, through `on_menu`).
+    /// Right-click on a pinned button: Chrome's button menu (Open, Options, Unpin, Manage …);
+    /// the choice comes back through `on_menu`.
     pub(crate) fn pinned_menu(&mut self, id: &str, x: f64, y: f64) {
-        let rows = vec![json!({ "id": format!("unpin:{id}"), "label": "Unpin from toolbar", "key": "" })];
-        self.native_popup(rows, x, y, false);
+        let open = |label: &str, icon: &str| json!({ "id": format!("pinopen:{id}"), "label": label, "key": "", "icon": icon });
+        let unpin = json!({ "id": format!("unpin:{id}"), "label": "Unpin from toolbar", "key": "" });
+        let rows = if id == "adblock" {
+            // Always on the toolbar: nothing to unpin.
+            vec![open("Ad blocker", "shield"), json!({ "sep": true }), json!({ "id": "privacy", "label": "Privacy and security settings", "key": "" })]
+        } else if let Some(ext) = id.strip_prefix("ext:") {
+            self.extension_menu_rows(ext)
+        } else {
+            vec![open("Open", "newtab"), unpin, json!({ "sep": true }), json!({ "id": "settings", "label": "Customize toolbar", "key": "" })]
+        };
+        // (`x`, `y`) is the button's lower right corner: the menu hangs from it, and
+        // `pinopen:` opens the button's pop-up there as a left click would.
+        self.menu_at = (x, y);
+        self.native_popup(rows, x, y, true);
+    }
+
+    /// Chrome's menu of a pinned extension: its name (the store page), what it can do with site
+    /// data, Options, Remove, Unpin, Manage extension, View web permissions, Inspect popup.
+    fn extension_menu_rows(&self, ext: &str) -> Vec<serde_json::Value> {
+        let folder = self.paths.extensions.join(ext);
+        let name = webstore::display_name(&folder).unwrap_or_else(|| ext.to_string());
+        let warnings = webstore::permission_warnings(&folder);
+        // WebView2 cannot narrow an extension's site access, so this says what it can do.
+        let site = if warnings.is_empty() {
+            json!({ "id": "", "label": "This can't read or change site data", "key": "" })
+        } else {
+            let notes: Vec<serde_json::Value> = warnings.iter().map(|w| json!({ "id": "", "label": format!("•  {}", tr(w)), "key": "" })).collect();
+            json!({ "label": "This can read and change site data", "sub": notes })
+        };
+        let mut rows = vec![json!({ "id": format!("extsite:{ext}"), "label": name, "key": "", "icon": "extension" }), json!({ "sep": true }), site, json!({ "sep": true })];
+        if webstore::options_page(&folder).is_some() {
+            rows.push(json!({ "id": format!("extoptions:{ext}"), "label": "Options", "key": "" }));
+        }
+        rows.push(json!({ "id": format!("extremove:{ext}"), "label": "Remove from Kakangkung", "key": "" }));
+        rows.push(json!({ "id": format!("unpin:ext:{ext}"), "label": "Unpin", "key": "" }));
+        rows.push(json!({ "sep": true }));
+        rows.push(json!({ "id": "extensions", "label": "Manage extension", "key": "" }));
+        rows.push(json!({ "id": "privacy", "label": "View web permissions", "key": "" }));
+        if webstore::button_page(&folder).is_some_and(|(_, popup)| popup) {
+            rows.push(json!({ "sep": true }));
+            rows.push(json!({ "id": format!("extinspect:{ext}"), "label": "Inspect popup", "key": "" }));
+        }
+        rows
+    }
+
+    /// "Remove from Kakangkung" was picked: ask first, as Chrome does.
+    pub(crate) fn ask_remove_extension(&mut self, ext: &str) {
+        let name = webstore::display_name(&self.paths.extensions.join(ext)).unwrap_or_else(|| ext.to_string());
+        let rows = vec![
+            json!({ "id": "", "label": format!("Remove \"{name}\"?"), "key": "" }),
+            json!({ "sep": true }),
+            json!({ "id": format!("extremoveok:{ext}"), "label": "Remove", "key": "", "icon": "delete" }),
+            json!({ "id": "dismiss", "label": "Cancel", "key": "", "icon": "close" }),
+        ];
+        let (x, y) = self.menu_at;
+        self.native_popup(rows, x, y, true);
+    }
+
+    /// Remove extension `ext` (confirmed): off the toolbar now, out of the profile next.
+    pub(crate) fn remove_extension(&mut self, ext: &str) {
+        if self.settings.pinned_extensions.iter().any(|p| p == ext) {
+            self.toggle_pin(ext);
+        }
+        self.close_bubble();
+        let Some(wv) = self.extension_host() else { return };
+        let id = ext.to_string();
+        platform::extension_change(wv, ext, None, move |r| {
+            if let Err(e) = r {
+                eprintln!("remove extension {id}: {e}");
+            }
+        });
+    }
+
+    /// Open extension `ext`'s pop-up with DevTools on it; it stays open while inspected.
+    pub(crate) fn inspect_bubble(&mut self, ext: &str) {
+        let (x, y) = self.menu_at;
+        self.open_bubble(ext, x, y);
+        if let Some(wv) = &self.ext_bubble {
+            wv.open_devtools();
+            self.bubble_inspect = true;
+        }
     }
 
     /// Unpin toolbar button `id` (`ext:<id>` or `page:<name>`).
@@ -344,6 +424,10 @@ impl Browser {
             self.toggle_pin(ext);
         } else if let Some(page) = id.strip_prefix("page:") {
             let key = format!("appearance.{page}_button");
+            // The Downloads button that appeared by itself for a download goes too.
+            if page == "downloads" {
+                self.downloads_visible = false;
+            }
             self.settings.pinned_pages.retain(|p| *p != page);
             self.db(move |s| {
                 s.set_setting(&key, "0")?;
@@ -356,12 +440,18 @@ impl Browser {
 
     pub(crate) fn close_bubble(&mut self) {
         self.ext_bubble = None;
+        self.bubble_inspect = false;
     }
 
     /// The pop-up asked to close, lost focus, or reported the size its content wants.
     pub(crate) fn on_bubble(&mut self, close: bool, size: Option<(f64, f64)>) {
-        if close {
+        // ponytail: while inspected, focus moves to DevTools, so the pop-up's own close
+        // requests are ignored too; any click on the toolbar still closes it.
+        if close && !self.bubble_inspect {
             return self.close_bubble();
+        }
+        if close {
+            return;
         }
         let (Some(wv), Some((w, h))) = (&self.ext_bubble, size) else { return };
         let (w, h) = (w.clamp(BUBBLE_MIN.0, BUBBLE_MAX.0), h.clamp(BUBBLE_MIN.1, BUBBLE_MAX.1));

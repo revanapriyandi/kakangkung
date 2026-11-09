@@ -52,6 +52,9 @@ pub(super) fn icon(kind: &str) -> &'static str {
         "devices" => "\u{E772}",
         "lock" => glyph::LOCK,
         "info" => glyph::INFO,
+        "cookie" => "\u{E8B7}",
+        "shield" => "\u{EA18}",
+        "install" => "\u{E8F4}",
         "warn" => glyph::WARN,
         "store" => "\u{E719}",
         "update" => "\u{E777}",
@@ -111,8 +114,9 @@ impl Inner {
         // SAFETY: as above.
         unsafe {
             t.Clear(Some(&color(bg, 1.0)));
+            // A hairline edge following Windows 11's rounded pop-up corners.
             brush.SetColor(&color(line, 1.0));
-            t.DrawRectangle(&rect(0.5, 0.5, width - 1.0, height - 1.0), &brush, 1.0, None);
+            t.DrawRoundedRectangle(&D2D1_ROUNDED_RECT { rect: rect(0.5, 0.5, width - 1.0, height - 1.0), radiusX: 8.0, radiusY: 8.0 }, &brush, 1.0, None);
         }
         if !self.filter_hidden() && self.kind != "suggest" {
             // Tab search's box: a search icon, the native field, its shortcut on the right.
@@ -151,9 +155,13 @@ impl Inner {
                 continue;
             }
             if row.kind == "note" {
-                // A line of a dialog: plain text, indented under its title.
-                let left = if icon_column { r.left + 38.0 } else { r.left + 16.0 };
-                self.text_at(t, &brush, &row.title, rect(left, r.top, r.right - left - 8.0, h), &self.text, p.muted);
+                // A panel's plain lines. Those opening it (before any action) form its heading: the
+                // first in bold as the title, the next ones smaller and quieter (the site's address),
+                // all from the left edge. Later lines are a quiet paragraph under the icon column.
+                let heading = self.rows[..k].iter().all(|r| r.kind == "note");
+                let left = if heading { r.left + 12.0 } else if icon_column { r.left + 38.0 } else { r.left + 16.0 };
+                let (font, tint) = if k == 0 { (&self.bold, p.text) } else { (&self.small, p.muted) };
+                self.text_at(t, &brush, &row.title, rect(left, r.top, r.right - left - 8.0, h), font, tint);
                 continue;
             }
             if row.kind == "buttons" {
@@ -200,8 +208,12 @@ impl Inner {
                 continue;
             }
             let (selected, hovered) = (self.selected == Some(slot), self.hover == Some(slot));
-            if selected || hovered {
-                fill(r, 8.0, if selected { sel } else { p.hover.0 }, if selected { 1.0 } else { p.hover.1 });
+            // The keyboard's selection shows at once; the pointer's highlight fades in and out.
+            let lit = self.hover_level(slot);
+            if selected {
+                fill(r, 8.0, sel, 1.0);
+            } else if lit > 0.001 {
+                fill(r, 8.0, p.hover.0, p.hover.1 * lit);
             }
             let text_left = if !row.sub.is_empty() { r.left + 62.0 } else if icon_column { r.left + 38.0 } else { r.left + 14.0 };
             let right = r.right - if row.close.is_empty() { 8.0 } else { CLOSE_W + 4.0 };
@@ -226,9 +238,14 @@ impl Inner {
                 let badge = rect(r.left + 12.0, r.top + (h - 36.0) / 2.0, 36.0, 36.0);
                 fill(badge, 8.0, if self.dark { 0x2f2e36 } else { 0xefedf4 }, 1.0);
                 let tile = rect(badge.left + 8.0, badge.top + 8.0, 20.0, 20.0);
-                fill(tile, 5.0, tile_color(host), 1.0);
-                let letter = host.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "K".into());
-                self.text_at(t, &brush, &letter, tile, &self.center, 0xffffff);
+                let glyph = icon(&row.kind);
+                if glyph.is_empty() {
+                    fill(tile, 5.0, tile_color(host), 1.0);
+                    let letter = host.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "K".into());
+                    self.text_at(t, &brush, &letter, tile, &self.center, 0xffffff);
+                } else {
+                    self.text_at(t, &brush, glyph, badge, &self.icons, if row.kind == "warn" { p.danger } else { p.muted });
+                }
                 self.text_at(t, &brush, &row.title, rect(text_left, r.top + 9.0, right - text_left, 20.0), &self.bold, p.text);
                 self.text_at(t, &brush, &row.sub, rect(text_left, r.top + 29.0, right - text_left, 18.0), &self.small, p.muted);
             }
@@ -247,6 +264,10 @@ impl Inner {
         // SAFETY: drawing call on a live render target between BeginDraw and EndDraw.
         unsafe {
             brush.SetColor(&color(rgb, 1.0));
+            // An icon-font glyph is drawn as Kakangkung's own line icon where there is one.
+            if self.vector.draw_glyph(t, brush, s, r, f.GetFontSize()) {
+                return;
+            }
             t.DrawText(&w, f, &r, brush, D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
         }
     }

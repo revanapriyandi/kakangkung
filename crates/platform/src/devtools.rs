@@ -9,41 +9,128 @@ use windows::{core::{BOOL, w}, Win32::{Foundation::{HWND, LPARAM, WPARAM}, UI::{
 }}};
 use wry::{WebView, WebViewExtWindows};
 
-/// Replace only WebView2's native Inspect command with the browser's docked route.
-/// The caller should enqueue its action; native context-menu callbacks must return promptly.
-pub fn watch_context_menu(webview: &WebView, on_inspect: impl Fn() + 'static) -> Option<i64> {
+/// Where one of the browser's own items goes in a page's context menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuPlace {
+    /// Over a link, before WebView2's "Open link in new window".
+    Link,
+    /// Over the page itself, in a group before the closing separator.
+    Page,
+    /// Over the page itself, right before Inspect.
+    Source,
+}
+
+/// One of the browser's items in a page's context menu: `cmd` is handed back when picked.
+pub struct PageMenuItem {
+    pub cmd: &'static str,
+    pub label: String,
+    pub place: MenuPlace,
+}
+
+/// A tab's page-menu setup for [`crate::hook`]: the items, which show (`visible(cmd)`), and the
+/// pick handler (`cmd`, link under the pointer).
+pub type PageMenu = (Vec<PageMenuItem>, Box<dyn Fn(&str) -> bool>, Box<dyn Fn(&'static str, String)>);
+
+/// Add the browser's `items` to WebView2's page context menu (shown while `visible(cmd)`) and
+/// replace its native Inspect with the docked route. A pick runs `on_command(cmd, link)` with
+/// the link under the pointer ("" when none; Inspect is "inspect"). The caller should enqueue
+/// its action; native context-menu callbacks must return promptly.
+pub fn watch_context_menu(
+    webview: &WebView,
+    items: Vec<PageMenuItem>,
+    visible: impl Fn(&str) -> bool + 'static,
+    on_command: impl Fn(&'static str, String) + 'static,
+) -> Option<i64> {
     use webview2_com::{take_pwstr, ContextMenuRequestedEventHandler, CustomItemSelectedEventHandler};
     use webview2_com::Microsoft::Web::WebView2::Win32::{
-        ICoreWebView2_11, ICoreWebView2Environment9, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_COMMAND,
+        ICoreWebView2_11, ICoreWebView2ContextMenuItem, ICoreWebView2Environment9, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND,
+        COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_COMMAND, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_SEPARATOR,
+        COREWEBVIEW2_CONTEXT_MENU_TARGET_KIND, COREWEBVIEW2_CONTEXT_MENU_TARGET_KIND_PAGE,
     };
-    use windows::core::{Interface, HSTRING, PWSTR};
+    use windows::core::{Interface, BOOL, HSTRING, PWSTR};
     let core = webview.webview().cast::<ICoreWebView2_11>().ok()?;
     let environment = webview.environment().cast::<ICoreWebView2Environment9>().ok()?;
-    let inspect = unsafe {
-        environment.CreateContextMenuItem(&HSTRING::from("Inspect"), None, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_COMMAND)
-    }.ok()?;
-    let selected = CustomItemSelectedEventHandler::create(Box::new(move |_, _| {
-        on_inspect();
-        Ok(())
-    }));
-    let mut selected_token = 0;
-    unsafe { inspect.add_CustomItemSelected(&selected, &mut selected_token) }.ok()?;
-    // Keep one custom item per WebView, as recommended by WebView2. Its lifetime and
-    // selection handler are owned by this request registration, avoiding per-menu leaks.
+    let create = |label: &str, kind| unsafe { environment.CreateContextMenuItem(&HSTRING::from(label), None, kind) }.ok();
+    let on_command = Rc::new(on_command);
+    let link = Rc::new(RefCell::new(String::new()));
+    let command = |label: &str, cmd: &'static str| -> Option<ICoreWebView2ContextMenuItem> {
+        let item = create(label, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_COMMAND)?;
+        let (on_command, link) = (on_command.clone(), link.clone());
+        let selected = CustomItemSelectedEventHandler::create(Box::new(move |_, _| {
+            on_command(cmd, link.borrow().clone());
+            Ok(())
+        }));
+        let mut token = 0;
+        unsafe { item.add_CustomItemSelected(&selected, &mut token) }.ok()?;
+        Some(item)
+    };
+    // Keep one item of each per WebView, as recommended by WebView2. Their lifetime and
+    // selection handlers are owned by this request registration, avoiding per-menu leaks.
+    let inspect = command("Inspect", "inspect")?;
+    let ours: Vec<(&'static str, MenuPlace, ICoreWebView2ContextMenuItem)> =
+        items.iter().filter_map(|i| Some((i.cmd, i.place, command(&i.label, i.cmd)?))).collect();
+    // Two: one item cannot sit in a menu twice.
+    let separators = [create("", COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_SEPARATOR)?, create("", COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_SEPARATOR)?];
     let requested = ContextMenuRequestedEventHandler::create(Box::new(move |_, args| {
         let Some(args) = args else { return Ok(()) };
         unsafe {
+            let target = args.ContextMenuTarget()?;
+            let (mut kind, mut has_link) = (COREWEBVIEW2_CONTEXT_MENU_TARGET_KIND::default(), BOOL::default());
+            target.Kind(&mut kind)?;
+            target.HasLinkUri(&mut has_link)?;
+            *link.borrow_mut() = if has_link.as_bool() {
+                let mut uri = PWSTR::null();
+                target.LinkUri(&mut uri)?;
+                take_pwstr(uri)
+            } else {
+                String::new()
+            };
+            let group = |place| ours.iter().filter(|(cmd, p, _)| *p == place && visible(cmd)).map(|(_, _, i)| i).collect::<Vec<_>>();
             let items = args.MenuItems()?;
-            let mut count = 0;
-            items.Count(&mut count)?;
-            for index in 0..count {
-                let item = items.GetValueAtIndex(index)?;
-                let mut name = PWSTR::null();
-                item.Name(&mut name)?;
-                if take_pwstr(name) == "inspectElement" {
-                    items.RemoveValueAtIndex(index)?;
-                    items.InsertValueAtIndex(index, &inspect)?;
-                    break;
+            let find = |wanted: &str| -> windows::core::Result<Option<u32>> {
+                let mut count = 0;
+                items.Count(&mut count)?;
+                for index in 0..count {
+                    let mut name = PWSTR::null();
+                    items.GetValueAtIndex(index)?.Name(&mut name)?;
+                    if take_pwstr(name) == wanted {
+                        return Ok(Some(index));
+                    }
+                }
+                Ok(None)
+            };
+            if has_link.as_bool() {
+                if let Some(at) = find("openLinkInNewWindow")? {
+                    for (n, item) in group(MenuPlace::Link).into_iter().enumerate() {
+                        items.InsertValueAtIndex(at + n as u32, item)?;
+                    }
+                }
+            }
+            let Some(mut at) = find("inspectElement")? else { return Ok(()) };
+            items.RemoveValueAtIndex(at)?;
+            items.InsertValueAtIndex(at, &inspect)?;
+            if kind != COREWEBVIEW2_CONTEXT_MENU_TARGET_KIND_PAGE || has_link.as_bool() {
+                return Ok(());
+            }
+            for (n, item) in group(MenuPlace::Source).into_iter().enumerate() {
+                items.InsertValueAtIndex(at + n as u32, item)?;
+            }
+            // The page group goes before the separator above Inspect (or opens one).
+            let before_separator = at > 0 && {
+                let mut k = COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND::default();
+                items.GetValueAtIndex(at - 1)?.Kind(&mut k)?;
+                k == COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_SEPARATOR
+            };
+            let page = group(MenuPlace::Page);
+            if !page.is_empty() {
+                if before_separator {
+                    at -= 1;
+                } else {
+                    items.InsertValueAtIndex(at, &separators[1])?;
+                }
+                items.InsertValueAtIndex(at, &separators[0])?;
+                for (n, item) in page.into_iter().enumerate() {
+                    items.InsertValueAtIndex(at + 1 + n as u32, item)?;
                 }
             }
         }

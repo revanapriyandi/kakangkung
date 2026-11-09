@@ -1,5 +1,6 @@
 // Called at document start and after preference changes: (script)({enabled, allowedSites}).
-// Small built-in fallback; full filter lists and extension scriptlets cover more cases.
+// YouTube player filtering and a small cosmetic base; native EasyList element hiding adds
+// sheets to window.__kkCosmetic, which this helper detaches and reattaches on pause/resume.
 ({ enabled: on = false, allowedSites: exceptions = [] } = {}) => {
   // Runtime preference updates execute in the top-level document too, so keep both paths scoped alike.
   if (window.top !== window) return;
@@ -11,8 +12,9 @@
     "youtube-nocookie.com", "www.youtube-nocookie.com", "youtubekids.com", "www.youtubekids.com"].includes(host);
   const baseCss = 'ins.adsbygoogle,[data-ad-client][data-ad-slot],iframe[id^="google_ads_iframe_"]{display:none!important}';
   const youtubeCss = 'ytd-ad-slot-renderer,ytd-display-ad-renderer,ytd-promoted-sparkles-web-renderer,' +
-    'ytd-promoted-video-renderer,ytd-in-feed-ad-layout-renderer,#player-ads,.ytp-ad-overlay-container{display:none!important}';
-  let active = false, sheet = null, style = null, prunedPlayerFields = 0;
+    'ytd-promoted-video-renderer,ytd-in-feed-ad-layout-renderer,#player-ads,.ytp-ad-overlay-container,' +
+    'ytd-enforcement-message-view-model,tp-yt-paper-dialog:has(> ytd-enforcement-message-view-model){display:none!important}';
+  let active = false, sheet = null, style = null, prunedPlayerFields = 0, skippedAds = 0;
   let parsed = null, fetched = null, restoreInitial = null;
   let nativeParse = null, nativeFetch = null;
   const ownValue = (object, key) => {
@@ -93,6 +95,25 @@
       } catch (_) { /* Leave a nonconfigurable player property to the response filters. */ }
     }
   };
+  // Fallback for ads the JSON filters miss (server-inserted or changed payloads): when the
+  // player marks an ad, jump to its end and press skip. Media events only, no observers or timers.
+  const skipAd = event => {
+    const video = event.target;
+    if (!active || video?.tagName !== "VIDEO") return;
+    const player = video.closest?.(".html5-video-player");
+    if (!player?.classList.contains("ad-showing")) return;
+    player.querySelector(".ytp-skip-ad-button,.ytp-ad-skip-button,.ytp-ad-skip-button-modern")?.click();
+    if (Number.isFinite(video.duration) && video.currentTime < video.duration - 0.25) {
+      video.currentTime = video.duration;
+      skippedAds = Math.min(Number.MAX_SAFE_INTEGER, skippedAds + 1);
+    }
+  };
+  const skipEvents = ["loadedmetadata", "timeupdate"];
+  const cosmetic = attach => {
+    const sheets = Array.isArray(window.__kkCosmetic) ? window.__kkCosmetic : [];
+    const others = document.adoptedStyleSheets.filter(current => !sheets.includes(current));
+    try { document.adoptedStyleSheets = attach ? [...others, ...sheets] : others; } catch (_) { /* Native sheets only. */ }
+  };
   const removeStyle = () => {
     if (sheet) {
       document.adoptedStyleSheets = document.adoptedStyleSheets.filter(current => current !== sheet);
@@ -125,15 +146,21 @@
     active = Boolean(next);
     if (active) {
       installStyle();
-      if (youtube) installYoutube();
+      cosmetic(true);
+      if (youtube) {
+        installYoutube();
+        for (const name of skipEvents) document.addEventListener(name, skipAd, true);
+      }
     } else {
       removeStyle();
+      cosmetic(false);
+      for (const name of skipEvents) document.removeEventListener(name, skipAd, true);
       if (JSON.parse === parsed) JSON.parse = nativeParse;
       if (window.fetch === fetched) window.fetch = nativeFetch;
       restoreInitial?.();
       restoreInitial = null;
     }
   };
-  window.__kkAdblock = { setEnabled, status: () => ({ enabled: active, youtube, prunedPlayerFields }) };
+  window.__kkAdblock = { setEnabled, status: () => ({ enabled: active, youtube, prunedPlayerFields, skippedAds }) };
   setEnabled(enabled);
 }

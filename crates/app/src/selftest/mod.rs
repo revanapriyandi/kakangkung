@@ -1,6 +1,7 @@
 //! `--self-test`: drives the browser like a user and records what worked.
 
 mod native;
+mod site_info;
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -44,6 +45,9 @@ pub(crate) enum Stage {
     WaitSuspend,
     WaitRetained,
     WaitPreview,
+    WaitSiteInfoUI,
+    /// The pinned extension's right-click menu is open, for its screenshot.
+    WaitPinnedMenuShot,
     WaitPreviewSuspend,
     WaitPreviewSleeping,
     WaitScript,
@@ -101,6 +105,52 @@ fn test_store_extension(dir: &std::path::Path) -> PathBuf {
     let _ = std::fs::write(dir.join("manifest.json"), manifest.to_string());
     let _ = std::fs::write(dir.join("popup.html"), "<!doctype html><body style=\"width:200px\">ok</body>");
     dir.to_path_buf()
+}
+
+/// Right-click menus of pinned toolbar buttons hold Chrome's entries, and a menu opened at the
+/// window's right edge stays inside the window (it used to hang out past it).
+fn pinned_menus(b: &mut Browser) -> (bool, String) {
+    let ext_dir = menu_test_extension(b);
+    let probe = |b: &mut Browser, id: &str| {
+        b.menu_probe = Some(vec![]);
+        b.pinned_menu(id, 1270.0, 90.0);
+        b.menu_probe.take().unwrap_or_default()
+    };
+    let ext = probe(b, &format!("ext:{TEST_STORE_ID}"));
+    let shield = probe(b, "adblock");
+    let page = probe(b, "page:history");
+    let want_ext = ["Kakangkung menu test", "This can read and change site data > •  Read and change all your data on all websites", "Options",
+        "Remove from Kakangkung", "Unpin", "Manage extension", "View web permissions", "Inspect popup"];
+    let missing: Vec<&str> = want_ext.iter().copied().filter(|w| !ext.iter().any(|l| l == w)).collect();
+    let shield_ok = shield.iter().any(|l| l == "Ad blocker") && !shield.iter().any(|l| l.contains("Unpin"));
+    let page_ok = ["Open", "Unpin from toolbar", "Customize toolbar"].iter().all(|w| page.iter().any(|l| l == w));
+    // Shown for real: a left-aligned menu opened 10 DIPs from the right edge, and the pinned menu.
+    let width = b.window.inner_size().width as f64 / b.window.scale_factor();
+    b.native_popup(vec![serde_json::json!({ "id": "newtab", "label": "New tab", "key": "" })], width - 10.0, 90.0, false);
+    let edge = b.popup.row_box("newtab");
+    b.hide_overlay();
+    b.pinned_menu(&format!("ext:{TEST_STORE_ID}"), width - 60.0, 90.0);
+    let pinned = b.popup.row_box(&format!("unpin:ext:{TEST_STORE_ID}"));
+    b.hide_overlay();
+    let _ = std::fs::remove_dir_all(&ext_dir);
+    let inside = |r: Option<(f32, f32, f32)>| r.is_some_and(|(l, r, _)| l >= 0.0 && f64::from(r) <= width + 1.0);
+    let ok = missing.is_empty() && shield_ok && page_ok && inside(edge) && inside(pinned);
+    (ok, format!(
+        "extension menu {ext:?} (missing {missing:?}); ad blocker menu {shield:?}; page button menu {page:?}; window {width:.0} DIPs wide, \
+         menu opened at its right edge spans {edge:?}, pinned menu spans {pinned:?} (left, right, top)"
+    ))
+}
+
+/// A pinned extension's files as a store install leaves them, for its toolbar menu.
+fn menu_test_extension(b: &Browser) -> PathBuf {
+    let ext_dir = b.paths.extensions.join(TEST_STORE_ID);
+    let _ = std::fs::create_dir_all(&ext_dir);
+    let manifest = serde_json::json!({
+        "manifest_version": 3, "name": "Kakangkung menu test", "version": "1.0",
+        "action": { "default_popup": "popup.html" }, "options_page": "o.html", "host_permissions": ["<all_urls>"],
+    });
+    let _ = std::fs::write(ext_dir.join("manifest.json"), manifest.to_string());
+    ext_dir
 }
 
 /// Runs inside kakangkung://selftest (a blank page that carries the API token) through the token-checked API:
@@ -449,7 +499,7 @@ impl SelfTest {
                 let one_left = b.tabs.len() == 1 && b.active == 1;
                 let hooks_after = b.hook_count();
                 // The native New Tab page adds no COM handlers.
-                let ok = ok && frozen && protected_running && protection_cleared && running && back_on_1 && one_left && hooks_after == 7 && self.hooks_with_two_tabs == 7;
+                let ok = ok && frozen && protected_running && protection_cleared && running && back_on_1 && one_left && hooks_after == 8 && self.hooks_with_two_tabs == 8;
                 self.steps.push((
                     "act",
                     ok,
@@ -557,6 +607,11 @@ impl SelfTest {
             }
             (Stage::WaitAutocompleteFocus, Observed::Script) => {
                 let typed = self.typed.clone();
+                let address = "https://example.org/docs/keyboard";
+                b.frame.set_omnibox_text(address, address.len());
+                let selection = b.frame.fixture_omnibox_key(b'A' as u16, true);
+                self.steps.push(("urlselectall", selection == Some((0, address.len() as u32)),
+                    format!("Ctrl+A dispatched to the real URL edit selects the whole address: {selection:?}")));
                 b.on_omnibox_blur();
                 b.frame.set_fixture_omnibox_focus(true);
                 // Into the native address bar, the way typing reaches the browser.
@@ -651,6 +706,8 @@ impl SelfTest {
                     missing.is_empty() && ms < 1000,
                     format!("⋮ is a native Windows menu with {} entries, built in {ms} ms (incl. Zoom and More tools submenus); missing: {missing:?}", labels.len()),
                 ));
+                let (ok, detail) = pinned_menus(b);
+                self.steps.push(("pinnedmenu", ok, detail));
                 let (ok, detail) = tab_features(b);
                 self.steps.push(("tabs", ok, detail));
                 // Settings, a native page: opened like the menu opens it.
@@ -780,18 +837,41 @@ impl SelfTest {
                 b.hide_overlay();
                 let (ok, detail) = (self.native.0, self.native.1.trim_start_matches("; ").to_string());
                 self.steps.push(("tabstrip",ok,detail));
-                self.preview_tab = b.active;
-                self.preview_webviews = b.tabs.iter().filter(|tab|tab.webview.is_some()).count();
-                b.capture_tab_preview(b.active);
-                if !b.frame.hover_tab(b.active) { return self.finish_with("tabpreview",false,"tab has no native hit region".into()); }
-                self.stage = Stage::WaitPreview;
-                self.poll_at = Some(Instant::now()+Duration::from_secs(2));
+                let (ok, detail) = site_info::check(b);
+                self.steps.push(("siteinfo",ok,detail));
+                self.stage = Stage::WaitSiteInfoUI;
+                self.poll_at = Some(Instant::now()+Duration::from_millis(if std::env::var_os("KAKANGKUNG_SITE_INFO_UI_HOLD").is_some() { 30_000 } else { 1 }));
+            }
+            (Stage::WaitSiteInfoUI, Observed::Script) => {
+                if let Some(dir) = std::env::var_os("KAKANGKUNG_SHOT_DIR") {
+                    let _ = platform::capture_window_png(b.popup.hwnd(), &PathBuf::from(dir).join("site-info-rendered.png"));
+                }
+                b.hide_overlay();
+                // A pinned extension's right-click menu: shown now, drawn by the next stage's turn.
+                if std::env::var_os("KAKANGKUNG_SHOT_DIR").is_some() {
+                    menu_test_extension(b);
+                    let width = b.window.inner_size().width as f64 / b.window.scale_factor();
+                    b.pinned_menu(&format!("ext:{TEST_STORE_ID}"), width - 60.0, 90.0);
+                    self.stage = Stage::WaitPinnedMenuShot;
+                    self.poll_at = Some(Instant::now() + Duration::from_millis(500));
+                    return false;
+                }
+                return self.start_preview(b);
+            }
+            (Stage::WaitPinnedMenuShot, Observed::Script) => {
+                if let Some(dir) = std::env::var_os("KAKANGKUNG_SHOT_DIR") {
+                    let _ = platform::capture_window_png(b.popup.hwnd(), &PathBuf::from(dir).join("pinned-menu.png"));
+                }
+                b.hide_overlay();
+                let _ = std::fs::remove_dir_all(b.paths.extensions.join(TEST_STORE_ID));
+                return self.start_preview(b);
             }
             (Stage::WaitPreview, Observed::Script) => {
                 let status = b.previews.status(self.preview_tab);
                 let pass = status["visible"]==true && status["thumbnail"]==true && status["memory"].as_u64().is_some_and(|bytes|bytes>0)
                     && b.tabs.iter().filter(|tab|tab.webview.is_some()).count()==self.preview_webviews;
-                self.steps.push(("tabpreview",pass,format!("native mouse hover opened card with real snapshot and attributed renderer memory; no extra WebView: {status}")));
+                self.steps.push(("tabpreview",pass,format!("DOM-ready page captured while navigation still reports loading; native hover has a real snapshot and memory without an extra WebView: {status}")));
+                if let Some(index) = b.index(self.preview_tab) { b.tabs[index].view.loading = false; }
                 if let Some(dir) = std::env::var_os("KAKANGKUNG_SHOT_DIR") {
                     if let Some(window) = &b.previews.window { let _ = window.capture_png(&PathBuf::from(dir).join("tab-hover.png")); }
                 }
@@ -958,6 +1038,23 @@ impl SelfTest {
         self.native.0 &= ok;
         self.native.1.push_str("; ");
         self.native.1.push_str(&detail);
+    }
+
+    /// Hover the active tab with a DOM-ready page that still reports loading (the "tabpreview"
+    /// step reads the result). True when the test is finished.
+    fn start_preview(&mut self, b: &mut Browser) -> bool {
+        self.preview_tab = b.active;
+        self.preview_webviews = b.tabs.iter().filter(|tab|tab.webview.is_some()).count();
+        b.previews.forget(b.active);
+        if let Some(index) = b.index(b.active) {
+            b.tabs[index].document_ready = true;
+            b.tabs[index].view.loading = true;
+        }
+        b.capture_tab_preview(b.active);
+        if !b.frame.hover_tab(b.active) { return self.finish_with("tabpreview",false,"tab has no native hit region".into()); }
+        self.stage = Stage::WaitPreview;
+        self.poll_at = Some(Instant::now()+Duration::from_secs(2));
+        false
     }
 
     pub(crate) fn finish_with(&mut self, step: &'static str, passed: bool, detail: String) -> bool {

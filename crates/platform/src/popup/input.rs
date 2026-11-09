@@ -4,6 +4,8 @@
 
 use std::cell::RefCell;
 
+use windows::Win32::Foundation::COLORREF;
+use windows::Win32::UI::WindowsAndMessaging::{SetLayeredWindowAttributes, SetTimer, LWA_ALPHA};
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -14,12 +16,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TR
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::Shell::DefSubclassProc;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, GetClientRect, GetWindowLongPtrW, IsWindowVisible, KillTimer, MoveWindow, SetWindowPos, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, WM_TIMER, SendMessageW, SetWindowLongPtrW, SetWindowTextW, ShowWindow, CREATESTRUCTW, GWLP_USERDATA, MA_NOACTIVATE, SW_SHOW,
+    DefWindowProcW, GetClientRect, GetWindowLongPtrW, IsWindowVisible, KillTimer, MoveWindow, SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, GetWindowRect, SWP_NOZORDER, WM_TIMER, SendMessageW, SetWindowLongPtrW, SetWindowTextW, ShowWindow, CREATESTRUCTW, GWLP_USERDATA, MA_NOACTIVATE, SW_SHOW,
     WM_CHAR, WM_COMMAND, WM_CTLCOLOREDIT, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT,
     WM_GETFONT, WM_SETFONT,
 };
 
-use super::{Inner, BUTTONS_ROW, BUTTON_GAP, CLOSE_W, FILTER_H, HEADER_ROW, MAIN_BUTTON_W, OTHER_BUTTON_W, PADDING, SEP_ROW, TWO_LINE_ROW};
+use super::{Inner, BUTTONS_ROW, BUTTON_GAP, CLOSE_W, FILTER_H, HEADER_ROW, MAIN_BUTTON_W, OTHER_BUTTON_W, PADDING, SEP_ROW, TWO_LINE_ROW, NOTE_ROW, NOTE_TITLE_ROW};
 use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
 use crate::frame::style::{colorref, palette};
 use crate::frame::{edit_text, lparam_point, scale_of};
@@ -27,6 +29,14 @@ use crate::frame::{edit_text, lparam_point, scale_of};
 impl Inner {
     fn send(&mut self, cmd: String) {
         (self.on_command)(cmd);
+    }
+
+    /// Current opacity (0..=1): fading in, fading out, or fully shown.
+    pub(super) fn alpha_level(&self) -> f32 {
+        if let Some((at, from, _)) = self.closing {
+            return from * (1.0 - crate::motion::fade(at, super::CLOSE_MS));
+        }
+        self.reveal.map_or(1.0, |(start, _)| crate::motion::fade(start, super::REVEAL_MS))
     }
 
     pub(super) fn filter_hidden(&self) -> bool {
@@ -92,6 +102,7 @@ impl Inner {
             r if r.kind == "header" => HEADER_ROW,
             r if r.kind == "buttons" => BUTTONS_ROW,
             r if r.kind == "sep" => SEP_ROW,
+            r if r.kind == "note" => if k == 0 { NOTE_TITLE_ROW } else { NOTE_ROW },
             r if !r.sub.is_empty() => TWO_LINE_ROW,
             _ => self.row_h,
         }
@@ -225,6 +236,27 @@ impl Inner {
         self.repaint();
     }
 
+    /// The pointer moves to row `to`: the highlight leaves the current row as it reaches `to`.
+    fn fade_hover(&mut self, to: Option<usize>) {
+        if to == self.hover {
+            return;
+        }
+        self.hover_from = (to.map_or(0.0, |s| self.hover_level(s)), self.hover.map_or(0.0, |s| self.hover_level(s)));
+        self.hover_prev = self.hover;
+        self.hover_at = std::time::Instant::now();
+        if crate::motion::enabled() {
+            // SAFETY: timer on our own live window.
+            unsafe { SetTimer(Some(self.hwnd), super::TIMER_HOVER, crate::motion::FRAME_MS, None) };
+        }
+    }
+
+    /// Strength (0..=1) of the hover highlight of row `slot` as it fades.
+    pub(super) fn hover_level(&self, slot: usize) -> f32 {
+        let t = crate::motion::eased(self.hover_at, 0.0, super::HOVER_MS);
+        let (now, was) = self.hover_from;
+        if self.hover == Some(slot) { now + (1.0 - now) * t } else if self.hover_prev == Some(slot) { was * (1.0 - t) } else { 0.0 }
+    }
+
     fn repaint(&self) {
         // SAFETY: repaint request for our own window.
         unsafe {
@@ -272,21 +304,56 @@ pub(super) unsafe extern "system" fn popup_proc(hwnd: HWND, msg: u32, wp: WPARAM
         let scale = scale_of(hwnd);
         match msg {
             WM_ERASEBKGND => return LRESULT(1),
+            WM_TIMER if wp.0 == super::TIMER_HOVER => {
+                if crate::motion::progress(i.hover_at, 0.0, super::HOVER_MS) >= 1.0 {
+                    i.hover_prev = None;
+                    let _ = KillTimer(Some(hwnd), super::TIMER_HOVER);
+                }
+                i.repaint();
+                return LRESULT(0);
+            }
+            WM_TIMER if wp.0 == super::TIMER_CLOSE => {
+                let Some((at, _, top)) = i.closing else {
+                    let _ = KillTimer(Some(hwnd), super::TIMER_CLOSE);
+                    return LRESULT(0);
+                };
+                // Fading out while lifting a few pixels; then hidden for real.
+                let t = crate::motion::eased(at, 0.0, super::CLOSE_MS);
+                let a = i.alpha_level();
+                let lift = (t * super::CLOSE_SLIDE * scale).round() as i32;
+                let mut rc = RECT::default();
+                let _ = GetWindowRect(hwnd, &mut rc);
+                let _ = SetWindowPos(hwnd, None, rc.left, top - lift, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), (a * 255.0).round() as u8, LWA_ALPHA);
+                if t >= 1.0 {
+                    i.closing = None;
+                    let _ = KillTimer(Some(hwnd), super::TIMER_CLOSE);
+                    let _ = ShowWindow(hwnd, windows::Win32::UI::WindowsAndMessaging::SW_HIDE);
+                    set_click_through(hwnd, false);
+                }
+                return LRESULT(0);
+            }
+            // A closing pop-up takes no input (it is click-through too). 0x200..=0x20E: the mouse
+            // messages (WM_MOUSEFIRST..=WM_MOUSELAST).
+            m if i.closing.is_some() && (0x0200..=0x020E).contains(&m) || i.closing.is_some() && (m == WM_KEYDOWN || m == WM_CHAR) => {
+                return LRESULT(0);
+            }
             WM_TIMER if wp.0 == super::TIMER_REVEAL => {
-                let Some((start, full)) = i.reveal else {
+                let Some((start, y)) = i.reveal else {
                     let _ = KillTimer(Some(hwnd), super::TIMER_REVEAL);
                     return LRESULT(0);
                 };
+                // Fading in while sliding the last few pixels down into place.
                 let t = crate::motion::eased(start, 0.0, super::REVEAL_MS);
-                let h = (full as f32 * (super::REVEAL_FROM + (1.0 - super::REVEAL_FROM) * t)) as i32;
+                let lift = ((1.0 - t) * super::REVEAL_SLIDE * scale).round() as i32;
                 let mut rc = RECT::default();
-                let _ = GetClientRect(hwnd, &mut rc);
-                let _ = SetWindowPos(hwnd, None, 0, 0, rc.right - rc.left, h, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+                let _ = GetWindowRect(hwnd, &mut rc);
+                let _ = SetWindowPos(hwnd, None, rc.left, y - lift, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), (crate::motion::fade(start, super::REVEAL_MS) * 255.0).round() as u8, LWA_ALPHA);
                 if t >= 1.0 {
                     i.reveal = None;
                     let _ = KillTimer(Some(hwnd), super::TIMER_REVEAL);
                 }
-                i.repaint();
                 return LRESULT(0);
             }
             // Clicking the list must not take the keyboard from the address bar (a menu has it).
@@ -367,12 +434,16 @@ pub(super) unsafe extern "system" fn popup_proc(hwnd: HWND, msg: u32, wp: WPARAM
                     i.send(format!("hover\tmenu\t{id}"));
                 }
                 if hover != i.hover || on_close != i.hover_close {
+                    if hover != i.hover {
+                        i.fade_hover(hover);
+                    }
                     i.hover = hover;
                     i.hover_close = on_close;
                     i.repaint();
                 }
             }
             WM_MOUSELEAVE => {
+                i.fade_hover(None);
                 i.hover = None;
                 i.hover_close = false;
                 i.repaint();
@@ -428,10 +499,22 @@ pub(super) unsafe extern "system" fn popup_proc(hwnd: HWND, msg: u32, wp: WPARAM
     }
 }
 
+/// Let clicks pass through the pop-up (while it fades out) or not.
+pub(super) fn set_click_through(hwnd: HWND, on: bool) {
+    use windows::Win32::UI::WindowsAndMessaging::{GWL_EXSTYLE, WS_EX_TRANSPARENT};
+    // SAFETY: style change on our own live window.
+    unsafe {
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let bit = WS_EX_TRANSPARENT.0 as isize;
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, if on { ex | bit } else { ex & !bit });
+    }
+}
+
 /// Keys of the tab-search filter box.
 pub(super) unsafe extern "system" fn filter_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM, _id: usize, data: usize) -> LRESULT {
     // SAFETY: `data` is the pop-up's boxed RefCell<Inner>, alive while the pop-up (our parent) is.
     unsafe {
+        if crate::frame::edit_shortcut(hwnd, msg, wp) { return LRESULT(0); }
         let Some(cell) = (data as *const RefCell<Inner>).as_ref() else { return DefSubclassProc(hwnd, msg, wp, lp) };
         match msg {
             WM_KEYDOWN => {

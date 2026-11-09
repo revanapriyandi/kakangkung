@@ -4,6 +4,66 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-09
+
+### Added
+- Typing in the address bar on the native New Tab page starts WebView2 in the background, so
+  the first web page no longer waits about two seconds for the engine to start. Nothing is
+  started at launch, so browsing that never leaves native pages costs no extra memory.
+- Site information panel with icon rows for connection, permissions, site data and the ad
+  blocker. The address-bar security icon follows the engine's connection state, including
+  certificate errors, rather than the URL scheme alone.
+- Installable web apps (PWA): manifest detection, an install control in the address bar,
+  confirmation, a Start menu shortcut and a standalone app window on the same profile.
+  Launch URLs must stay within the site's origin; installs are refused on broken connections.
+- Kakangkung site filter list, starting with the confirmed banner assets on otakudesu.blog.
+- The ad blocker covers more kinds of ads: EasyList element-hiding rules now hide leftover ad
+  boxes, sponsored widgets and site banners (site-specific rules when navigation starts, generic
+  class/id rules once at DOMContentLoaded, no page observers); ad iframes are cancelled; `$popup`
+  rules refuse ad pop-ups/pop-unders and page-script redirects to ad networks; on YouTube, ads the
+  player-data filter misses are skipped to their end. Pausing per site or switching the blocker off
+  removes the hiding too, and the global switch reloads the tab so the change shows at once.
+- Docked DevTools can sit at the bottom, right or left: a ⋮ menu on a small rail beside the
+  panel picks the position (✕ closes it), and a splitter resizes it. Position and size are
+  remembered across restarts. Split view now shares the page area beside a side-docked panel
+  instead of running under it.
+
+### Fixed
+- Ctrl+A selects the whole address-bar text; more general shortcuts (find, print, zoom,
+  hard reload) are routed from native surfaces.
+- Tab hover previews are captured once the DOM is ready, even while the page is still loading,
+  and hovering no longer wakes sleeping tabs.
+
+### Changed
+- DevTools opens on Elements without Microsoft's Welcome tab, and Settings > About names the
+  engine as Chromium instead of "Microsoft Edge WebView2".
+- Modern glass look: on Windows 11 the tab strip shows the system's Mica glass (the solid frame
+  stays on Windows 10); the selected tab is rounded on top and flows into the toolbar, thin
+  dividers separate unselected tabs, and the address bar gets a brand focus ring that fades in.
+- Kakangkung's own line icons replace the system icon font in the tab strip and toolbar, in
+  menus and pop-ups, and on the built-in pages (settings, downloads, task manager, welcome).
+- Menus and pop-ups open at full size, fading in while sliding 6 px into place (150 ms) instead
+  of growing their window every frame; row hover highlights fade (the keyboard selection stays
+  instant), and their edge follows Windows 11's rounded corners.
+- Built-in pages: cards get a hairline edge and a softer two-step shadow; hover highlights fade
+  out as well as in, a pressed part flashes briefly, the search box keeps its brand ring for
+  typing (a hairline on hover), switch knobs cast a faint shadow, new-tab shortcuts lift on
+  hover, and messages (toasts) rise in and fade out.
+- Tab hover cards show the page snapshot in a rounded, hairline frame, cropped to fill it, with
+  a centred placeholder while there is none.
+- Smoother motion: a stronger ease-out curve everywhere; interrupted fades and slides (hover
+  highlights in pages and menus, switches flipped back, the address bar's focus ring) continue
+  from where they are instead of jumping; the new tab page and its shortcuts arrive faster
+  (220 ms, quicker stagger); loading spinners turn at about 32 frames a second instead of 16.
+- Frame motion: hover highlights cross-fade (120 ms) and are interruptible, pressed buttons
+  darken at once, tabs slide into place when opened, closed or dragged, and the selected tab's
+  highlight glides to the newly selected tab (180 ms).
+- Tab hover cards fade in, and moving to another tab while a card is open updates it at once.
+- Animations also stay off when Windows' "Animation effects" setting is off.
+- The compiled ad-block engine loads only while a web view is watched and is released when
+  blocking is turned off or the last page closes. Four-site benchmark: private working set
+  unchanged (≈657 MiB), commit about 17 MiB lower.
+
 ## [0.3.0] - 2026-11-09
 
 ### Fixed

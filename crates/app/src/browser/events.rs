@@ -25,11 +25,12 @@ impl Browser {
             Msg::Ipc(m) => return self.on_ipc(&m),
             Msg::PageReply { path, done, json } => self.on_page_reply(&path, &done, json),
             Msg::DownloadsChanged => self.downloads_changed(),
+            Msg::WebAppFound { id, url, data } => self.web_app_found(id, &url, &data),
+            Msg::Security { id, url, data } => self.security_changed(id, &url, &data),
+            Msg::PreviewReady { id, url } => self.preview_document_ready(id, &url),
             Msg::TabThumbnail { id, revision, result } => self.thumbnail_ready(id,revision,result),
             Msg::TabMemory { id, revision, result } => self.preview_memory_ready(id,revision,result),
-            Msg::Inspect(id) => {
-                if id == self.active && self.devtools.is_none() { self.toggle_devtools(); }
-            }
+            Msg::PageMenu { id, cmd, link } => self.on_page_menu(id, cmd, link),
             Msg::Update(status) => self.on_update(status),
             Msg::Api { path, query, body, respond } => self.api(&path, &query, body, respond),
             Msg::ExtAdd { folder, respond } => match self.extension_host() {
@@ -117,6 +118,7 @@ impl Browser {
             }
             Msg::Do(a) => return self.act(a),
             // A link opened in a new tab: selected at once, or left in the background (Settings).
+            Msg::OpenExternal(url) => self.open_window(&url, false),
             Msg::OpenTab(url) => {
                 let at = self.index(self.active).map_or(self.tabs.len(), |i| i + 1);
                 if self.settings.link_focus {
@@ -142,6 +144,9 @@ impl Browser {
                 }
                 if let Some(i) = self.index(id) {
                     if !done {
+                        self.tabs[i].document_ready = false;
+                        self.tabs[i].web_app = None;
+                        self.tabs[i].connection = Default::default();
                         self.tabs[i].media_frames.clear();
                         self.tabs[i].revision = self.tabs[i].revision.wrapping_add(1);
                         self.previews.forget(id);
@@ -149,6 +154,7 @@ impl Browser {
                     if done && self.visible_with(self.active).contains(&id) {
                         self.previews.capture_due = Some((id, std::time::Instant::now() + std::time::Duration::from_millis(500)));
                     }
+                    if done { self.tabs[i].document_ready = true; }
                     let v = &mut self.tabs[i].view;
                     v.loading = !done;
                     v.url = url;
