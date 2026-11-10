@@ -60,7 +60,7 @@ impl Browser {
             })),
             "import/browser" => {
                 let (id, dir) = body.split_once('\t').map(|(a, b)| (a.to_string(), b.to_string())).unwrap_or_default();
-                self.db_reply(respond, move |s| {
+                self.db_reply_slow(respond, move |s| {
                     let Some(b) = storage::chrome::browser(&id) else { return json!({ "error": "that browser was not found" }) };
                     match s.import_browser(&b, &dir) {
                         Ok(n) => json!({
@@ -78,7 +78,7 @@ impl Browser {
                 let known: Vec<&str> = storage::chrome::browsers().iter().map(|b| b.id).collect();
                 let keep: Vec<String> = body.split(',').map(str::trim).filter(|k| known.contains(k)).map(str::to_string).collect();
                 let keep = keep.join(",");
-                self.db_reply(respond, move |s| match s.set_setting("import.keep", &keep) {
+                self.db_reply_slow(respond, move |s| match s.set_setting("import.keep", &keep) {
                     Ok(()) => json!({ "keep": keep, "read": keep_browsers_in_sync(s) }),
                     Err(e) => json!({ "error": e }),
                 })
@@ -89,7 +89,7 @@ impl Browser {
                     .filter(|_| !dir.is_empty() && !dir.contains(['/', '\\']) && dir != ".." && dir != ".")
                     .map(|d| d.join(&dir).join("History"));
                 match file {
-                    Some(f) => self.db_reply(respond, move |s| {
+                    Some(f) => self.db_reply_slow(respond, move |s| {
                         s.import_chrome_history(&f).map(|n| json!({ "imported": n })).unwrap_or_else(|e| json!({ "error": e }))
                     }),
                     None => respond.send(json!({ "error": "unknown Chrome profile" })),
@@ -106,7 +106,7 @@ impl Browser {
                     return respond.send(json!({ "error": "not an extension folder of an installed browser" }));
                 }
                 let (dest_root, proxy) = (self.paths.extensions.clone(), self.proxy.clone());
-                self.job(Box::new(move |_| match storage::chrome::copy_extension(&src, &dest_root) {
+                let _ = self.background.send(Box::new(move |_| match storage::chrome::copy_extension(&src, &dest_root) {
                     Ok(folder) => {
                         let _ = proxy.send_event(Msg::ExtAdd { folder, respond });
                     }
@@ -488,7 +488,7 @@ impl Browser {
                     })
                 })
             }
-            "import/chrome" => self.db_reply(respond, |s| match import_from_chrome(s) {
+            "import/chrome" => self.db_reply_slow(respond, |s| match import_from_chrome(s) {
                 Ok(summary) => json!({ "summary": summary }),
                 Err(e) => json!({ "error": e }),
             }),
@@ -548,7 +548,7 @@ impl Browser {
                 let mut f = body.splitn(3, '\t');
                 let (name, email, types) = (f.next().unwrap_or("").to_string(), f.next().unwrap_or("").to_string(), f.next().unwrap_or("").to_string());
                 let (proxy, tabs) = (self.proxy.clone(), self.open_tabs());
-                self.db_reply(respond, move |s| {
+                self.db_reply_slow(respond, move |s| {
                     if let Err(e) = sign_in(s, &name, &email, &types) {
                         return json!({ "error": e });
                     }
@@ -561,7 +561,8 @@ impl Browser {
             // answer comes when the person has finished there (or after the wait runs out).
             "account/google" => {
                 let types = storage::sync::Types::parse(Some(body.trim())).list();
-                let (proxy, tabs, jobs) = (self.proxy.clone(), self.open_tabs(), self.jobs.clone());
+                // (Saving fetches the account's picture: the background thread.)
+                let (proxy, tabs, jobs) = (self.proxy.clone(), self.open_tabs(), self.background.clone());
                 std::thread::spawn(move || {
                     let account = match crate::google::sign_in() {
                         Ok(a) => a,
@@ -599,7 +600,7 @@ impl Browser {
             }
             "sync/now" => {
                 let (proxy, tabs) = (self.proxy.clone(), self.open_tabs());
-                self.db_reply(respond, move |s| {
+                self.db_reply_slow(respond, move |s| {
                     let r = run_sync(s, tabs, &proxy);
                     let _ = proxy.send_event(Msg::Synced(r.is_ok()));
                     match r {

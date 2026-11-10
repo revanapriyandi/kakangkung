@@ -229,6 +229,9 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // Slow storage work (another browser's data, sync rounds) has a thread and connection of its
+    // own: reading Chrome's history takes seconds, and pages must not wait for it.
+    browser.background = spawn_storage(base.join("kakangkung.db")).0;
     browser.installed_app = installed_app;
     let start_url = match &run {
         Run::App(_) => browser.installed_app.as_ref().unwrap().start_url.clone(),
@@ -421,7 +424,7 @@ fn main() {
             if Instant::now() >= next_sync {
                 next_sync = Instant::now() + SYNC_EVERY;
                 let (p, tabs) = (browser.proxy.clone(), browser.open_tabs());
-                browser.job(Box::new(move |s| {
+                let _ = browser.background.send(Box::new(move |s| {
                     if let Some(s) = s {
                         keep_browsers_in_sync(s);
                         if sync_conf(s).0 {

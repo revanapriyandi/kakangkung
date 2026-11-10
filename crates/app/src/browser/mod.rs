@@ -169,6 +169,9 @@ pub(crate) struct Browser {
     /// Latest address-bar request: local rows (once known) and the engine's suggestions.
     pub(crate) suggest_state: (u64, Option<Json>, Vec<String>),
     pub(crate) jobs: mpsc::Sender<Job>,
+    /// A second storage thread (its own database connection) for work that takes seconds:
+    /// reading another browser's data, a sync round. What pages ask for never waits behind it.
+    pub(crate) background: mpsc::Sender<Job>,
     pub(crate) token: String,
     pub(crate) paths: Paths,
     pub(crate) synced: bool,
@@ -339,6 +342,7 @@ impl Browser {
             devtools_share: 0.4,
             devtools_dock: None,
             suggest_state: (0, None, vec![]),
+            background: jobs.clone(),
             jobs,
             token: random_hex(),
             paths,
@@ -1058,6 +1062,20 @@ impl Browser {
     pub(crate) fn job(&self, job: Job) {
         if let Err(mpsc::SendError(job)) = self.jobs.send(job) {
             eprintln!("storage thread is gone");
+            job(None);
+        }
+    }
+
+    /// Answer an API request with slow work (seconds: another browser's data, a sync round),
+    /// done on the background storage thread so pages and the address bar are not held up.
+    pub(crate) fn db_reply_slow(&self, respond: Reply, f: impl FnOnce(&Store) -> Json + Send + 'static) {
+        let job: Job = Box::new(move |s| {
+            respond.send(match s {
+                Some(s) => f(s),
+                None => json!({ "error": "the history database could not be opened" }),
+            })
+        });
+        if let Err(mpsc::SendError(job)) = self.background.send(job) {
             job(None);
         }
     }

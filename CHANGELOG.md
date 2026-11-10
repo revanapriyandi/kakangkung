@@ -4,6 +4,12 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
+### Fixed
+- History, Downloads, Sync, Settings and address-bar suggestions no longer wait while another
+  browser's data is read or a sync round runs. That work (seconds for a large Chrome history,
+  repeated every five minutes for browsers kept in sync) shared the one storage thread with
+  everything pages ask for; it now has a thread and database connection of its own.
+
 ## [0.4.2] - 2026-11-10
 
 ### Added
