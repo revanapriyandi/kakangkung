@@ -4,6 +4,8 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-11-10
+
 ### Fixed
 - History, Downloads, Sync, Settings and address-bar suggestions no longer wait while another
   browser's data is read or a sync round runs. That work (seconds for a large Chrome history,
