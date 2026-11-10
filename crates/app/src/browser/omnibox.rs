@@ -118,12 +118,14 @@ impl Browser {
     /// Put the active tab's address in the box: full (`editing`) or short.
     fn show_address(&self, editing: bool) {
         let Some(t) = self.tabs.iter().find(|t| t.view.id == self.active) else { return };
+        // An extension's New Tab page shows an empty box, like the built-in one.
+        let url = if self.new_tab_page.as_deref() == Some(t.view.url.as_str()) { ui::NEWTAB_URL } else { t.view.url.as_str() };
         let text = if editing {
-            if t.view.url.starts_with(ui::INTERNAL) { ui::display_url(&t.view.url) } else { t.view.url.clone() }
-        } else if self.settings.full_urls && !t.view.url.starts_with(ui::INTERNAL) {
-            t.view.url.clone()
+            if url.starts_with(ui::INTERNAL) { ui::display_url(url) } else { url.to_string() }
+        } else if self.settings.full_urls && !url.starts_with(ui::INTERNAL) {
+            url.to_string()
         } else {
-            ui::display_url(&t.view.url)
+            ui::display_url(url)
         };
         self.frame.set_omnibox_text(&text, if editing { 0 } else { text.chars().count() });
     }

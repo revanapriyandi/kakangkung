@@ -168,8 +168,14 @@ impl Browser {
                         v.title = "New Tab".into();
                     }
                     if done && !is_ntp {
-                        let t = self.tabs[i].webview.as_ref().and_then(platform::document_title).unwrap_or_default();
-                        self.tabs[i].view.title = tab_title(&self.tabs[i].view.url, t);
+                        // A native page is called by its own name, not by the built-in host.
+                        self.tabs[i].view.title = match crate::native::page_of(&self.tabs[i].view.url) {
+                            Some(page) => crate::native::title(page),
+                            None => {
+                                let t = self.tabs[i].webview.as_ref().and_then(platform::document_title).unwrap_or_default();
+                                tab_title(&self.tabs[i].view.url, t)
+                            }
+                        };
                     }
                     if done && id == self.active {
                         self.refresh_bookmark();

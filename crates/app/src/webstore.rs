@@ -250,6 +250,25 @@ pub(crate) fn options_page(folder: &Path) -> Option<String> {
     options_of(&manifest(folder)?)
 }
 
+/// The page of the first extension in `extensions` (Kakangkung's copies, one folder per id) that
+/// replaces the New Tab page (`chrome_url_overrides.newtab`) and is switched on in the WebView2
+/// profile's `preferences` (its "Secure Preferences": an extension that is off, or not in the
+/// profile at all, has no page to show).
+// ponytail: WebView2 writes that file a moment after a switch is flipped; ask the profile
+// (GetBrowserExtensions) if that moment ever shows.
+pub(crate) fn new_tab_override(extensions: &Path, preferences: &Path) -> Option<String> {
+    let prefs: Json = serde_json::from_str(&std::fs::read_to_string(preferences).ok()?).ok()?;
+    let mut ids: Vec<String> = std::fs::read_dir(extensions).ok()?.flatten().filter_map(|e| e.file_name().into_string().ok()).collect();
+    ids.sort();
+    ids.into_iter().find_map(|id| {
+        let page = manifest_page(&manifest(&extensions.join(&id))?["chrome_url_overrides"]["newtab"])?;
+        let state = prefs["extensions"]["settings"].get(&id)?;
+        let off = state["state"] == 0 || state["disable_reasons"].as_array().is_some_and(|r| !r.is_empty())
+            || state["disable_reasons"].as_u64().is_some_and(|r| r != 0);
+        (!off).then(|| format!("chrome-extension://{id}/{page}"))
+    })
+}
+
 /// An installed extension's name as Chrome shows it: `name`, with a `__MSG_key__` name read
 /// from the default locale's messages.json.
 pub(crate) fn display_name(folder: &Path) -> Option<String> {
@@ -359,6 +378,22 @@ pub(crate) fn button_icon(folder: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_tab_page_comes_from_an_extension_that_is_on() {
+        let root = std::env::temp_dir().join(format!("kk-newtab-{}", std::process::id()));
+        for (id, manifest) in [("aaaa", r#"{"name":"plain"}"#), ("bbbb", r#"{"chrome_url_overrides":{"newtab":"/off.html"}}"#), ("cccc", r#"{"chrome_url_overrides":{"newtab":"index.html"}}"#), ("dddd", r#"{"chrome_url_overrides":{"newtab":"gone.html"}}"#)] {
+            std::fs::create_dir_all(root.join("ext").join(id)).unwrap();
+            std::fs::write(root.join("ext").join(id).join("manifest.json"), manifest).unwrap();
+        }
+        let prefs = root.join("prefs");
+        std::fs::write(&prefs, r#"{"extensions":{"settings":{"aaaa":{"disable_reasons":[]},"bbbb":{"disable_reasons":[8192]},"cccc":{"disable_reasons":[]}}}}"#).unwrap();
+        assert_eq!(new_tab_override(&root.join("ext"), &prefs).as_deref(), Some("chrome-extension://cccc/index.html"));
+        std::fs::write(&prefs, r#"{"extensions":{"settings":{"cccc":{"state":0}}}}"#).unwrap();
+        assert_eq!(new_tab_override(&root.join("ext"), &prefs), None);
+        assert_eq!(new_tab_override(&root.join("ext"), &root.join("missing")), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn failed_package_and_cancelled_staging_preserve_installed_files() {

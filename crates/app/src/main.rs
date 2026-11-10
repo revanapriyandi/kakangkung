@@ -45,7 +45,7 @@ use crate::selftest::{Observed, SelfTest};
 
 const APP: &str = ui::APP_NAME;
 /// A built-in web page (not native) the self-test loads: the API script runs in it.
-const ABOUT: &str = "https://kakangkung.internal/selftest";
+const ABOUT: &str = "https://kakangkung-internal.localhost/selftest";
 const WELCOME: &str = "https://kakangkung.internal/welcome";
 
 /// First automatic sync after start, so start-up stays quick (estimated).
@@ -277,6 +277,8 @@ fn main() {
             browser.activate(ids[active.min(ids.len() - 1)]);
         }
         None => {
+            // A plain start shows the New Tab page, which an extension may have replaced.
+            let start_url = if start_url == ui::NEWTAB_URL && matches!(run, Run::Normal(_)) { browser.new_tab_address() } else { start_url };
             browser.open_tab(&start_url, None);
             // Further URLs on the command line: each loads now, like Chrome; the first stays selected.
             let first = browser.active;

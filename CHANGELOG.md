@@ -4,6 +4,18 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
+### Added
+- An extension that replaces the New Tab page (a start page from the Chrome Web Store, such as
+  iHomepage) now does: new tabs and a plain start open its page, with an empty address bar,
+  unless Settings picks another New Tab page. Incognito windows keep their own page.
+
+### Fixed
+- Sites whose address starts with `kakangkung.` (the browser's own website,
+  kakangkung.rnevio.com) open instead of showing an empty "Not found" page: the built-in
+  pages' protocol answered for every such host.
+- Tabs of built-in pages are named after the page (Settings, History) instead of
+  `kakangkung.internal`.
+
 ## [0.4.1] - 2026-11-10
 
 ### Fixed

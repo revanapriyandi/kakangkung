@@ -61,6 +61,14 @@ const PREVIEW_READY_JS: &str = r#"(() => {
   else ready();
 })();"#;
 
+/// Protocol of the one built-in page a webview loads (the self-test's, with its `/api`). wry
+/// serves it by answering every request to `https://<protocol>.*` itself, so the name must not
+/// begin a real site's host: as "kakangkung" it swallowed kakangkung.rnevio.com, the browser's
+/// own website. Native pages (`ui::INTERNAL`) never reach a webview.
+// ponytail: a host starting with "kakangkung-internal." would still be swallowed; an own
+// WebResourceRequested handler for one exact host if that ever matters.
+const PROTOCOL: &str = "kakangkung-internal";
+
 /// Run-wide locations.
 pub(crate) struct Paths {
     /// Kakangkung's copy of imported extensions.
@@ -205,6 +213,8 @@ pub(crate) struct Browser {
     /// The tab whose page is in full screen (a video), and whether that made the window full
     /// screen (false: it already was, by F11, and stays so afterwards).
     pub(crate) page_fullscreen: Option<(u64, bool)>,
+    /// The extension page last opened as the New Tab page (its address is not shown, like Chrome).
+    pub(crate) new_tab_page: Option<String>,
 }
 
 /// Accessibility focus outline, as a script that switches it on or off in a page.
@@ -355,6 +365,7 @@ impl Browser {
             pinned_icons: Default::default(),
             passwords: Default::default(),
             page_fullscreen: None,
+            new_tab_page: None,
         })
     }
 
@@ -466,6 +477,11 @@ impl TabKit {
         let kit = self.clone();
         let app = self.app.clone(); let navigation = self.proxy.clone();
         builder.with_navigation_handler(move |url| {
+            // A web page linked to a native page: nothing to load, the tab shows it natively.
+            if crate::native::page_of(&url).is_some() {
+                let _ = navigation.send_event(Msg::Load { id, url, done: true });
+                return false;
+            }
             if let Some(app) = &app {
                 if url != "about:blank" && !app.contains(&url) {
                     if url.starts_with("https://") || url.starts_with("http://") { let _ = navigation.send_event(Msg::OpenExternal(url)); }
@@ -518,7 +534,7 @@ impl TabKit {
             .with_bounds(self.bounds)
             .with_https_scheme(true)
             .with_hotkeys_zoom(true)
-            .with_asynchronous_custom_protocol("kakangkung".into(), {
+            .with_asynchronous_custom_protocol(PROTOCOL.into(), {
                 let token = self.token.clone();
                 let proxy = Mutex::new(self.proxy.clone());
                 move |_, req, respond| {
@@ -702,9 +718,20 @@ impl Browser {
         self.render();
     }
 
+    /// The New Tab page: the one chosen in Settings, else an extension's (a New Tab extension such
+    /// as a start page from the Chrome Web Store), else Kakangkung's own.
+    pub(crate) fn new_tab_address(&mut self) -> String {
+        if self.settings.new_tab_url != ui::NEWTAB_URL || self.incognito {
+            return self.settings.new_tab_url.clone();
+        }
+        let prefs = self.ctx.data_directory().map(|d| d.join("EBWebView").join("Default").join("Secure Preferences"));
+        self.new_tab_page = prefs.and_then(|p| crate::webstore::new_tab_override(&self.paths.extensions, &p));
+        self.new_tab_page.clone().unwrap_or_else(|| ui::NEWTAB_URL.into())
+    }
+
     /// A new tab as the settings ask: which page, and where in the strip.
     pub(crate) fn open_new_tab(&mut self) {
-        let url = if self.incognito { format!("{}incognito", ui::INTERNAL) } else { self.settings.new_tab_url.clone() };
+        let url = if self.incognito { format!("{}incognito", ui::INTERNAL) } else { self.new_tab_address() };
         let at = if self.settings.new_tab_next { self.index(self.active).map(|i| i + 1) } else { None };
         self.open_tab(&url, at);
         self.focus_omnibox();
@@ -930,6 +957,8 @@ impl Browser {
         let set = &self.settings;
         let active = self.tabs.iter().find(|t| t.view.id == self.active).map(|t| &t.view);
         let url = active.map_or("", |v| v.url.as_str());
+        // An extension's New Tab page shows an empty address bar, like the built-in one.
+        let url = if self.new_tab_page.as_deref() == Some(url) { ui::NEWTAB_URL } else { url };
         let internal = url.starts_with(ui::INTERNAL);
         let group = |id: u32| self.groups.iter().find(|g| g.id == id);
         let hex = |c: &str| u32::from_str_radix(c.trim_start_matches('#'), 16).unwrap_or(0);
