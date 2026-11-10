@@ -4,6 +4,8 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-10
+
 ### Added
 - An extension that replaces the New Tab page (a start page from the Chrome Web Store, such as
   iHomepage) now does: new tabs and a plain start open its page, with an empty address bar,
