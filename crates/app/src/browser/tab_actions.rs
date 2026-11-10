@@ -133,6 +133,9 @@ impl Browser {
             "others" => {
                 let keep: Vec<u64> = self.tabs.iter().filter(|t| t.view.id == id || t.view.pinned).map(|t| t.view.id).collect();
                 let close: Vec<u64> = self.tabs.iter().map(|t| t.view.id).filter(|t| !keep.contains(t)).collect();
+                // Select the survivor first: closing the selected tab would load its neighbour,
+                // one after another down the row.
+                self.activate(id);
                 for c in close {
                     self.close_tab(c);
                 }
@@ -140,6 +143,9 @@ impl Browser {
             }
             "right" => {
                 let close: Vec<u64> = self.tabs[i + 1..].iter().map(|t| t.view.id).collect();
+                if close.contains(&self.active) {
+                    self.activate(id);
+                }
                 for c in close {
                     self.close_tab(c);
                 }

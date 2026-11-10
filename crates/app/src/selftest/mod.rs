@@ -499,7 +499,7 @@ impl SelfTest {
                 let one_left = b.tabs.len() == 1 && b.active == 1;
                 let hooks_after = b.hook_count();
                 // The native New Tab page adds no COM handlers.
-                let ok = ok && frozen && protected_running && protection_cleared && running && back_on_1 && one_left && hooks_after == 8 && self.hooks_with_two_tabs == 8;
+                let ok = ok && frozen && protected_running && protection_cleared && running && back_on_1 && one_left && hooks_after == 9 && self.hooks_with_two_tabs == 9;
                 self.steps.push((
                     "act",
                     ok,

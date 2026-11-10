@@ -139,6 +139,11 @@ pub fn valid_custom_engine(t: &str) -> bool {
     t.starts_with("https://") && t.matches("%s").count() == 1 && !t.contains(char::is_whitespace) && t.len() > 12
 }
 
+/// `192.168.1.1`: a numeric IPv4 address (no port).
+pub fn numeric_host(host: &str) -> bool {
+    host.split('.').count() == 4 && host.split('.').all(|p| p.parse::<u8>().is_ok())
+}
+
 /// What the user typed into the address bar -> URL to load. `None` for empty input.
 ///
 /// Security: `javascript:`, `vbscript:` and `data:` are never navigated to from the address bar
@@ -174,7 +179,9 @@ pub fn resolve_input(text: &str, search: &str) -> Option<String> {
     }
     let host = lower.split(['/', '?', '#']).next().unwrap_or("");
     let bare_host = host.split(':').next().unwrap_or("");
-    let local = bare_host == "localhost" || bare_host == "127.0.0.1" || bare_host == "[::1]";
+    // A numeric address (a router at 192.168.1.1, a dev server) rarely speaks HTTPS.
+    let ipv4 = numeric_host(bare_host);
+    let local = bare_host == "localhost" || ipv4 || host.starts_with("[::1]");
     if local {
         return Some(format!("http://{t}"));
     }
@@ -288,7 +295,7 @@ impl Security {
             Security::Internal
         } else if lower.starts_with("https://") {
             Security::Secure
-        } else if lower.starts_with("http://localhost") || lower.starts_with("http://127.0.0.1") || lower.starts_with("file:") {
+        } else if lower.starts_with("file:") || matches!(host(&lower).rsplit_once(':').map_or(host(&lower), |(h, port)| if port.contains(']') { host(&lower) } else { h }), "localhost" | "127.0.0.1" | "[::1]") {
             Security::Local
         } else {
             Security::Insecure
@@ -547,6 +554,9 @@ mod tests {
         assert_eq!(r("en.wikipedia.org/wiki/Rust"), "https://en.wikipedia.org/wiki/Rust");
         assert_eq!(r("http://neverssl.com"), "http://neverssl.com");
         assert_eq!(r("localhost:8080"), "http://localhost:8080");
+        assert_eq!(r("192.168.1.1"), "http://192.168.1.1");
+        assert_eq!(r("10.0.0.2:8080/admin"), "http://10.0.0.2:8080/admin");
+        assert_eq!(r("1.2.3.com"), "https://1.2.3.com");
         assert_eq!(r("rust lang"), "https://www.google.com/search?q=rust+lang&ie=UTF-8");
         assert_eq!(r("rust"), "https://www.google.com/search?q=rust&ie=UTF-8");
         assert_eq!(r("c++ & go"), "https://www.google.com/search?q=c%2B%2B+%26+go&ie=UTF-8");
@@ -574,6 +584,9 @@ mod tests {
         assert_eq!(Security::of("https://example.com/"), Security::Secure);
         assert_eq!(Security::of("http://example.com/"), Security::Insecure);
         assert_eq!(Security::of("http://localhost:3000/"), Security::Local);
+        assert_eq!(Security::of("http://[::1]:3000/"), Security::Local);
+        assert_eq!(Security::of("http://localhost.example.com/"), Security::Insecure);
+        assert_eq!(Security::of("http://127.0.0.1.example.com/"), Security::Insecure);
         assert_eq!(Security::of(NEWTAB_URL), Security::Internal);
         assert_eq!(display_url("https://example.com/"), "example.com");
         assert_eq!(display_url("https://example.com/a?b"), "example.com/a?b");

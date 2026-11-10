@@ -69,6 +69,8 @@ pub(crate) enum Msg {
     /// A New Tab tile's icon is on disk (`None`: the site has none).
     SiteIcon { host: String, path: Option<std::path::PathBuf> },
     Audio { id: u64, playing: bool },
+    /// The page in tab `id` entered or left full screen (a video's full-screen button, Esc).
+    PageFullscreen { id: u64, on: bool },
     /// `kk:pw:<what>` from the password manager's script in the page of tab `tab` at `url`.
     Password { tab: u64, url: String, what: String },
     /// Saved logins for the login field that got focus in tab `tab`.

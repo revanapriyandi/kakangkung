@@ -6,7 +6,8 @@
   if (location.hostname !== "chromewebstore.google.com" || window.top !== window) return;
   const post = (m) => window.ipc && window.ipc.postMessage(m);
   const idOf = () => (location.pathname.match(/\/detail\/(?:[^/]+\/)?([a-p]{32})(?:[/?#]|$)/) || [])[1];
-  const STORE_LABELS = ["Add to Chrome", "Remove from Chrome"];
+  // The Chrome download page, not the store's help pages (support.google.com/chrome_webstore).
+  const DOWNLOAD = 'a[href^="https://www.google.com/chrome"]';
   let shown = { id: "", state: "busy", text: "Add to Kakangkung" };
   let floating = null;
 
@@ -20,8 +21,16 @@
     const h1 = document.querySelector("h1");
     post("kk:store:add\t" + shown.id + "\t" + (h1 ? h1.textContent.trim().slice(0, 120) : ""));
   };
+  // Buttons naming Chrome, in any language ("Add to Chrome", "Tambahkan ke Chrome", "Chrome に追加").
+  const chromeButtons = () => [...document.querySelectorAll("button")].filter((b) => !b.dataset.kk &&
+    b.textContent.includes("Chrome") && b.textContent.trim().length < 48 && b.getClientRects().length > 0);
+  // "Install Chrome" of a "Switch to Chrome" notice: its accessible name is the notice, not its label.
+  const isSwitch = (b) => {
+    const label = b.getAttribute("aria-label");
+    return !!label && label.trim() !== b.textContent.trim();
+  };
   const storeButton = () =>
-    [...document.querySelectorAll("button")].find((b) => b.dataset.kk || STORE_LABELS.includes(b.textContent.trim()));
+    [...document.querySelectorAll("button")].find((b) => b.dataset.kk) || chromeButtons().find((b) => !isSwitch(b));
   const paint = (b) => {
     if (b.textContent !== shown.text) b.textContent = shown.text;
     b.disabled = shown.state !== "ready";
@@ -50,15 +59,22 @@
     shown = { id, state, text };
     render();
   };
-  // The store's "Switch to Chrome to install extensions" banner: wrong here, since the button
-  // installs. Found by its link to the Chrome download page (any language), hidden with the
-  // smallest box around it that is banner-sized.
+  // The store's "Switch to Chrome to install extensions" notices: wrong here, since the button
+  // installs. One is found by its link to the Chrome download page, the one on an extension's
+  // page by its "Install Chrome" button (any language). Hidden with the box around it: the
+  // smallest that is banner-sized, widened while that adds no text (the bubble it sits in).
+  const hideBox = (from) => {
+    let box = from;
+    while (box.parentElement && box.getBoundingClientRect().height < 40) box = box.parentElement;
+    while (box.parentElement && box.parentElement !== document.body &&
+      (box.parentElement.textContent.length === box.textContent.length ||
+        (box.parentElement.textContent.length < 300 && !box.parentElement.querySelector("h1")))) box = box.parentElement;
+    if (box !== document.body && box.textContent.length < 300 && box.style.display !== "none") box.style.display = "none";
+  };
   const hideSwitchBanner = () => {
-    for (const a of document.querySelectorAll('a[href*="google.com/chrome"]')) {
-      let box = a;
-      while (box.parentElement && box.getBoundingClientRect().height < 40) box = box.parentElement;
-      if (box !== document.body && box.textContent.length < 300 && box.style.display !== "none") box.style.display = "none";
-    }
+    // (A link without boxes is hidden already: climbing from it would hide what surrounds it.)
+    for (const a of document.querySelectorAll(DOWNLOAD)) if (a.getClientRects().length) hideBox(a.closest("aside") || a);
+    for (const b of chromeButtons()) if (isSwitch(b)) hideBox(b);
   };
   // The store is a single-page app: its address and content change without a page load.
   setInterval(() => {

@@ -8,7 +8,7 @@ use wry::{MemoryUsageLevel, Rect, WebViewExtWindows};
 use wry::dpi::{PhysicalPosition, PhysicalSize};
 
 use crate::timing;
-use crate::browser::{page_bounds, set_default_zoom, Browser, Tab};
+use crate::browser::{set_default_zoom, Browser, Tab};
 use crate::msg::Msg;
 
 impl Browser {
@@ -166,9 +166,36 @@ impl Browser {
         }
     }
 
+    /// Leave a page's full screen: the page is told (it may not know: tab switched or closed),
+    /// the window goes back to what it was, the browser UI shows again.
+    pub(crate) fn end_page_fullscreen(&mut self) {
+        let Some((id, ours)) = self.page_fullscreen.take() else { return };
+        if let Some(wv) = self.index(id).and_then(|i| self.tabs[i].webview.as_ref()) {
+            let _ = wv.evaluate_script("document.fullscreenElement && document.exitFullscreen()");
+        }
+        if ours {
+            self.window.set_fullscreen(None);
+        }
+        self.show_split_partner(id, true);
+        self.relayout();
+    }
+
+    /// The other half of `id`'s split view, hidden while `id`'s page is in full screen.
+    pub(crate) fn show_split_partner(&self, id: u64, visible: bool) {
+        let Some((l, r)) = self.split.filter(|&(l, r)| id == l || id == r) else { return };
+        let other = if id == l { r } else { l };
+        if !self.visible_with(self.active).contains(&other) { return }
+        if let Some(wv) = self.index(other).and_then(|i| self.tabs[i].webview.as_ref()) {
+            let _ = wv.set_visible(visible);
+        }
+    }
+
     pub(crate) fn activate(&mut self, id: u64) {
         if self.index(id).is_none() {
             return;
+        }
+        if self.page_fullscreen.is_some_and(|(tab, _)| tab != id) {
+            self.end_page_fullscreen();
         }
         self.hide_overlay();
         self.previews.hide();
@@ -202,6 +229,7 @@ impl Browser {
     /// Where tab `id` is drawn: the whole page area, or its half of the split view.
     pub(crate) fn tab_bounds(&self, id: u64) -> Rect {
         let full = self.content_bounds();
+        if self.page_fullscreen.is_some_and(|(tab, _)| tab == id) { return full }
         let Some((l, _)) = self.split.filter(|&(l, r)| id == l || id == r) else { return full };
         // The halves share the pages' area (beside DevTools docked at a side).
         let scale = self.window.scale_factor();
@@ -346,6 +374,7 @@ impl Browser {
     /// of the same native page): rebuild what shows it.
     pub(crate) fn reload_kind(&mut self, i: usize) {
         let id = self.tabs[i].view.id;
+        if self.page_fullscreen.is_some_and(|(tab, _)| tab == id) { self.end_page_fullscreen(); }
         if self.devtools.is_some() && self.devtools_tab == id { self.close_devtools(); }
         let url = self.tabs[i].view.url.clone();
         let native = crate::native::page_of(&url).is_some();
@@ -367,6 +396,7 @@ impl Browser {
 
     pub(crate) fn close_tab(&mut self, id: u64) {
         self.previews.forget(id);
+        if self.page_fullscreen.is_some_and(|(tab, _)| tab == id) { self.end_page_fullscreen(); }
         let Some(i) = self.index(id) else { return };
         self.hide_native(id);
         let mut partner = None;
@@ -376,7 +406,7 @@ impl Browser {
             let other = if id == l { r } else { l };
             partner = Some(other);
             if let Some(wv) = self.index(other).and_then(|j| self.tabs[j].webview.as_ref()) {
-                let _ = wv.set_bounds(page_bounds(&self.window));
+                let _ = wv.set_bounds(self.content_bounds());
             }
         }
         let mut tab = self.tabs.remove(i);
@@ -384,7 +414,8 @@ impl Browser {
         if let Some(wv) = tab.webview.take() {
             platform::unhook(&wv, &mut tab.hooks);
         }
-        if !tab.view.url.is_empty() {
+        // An empty new tab is nothing to reopen (like Chrome).
+        if !tab.view.url.is_empty() && tab.view.url != ui::NEWTAB_URL {
             self.closed.push(super::tab_search::ClosedTab { url: tab.view.url, title: tab.view.title, at: Instant::now() });
             if self.closed.len() > 100 {
                 self.closed.drain(..self.closed.len() - 100);

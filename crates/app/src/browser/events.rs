@@ -211,6 +211,22 @@ impl Browser {
                 }
                 self.render();
             }
+            Msg::PageFullscreen { id, on: true } => {
+                if self.index(id).is_some() && self.page_fullscreen.is_none() {
+                    let ours = self.window.fullscreen().is_none();
+                    if ours {
+                        self.window.set_fullscreen(Some(tao::window::Fullscreen::Borderless(None)));
+                    }
+                    self.page_fullscreen = Some((id, ours));
+                    self.show_split_partner(id, false);
+                    self.relayout();
+                }
+            }
+            Msg::PageFullscreen { id, on: false } => {
+                if self.page_fullscreen.is_some_and(|(tab, _)| tab == id) {
+                    self.end_page_fullscreen();
+                }
+            }
             Msg::Media { id, frame, live } => {
                 if let Some(i) = self.index(id) {
                     self.tabs[i].view.media = self.tabs[i].media_frames.set(frame, live);

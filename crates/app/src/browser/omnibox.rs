@@ -172,7 +172,8 @@ impl Browser {
         }
         // Under the box being typed in; the page window sits right under the frame.
         let (x, y, w, h) = match self.page.fakebox_rect().filter(|_| self.omnibox.in_page) {
-            Some((x, y, w, h)) => (x, y + platform::frame::FRAME_H, w, h),
+            // (No frame above it in full screen.)
+            Some((x, y, w, h)) => (x, y + (super::chrome_height(&self.window) as f64 / self.window.scale_factor()) as f32, w, h),
             None => self.frame.omnibox_rect(),
         };
         let height = self.omnibox.rows.len() as f64 * ROW_H + LIST_PADDING;

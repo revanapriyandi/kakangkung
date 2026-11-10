@@ -32,13 +32,14 @@ pub struct Hooks {
     permission: Option<i64>,
     adblock: Option<i64>,
     context_menu: Option<i64>,
+    fullscreen: Option<i64>,
     security: Option<(webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2DevToolsProtocolEventReceiver, i64)>,
 }
 
 impl Hooks {
     /// Number of live registrations (the self-test checks none are leaked).
     pub fn count(&self) -> usize {
-        [self.accel, self.favicon, self.audio, self.downloads, self.permission, self.adblock, self.context_menu].iter().flatten().count() + usize::from(self.security.is_some())
+        [self.accel, self.favicon, self.audio, self.downloads, self.permission, self.adblock, self.context_menu, self.fullscreen].iter().flatten().count() + usize::from(self.security.is_some())
     }
 }
 
@@ -161,6 +162,10 @@ pub fn unhook(wv: &WebView, hooks: &mut Hooks) {
         let _ = unsafe { receiver.remove_DevToolsProtocolEventReceived(token) };
     }
     crate::adblock_script::detach_adblock_script(wv);
+    if let Some(t) = hooks.fullscreen.take() {
+        // SAFETY: token came from add_ContainsFullScreenElementChanged on this webview.
+        let _ = unsafe { wv.webview().remove_ContainsFullScreenElementChanged(t) };
+    }
     if let Some(t) = hooks.context_menu.take() {
         crate::devtools::unwatch_context_menu(wv, t);
     }
@@ -193,6 +198,26 @@ pub fn unhook(wv: &WebView, hooks: &mut Hooks) {
         if let Err(e) = unsafe { c.remove_IsDocumentPlayingAudioChanged(t) } {
             eprintln!("unhook: IsDocumentPlayingAudioChanged: {e}");
         }
+    }
+}
+
+/// `changed(true)` when the page puts an element in full screen (a video's full-screen button),
+/// `changed(false)` when it leaves. WebView2 only fills the webview; the window is the host's job.
+pub fn hook_fullscreen(wv: &WebView, hooks: &mut Hooks, changed: impl Fn(bool) + 'static) {
+    let core = wv.webview();
+    let reader = core.clone();
+    let handler = webview2_com::ContainsFullScreenElementChangedEventHandler::create(Box::new(move |_, _| {
+        let mut on = BOOL(0);
+        // SAFETY: `on` is a writable local.
+        unsafe { reader.ContainsFullScreenElement(&mut on)? };
+        changed(on.as_bool());
+        Ok(())
+    }));
+    let mut token = 0i64;
+    // SAFETY: handler is a valid COM object; token is a writable local.
+    match unsafe { core.add_ContainsFullScreenElementChanged(&handler, &mut token) } {
+        Ok(()) => hooks.fullscreen = Some(token),
+        Err(e) => eprintln!("hook: ContainsFullScreenElementChanged registration failed: {e}"),
     }
 }
 

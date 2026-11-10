@@ -4,6 +4,27 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-10
+
+### Fixed
+- A video's full-screen button now fills the whole screen: the window goes full screen and the
+  tab strip and toolbar hide, and everything comes back on Esc. Before, the video only filled
+  the page area under the browser's own bars. Switching or closing the tab leaves full screen.
+- F11 hides the tab strip and toolbar too, like Chrome.
+- "Close other tabs" and "Close tabs to the right" no longer load each unloaded tab on its way
+  out when the selected tab is among those closed.
+- Numeric addresses such as `192.168.1.1` open over HTTP and are left alone by "Always use
+  secure connections": routers and devices on the network rarely speak HTTPS.
+- The address-bar chip no longer shows a site as local because its name merely starts with
+  `localhost` or `127.0.0.1` (`localhost.example.com`); `[::1]` counts as local.
+- Chrome Web Store: extension lists are no longer empty (hiding the "Switch to Chrome" banner
+  also hid every extension card, which links to the store's help pages), the empty white bubble
+  the banner left beside the sign-in button is gone, and "Add to Kakangkung" takes the place of
+  the store's own button in every language instead of floating at the bottom of the page.
+- Ctrl+Shift+T no longer reopens empty new tabs.
+- Closing one half of a split view keeps the other half beside a side-docked DevTools panel
+  instead of running under it.
+
 ## [0.4.0] - 2026-11-09
 
 ### Added

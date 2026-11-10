@@ -9,7 +9,8 @@ test("store click rejects a stale SPA route and disables duplicate clicks", () =
   const messages = [];
   const handlers = new Map();
   const button = {
-    textContent: "Add to Chrome", dataset: {}, style: {}, disabled: false,
+    textContent: "Tambahkan ke Chrome", dataset: {}, style: {}, disabled: false,
+    getClientRects: () => [{}], getAttribute: () => null,
     addEventListener: (name, handler) => handlers.set(name, handler),
   };
   let tick;
@@ -37,4 +38,41 @@ test("store click rejects a stale SPA route and disables duplicate clicks", () =
   assert.equal(button.disabled, true, "button is disabled before the IPC reply");
   window.__kkStore(id, "ready", "Try again");
   assert.equal(button.disabled, false, "a failed request can be retried");
+});
+
+test("the Switch to Chrome banner hides alone, and its button is not the install button", () => {
+  const id = "ddkjiahejlhfcafbddmgiahcphecmpfh";
+  let tick;
+  const selectors = [];
+  // The banner: a link to the Chrome download page inside a short box.
+  const banner = { style: {}, textContent: "Beralih ke Chrome? Instal Chrome", parentElement: null, getBoundingClientRect: () => ({ height: 80 }) };
+  const notice = { style: {}, textContent: "Beralih ke Chrome untuk menginstal ekstensi dan tema Instal Chrome", parentElement: null, querySelector: () => null, getBoundingClientRect: () => ({ height: 56 }) };
+  const link = { style: {}, parentElement: banner, closest: () => banner, getClientRects: () => [{}], getBoundingClientRect: () => ({ height: 20 }) };
+  const install = { textContent: "Instal Chrome", dataset: {}, style: {}, getClientRects: () => [{}], parentElement: notice, getBoundingClientRect: () => ({ height: 40 }),
+    getAttribute: () => "Beralih ke Chrome untuk menginstal ekstensi dan tema", addEventListener() {} };
+  const location = { hostname: "chromewebstore.google.com", pathname: `/detail/example/${id}` };
+  const window = { ipc: { postMessage() {} } };
+  window.top = window;
+  const floating = { style: {}, addEventListener() {}, remove() {} };
+  const document = {
+    body: {},
+    querySelectorAll: (selector) => { selectors.push(selector); return selector === "button" ? [install] : [link]; },
+    querySelector: () => null,
+    createElement: () => floating,
+    documentElement: { appendChild() {} },
+  };
+  vm.runInNewContext(fs.readFileSync(`${__dirname}/webstore.js`, "utf8"), {
+    window, document, location, setInterval: (callback) => { tick = callback; },
+  });
+  tick();
+  assert.equal(banner.style.display, "none");
+  assert.equal(install.dataset.kk, undefined, "Install Chrome is not the install button");
+  assert.equal(notice.style.display, "none", "the notice around Install Chrome hides");
+  const banners = selectors.find((selector) => selector !== "button");
+  assert.ok(!"https://support.google.com/chrome_webstore/answer/1".startsWith(banners.match(/"(.+)"/)[1]), "help links in extension cards are not banners");
+  // Once hidden, the link has no boxes: nothing around the banner is hidden on later polls.
+  link.getClientRects = () => [];
+  banner.style.display = "";
+  tick();
+  assert.equal(banner.style.display, "");
 });

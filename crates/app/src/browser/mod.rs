@@ -202,6 +202,9 @@ pub(crate) struct Browser {
     pub(crate) pinned_icons: std::cell::RefCell<std::collections::HashMap<String, String>>,
     /// The password manager's field focus and the login waiting to be saved.
     pub(crate) passwords: passwords::PasswordState,
+    /// The tab whose page is in full screen (a video), and whether that made the window full
+    /// screen (false: it already was, by F11, and stays so afterwards).
+    pub(crate) page_fullscreen: Option<(u64, bool)>,
 }
 
 /// Accessibility focus outline, as a script that switches it on or off in a page.
@@ -217,7 +220,8 @@ pub(crate) fn set_default_zoom(wv: &WebView, zoom: f64) {
 }
 
 pub(crate) fn chrome_height(window: &Window) -> u32 {
-    if window.is_decorated() { 0 } else { (ui::CHROME_HEIGHT_DIP * window.scale_factor()).round() as u32 }
+    // Full screen (F11, or a page's video) shows the page alone, like Chrome.
+    if window.is_decorated() || window.fullscreen().is_some() { 0 } else { (ui::CHROME_HEIGHT_DIP * window.scale_factor()).round() as u32 }
 }
 
 pub(crate) fn page_bounds(window: &Window) -> Rect {
@@ -350,6 +354,7 @@ impl Browser {
             downloads_visible: false,
             pinned_icons: Default::default(),
             passwords: Default::default(),
+            page_fullscreen: None,
         })
     }
 
@@ -581,6 +586,8 @@ impl Browser {
         );
         let p = self.proxy.clone();
         platform::hook_security(wv, &mut hooks, move |url, data| { let _ = p.send_event(Msg::Security { id, url, data }); });
+        let p = self.proxy.clone();
+        platform::hook_fullscreen(wv, &mut hooks, move |on| { let _ = p.send_event(Msg::PageFullscreen { id, on }); });
         hooks
     }
 
@@ -738,7 +745,10 @@ impl Browser {
             }
             return;
         }
-        if self.settings.https_first && ui::Security::of(&url) == ui::Security::Insecure {
+        // Numeric addresses (routers, devices on the network) are left alone: they rarely speak
+        // HTTPS and there is no falling back.
+        let numeric = ui::numeric_host(ui::host(&url).split(':').next().unwrap_or(""));
+        if self.settings.https_first && !numeric && ui::Security::of(&url) == ui::Security::Insecure {
             url = url.replacen("http://", "https://", 1);
         }
         if let Some(i) = self.index(self.active) {
@@ -858,8 +868,14 @@ impl Browser {
             }
             Action::TaskManager => self.open_after_active(&format!("{}taskmanager", ui::INTERNAL)),
             Action::Fullscreen => {
+                // F11 during a page's full screen leaves it, like Chrome.
+                let page = self.page_fullscreen.is_some();
+                self.end_page_fullscreen();
                 let full = self.window.fullscreen().is_some();
-                self.window.set_fullscreen((!full).then_some(tao::window::Fullscreen::Borderless(None)));
+                if full || !page {
+                    self.window.set_fullscreen((!full).then_some(tao::window::Fullscreen::Borderless(None)));
+                    self.relayout();
+                }
             }
             Action::Bookmark => {
                 if let Some(t) = self.tabs.iter().find(|t| t.view.id == self.active) {
