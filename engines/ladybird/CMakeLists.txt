@@ -38,10 +38,12 @@ if(HAVE_LADYBIRD)
         ${LADYBIRD_SOURCE_DIR}
         ${LADYBIRD_SOURCE_DIR}/AK
         ${LADYBIRD_SOURCE_DIR}/Libraries
+        ${LADYBIRD_SOURCE_DIR}/Services
         ${LADYBIRD_SOURCE_DIR}/Userland/Libraries
         ${LADYBIRD_BUILD_DIR}
         ${LADYBIRD_BUILD_DIR}/AK
         ${LADYBIRD_BUILD_DIR}/Libraries
+        ${LADYBIRD_BUILD_DIR}/Services
     )
     # Discover Ladybird / Lagom LibWebView from the build tree (shared or static).
     file(GLOB _LB_WEBVIEWS
