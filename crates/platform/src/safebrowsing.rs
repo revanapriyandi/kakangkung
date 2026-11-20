@@ -26,8 +26,8 @@ pub fn host_of(url: &str) -> Option<String> {
         .split_once("://")
         .map(|(_, r)| r)
         .unwrap_or(url);
-    let hostport = rest.split('/').next().unwrap_or("").split('@').next_back().unwrap_or("");
-    let host = hostport.split(':').next().unwrap_or("").trim();
+    let hostport = rest.split(['/', '?', '#', '\\']).next().unwrap_or("").split('@').next_back().unwrap_or("");
+    let host = hostport.split(':').next().unwrap_or("").trim().trim_end_matches('.');
     if host.is_empty() {
         return None;
     }
@@ -63,6 +63,14 @@ mod tests {
     fn blocks_google_test_malware_host() {
         assert!(blocks_url("https://testsafebrowsing.appspot.com/s/malware.html"));
         assert!(blocks_url("http://malware.testing.google.test/"));
+    }
+
+    #[test]
+    fn query_fragment_and_trailing_dot_do_not_bypass() {
+        assert!(blocks_url("https://testsafebrowsing.appspot.com?x=1"));
+        assert!(blocks_url("https://testsafebrowsing.appspot.com#x"));
+        assert!(blocks_url("https://testsafebrowsing.appspot.com./"));
+        assert!(blocks_url("https://testsafebrowsing.appspot.com\\x"));
     }
 
     #[test]
