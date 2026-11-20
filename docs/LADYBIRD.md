@@ -94,9 +94,10 @@ Or set `KAKANGKUNG_LADYBIRD_HOST` to the host path.
 | PDF in tab after download | KB-18 — open finished `.pdf` via `file://` in Ladybird |
 | Site permission defaults / list / reset | KB-19 — LibWeb PermissionManager (geo/mic/notifications) |
 | Print preview | KB-20 — screenshot snapshot tab + Print confirm (paginated layout deferred) |
-| Folder sync passwords | KB-21 — vault merges via sync folder (casting deferred; no Chromecast API) |
+| Folder sync passwords | KB-21 — vault merges via sync folder |
 | Process-per-site visibility | KB-22 — LibWeb ProcessManager snapshots in Task Manager |
-| Chrome-parity pillars | See store `docs/chrome-parity-roadmap.md` (KB-2…KB-22) |
+| Presentation / Chromecast casting | **KB-23 blocked** — LibWeb has no `PresentationRequest` / `RemotePlayback` / Cast API (CompositorPresentation* is GPU frames, not casting). No stub. |
+| Chrome-parity pillars | See store `docs/chrome-parity-roadmap.md` (KB-2…KB-23) |
 
 ## Related
 

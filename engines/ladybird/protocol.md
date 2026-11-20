@@ -162,12 +162,22 @@ One `kakangkung-ladybird-host` process owns many views. Task Manager seeds that 
 with their site URLs. LibWeb already swaps WebContent on cross-site navigation; Kakangkung
 surfaces that tree rather than inventing fake per-tab PIDs.
 
-## PDF / sync / casting (KB-18 / KB-21)
+## PDF / sync / casting (KB-18 / KB-21 / KB-23)
 
 Finished `.pdf` downloads open as `file://` tabs in the Ladybird host (LibWeb navigates /
 renders when linked). Folder/Drive sync covers bookmarks/history/tabs/settings/extensions
-and (KB-21) passwords when that sync type is on. Chromecast-style casting is not in tree
-(deferred, not stubbed — no LibWeb Presentation / Cast API wired).
+and (KB-21) passwords when that sync type is on.
+
+### KB-23 blocker — Presentation / Chromecast casting
+
+LibWeb (headers surveyed under Ladybird `Libraries/LibWeb` + IDL) exposes **no**
+`PresentationRequest`, `navigator.presentation`, `RemotePlayback`, or Chromecast/Cast
+receiver/session APIs. Names containing "Presentation" in-tree
+(`CompositorPresentationClient`, Qt `DownloadPresentation`, DRM presentation helpers)
+refer to **GPU/compositor frame presentation**, not media casting.
+
+Until LibWeb lands a real Presentation / Cast surface, Kakangkung will not ship a fake
+cast picker or stub protocol. Revisit when Ladybird adds the Web APIs.
 
 ## Permissions (KB-19)
 
