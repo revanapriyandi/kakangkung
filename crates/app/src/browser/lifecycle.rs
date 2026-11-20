@@ -333,9 +333,10 @@ impl Browser {
                     let scale = self.window.scale_factor();
                     let (p, s) = (b.position.to_physical::<i32>(scale), b.size.to_physical::<i32>(scale));
                     host.set_bounds(vid, p.x, p.y, s.width, s.height)?;
+                    host.set_visible(vid, true)?;
                     Ok(())
                 }
-                Command::Hide => Ok(()),
+                Command::Hide => host.set_visible(vid, false),
                 // Memory Saver / WebView2-only commands are no-ops on Ladybird for now.
                 Command::TrySuspend | Command::Resume | Command::SetLevelLow | Command::SetLevelNormal => Ok(()),
                 _ => Err(format!("Ladybird: unsupported command {cmd:?}")),

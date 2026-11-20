@@ -1096,6 +1096,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kakangkung-mcp"
+version = "0.4.3"
+dependencies = [
+ "engine",
+ "serde_json",
+]
+
+[[package]]
 name = "ladybird-host"
 version = "0.4.3"
 dependencies = [

@@ -4,6 +4,8 @@ use tao::platform::windows::WindowExtWindows;
 use wry::{Rect, dpi::{PhysicalPosition, PhysicalSize}};
 use super::Browser;
 
+use ui;
+
 /// DevTools opens on Elements, without Microsoft's Welcome tab ("Welcome to Microsoft Edge
 /// DevTools") or its after-update page. Seeded into the WebView2 profile's preferences before
 /// its browser process starts; a file that cannot be read is left alone.
@@ -69,7 +71,16 @@ impl Browser {
     }
 
     pub(crate) fn toggle_devtools(&mut self) {
-        if self.devtools.is_some() { return self.close_devtools(); }
+        if self.devtools.is_some() {
+            return self.close_devtools();
+        }
+        // Ladybird-only: open the native DevTools page (LibWeb inspector docks here later).
+        if self.active_webview().is_none() {
+            if self.ladybird.is_some() {
+                self.open_after_active(&format!("{}devtools", ui::INTERNAL));
+            }
+            return;
+        }
         let Some(view) = self.active_webview() else { return };
         match platform::DockedDevTools::open(view, self.window.hwnd()) {
             Ok(panel) => {

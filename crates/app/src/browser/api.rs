@@ -117,14 +117,28 @@ impl Browser {
                 Some(wv) => platform::extensions_list(wv, move |r| respond.send(api_json(r.map(|v| {
                     v.into_iter().filter(|e| !BUILTIN_EXTENSIONS.contains(&e.id.as_str())).map(ext_json).collect::<Vec<_>>()
                 })))),
-                None => respond.send(json!({ "error": "open a tab first" })),
+                None => {
+                    let list: Vec<_> = crate::webstore::list_installed(&self.paths.extensions)
+                        .into_iter()
+                        .filter(|e| !BUILTIN_EXTENSIONS.contains(&e.id.as_str()))
+                        .map(ext_json)
+                        .collect();
+                    respond.send(json!(list));
+                }
             },
             "extensions/enable" | "extensions/remove" => {
                 let (id, on) = body.split_once('\t').unwrap_or((body.as_str(), ""));
                 let change = (path == "extensions/enable").then_some(on == "1");
                 match self.extension_host() {
                     Some(wv) => platform::extension_change(wv, id, change, move |r| respond.send(ok(r))),
-                    None => respond.send(json!({ "error": "open a tab first" })),
+                    None => {
+                        let result = if let Some(enabled) = change {
+                            crate::webstore::set_enabled(&self.paths.extensions, id, enabled)
+                        } else {
+                            std::fs::remove_dir_all(self.paths.extensions.join(id)).map_err(|e| e.to_string())
+                        };
+                        respond.send(ok(result));
+                    }
                 }
             }
             "extensions/load" => {
@@ -134,7 +148,22 @@ impl Browser {
                 }
                 match self.extension_host() {
                     Some(wv) => platform::extension_add(wv, &folder, move |r| respond.send(api_json(r.map(ext_json)))),
-                    None => respond.send(json!({ "error": "open a tab first" })),
+                    None => {
+                        // Ladybird: copy/link into Extensions/<id> when the folder already has a store id name.
+                        let id = folder.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+                        if !crate::webstore::valid_id(&id) {
+                            return respond.send(json!({ "error": "folder name must be a 32-letter extension id (a–p)" }));
+                        }
+                        let dest = self.paths.extensions.join(&id);
+                        if folder != dest {
+                            let _ = std::fs::remove_dir_all(&dest);
+                            if let Err(e) = copy_tree(&folder, &dest) {
+                                return respond.send(json!({ "error": e.to_string() }));
+                            }
+                        }
+                        let name = crate::webstore::display_name(&dest).unwrap_or_else(|| id.clone());
+                        respond.send(json!(ext_json(platform::Extension { id, name, enabled: true })));
+                    }
                 }
             }
             "sync" => self.db_reply(respond, sync_status),
@@ -631,6 +660,20 @@ pub(crate) fn permission_name(kind: i32) -> &'static str {
         12 => "Window management",
         _ => "Other",
     }
+}
+
+fn copy_tree(src: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dest)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let to = dest.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_tree(&entry.path(), &to)?;
+        } else {
+            std::fs::copy(entry.path(), to)?;
+        }
+    }
+    Ok(())
 }
 
 /// Open a page of the Windows Settings app (default apps, proxy).

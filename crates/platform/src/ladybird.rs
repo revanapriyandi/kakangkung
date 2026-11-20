@@ -78,18 +78,32 @@ impl Host {
     }
 
     /// Read host events until `load` with `done:true` for `want_id` (or any id when `want_id` is None).
-    fn wait_load_done(&self, want_id: Option<i32>) -> Result<(), String> {
+    /// Returns the last `url` / history flags seen for that view (from `url` / `history` events).
+    fn wait_load_done(&self, want_id: Option<i32>) -> Result<NavResult, String> {
+        let mut result = NavResult::default();
         for _ in 0..32 {
             let line = self.read_line()?;
-            if !line.contains("\"event\":\"load\"") || !line.contains("\"done\":true") {
-                continue;
-            }
             if let Some(id) = want_id {
-                if line.contains(&format!("\"id\":{id}")) || line.contains(&format!("\"id\": {id}")) {
-                    return Ok(());
+                if !(line.contains(&format!("\"id\":{id}")) || line.contains(&format!("\"id\": {id}"))) {
+                    continue;
                 }
-            } else {
-                return Ok(());
+            }
+            if line.contains("\"event\":\"url\"") {
+                if let Some(u) = json_str_field(&line, "url") {
+                    result.url = Some(u);
+                }
+            }
+            if line.contains("\"event\":\"title\"") {
+                if let Some(t) = json_str_field(&line, "title") {
+                    result.title = Some(t);
+                }
+            }
+            if line.contains("\"event\":\"history\"") {
+                result.can_back = line.contains("\"back\":true");
+                result.can_forward = line.contains("\"forward\":true");
+            }
+            if line.contains("\"event\":\"load\"") && line.contains("\"done\":true") {
+                return Ok(result);
             }
         }
         Err("Ladybird host: no load done event".into())
@@ -119,10 +133,76 @@ impl Host {
         Err("Ladybird host: no created event".into())
     }
 
-    pub fn navigate(&self, id: i32, url: &str) -> Result<(), String> {
+    pub fn navigate(&self, id: i32, url: &str) -> Result<NavResult, String> {
         let escaped = url.replace('\\', "\\\\").replace('"', "\\\"");
         self.send_line(&format!(r#"{{"cmd":"navigate","id":{id},"url":"{escaped}"}}"#))?;
         self.wait_load_done(Some(id))
+    }
+
+    pub fn reload(&self, id: i32) -> Result<NavResult, String> {
+        self.send_line(&format!(r#"{{"cmd":"reload","id":{id}}}"#))?;
+        self.wait_load_done(Some(id))
+    }
+
+    pub fn stop(&self, id: i32) -> Result<(), String> {
+        self.send_line(&format!(r#"{{"cmd":"stop","id":{id}}}"#))
+    }
+
+    pub fn go_back(&self, id: i32) -> Result<NavResult, String> {
+        self.send_line(&format!(r#"{{"cmd":"back","id":{id}}}"#))?;
+        self.wait_load_done(Some(id))
+    }
+
+    pub fn go_forward(&self, id: i32) -> Result<NavResult, String> {
+        self.send_line(&format!(r#"{{"cmd":"forward","id":{id}}}"#))?;
+        self.wait_load_done(Some(id))
+    }
+
+    pub fn set_visible(&self, id: i32, visible: bool) -> Result<(), String> {
+        self.send_line(&format!(
+            r#"{{"cmd":"visible","id":{id},"visible":{}}}"#,
+            if visible { "true" } else { "false" }
+        ))
+    }
+
+    pub fn screenshot(&self, id: i32, path: &str) -> Result<(), String> {
+        let escaped = path.replace('\\', "\\\\").replace('"', "\\\"");
+        self.send_line(&format!(r#"{{"cmd":"screenshot","id":{id},"path":"{escaped}"}}"#))?;
+        for _ in 0..32 {
+            let line = self.read_line()?;
+            if line.contains("\"event\":\"screenshot\"")
+                && (line.contains(&format!("\"id\":{id}")) || line.contains(&format!("\"id\": {id}")))
+            {
+                return if line.contains("\"ok\":true") {
+                    Ok(())
+                } else {
+                    Err(format!("screenshot failed: {line}"))
+                };
+            }
+        }
+        Err("Ladybird host: no screenshot event".into())
+    }
+
+    pub fn print_page(&self, id: i32) -> Result<(), String> {
+        self.send_line(&format!(r#"{{"cmd":"print","id":{id}}}"#))?;
+        for _ in 0..16 {
+            let line = self.read_line()?;
+            if line.contains("\"event\":\"print\"") {
+                return Ok(());
+            }
+        }
+        Err("Ladybird host: no print event".into())
+    }
+
+    pub fn a11y_tree(&self, id: i32) -> Result<String, String> {
+        self.send_line(&format!(r#"{{"cmd":"a11y","id":{id}}}"#))?;
+        for _ in 0..16 {
+            let line = self.read_line()?;
+            if line.contains("\"event\":\"a11y\"") {
+                return Ok(line);
+            }
+        }
+        Err("Ladybird host: no a11y event".into())
     }
 
     pub fn set_bounds(&self, id: i32, x: i32, y: i32, w: i32, h: i32) -> Result<(), String> {
@@ -144,6 +224,22 @@ impl Drop for Host {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// Snapshot of navigation state after a host command that ends with `load` done.
+#[derive(Debug, Default, Clone)]
+pub struct NavResult {
+    pub url: Option<String>,
+    pub title: Option<String>,
+    pub can_back: bool,
+    pub can_forward: bool,
+}
+
+fn json_str_field(line: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\":\"");
+    let rest = line.split(&needle).nth(1)?;
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
 }
 
 /// Human-readable status for Settings / diagnostics.

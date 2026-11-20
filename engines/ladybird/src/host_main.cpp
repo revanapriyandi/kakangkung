@@ -45,9 +45,20 @@ void on_url(void* user, char const* url)
     emit(std::string("{\"event\":\"url\",\"id\":") + std::to_string(hv->id) + ",\"url\":\"" + (url ? url : "") + "\"}");
 }
 
+void emit_history(HostView* hv)
+{
+    bool back = kk_lb_view_can_go_back(hv->view) != 0;
+    bool forward = kk_lb_view_can_go_forward(hv->view) != 0;
+    emit(std::string("{\"event\":\"history\",\"id\":") + std::to_string(hv->id)
+        + ",\"back\":" + (back ? "true" : "false")
+        + ",\"forward\":" + (forward ? "true" : "false") + "}");
+}
+
 void on_load(void* user, int done)
 {
     auto* hv = static_cast<HostView*>(user);
+    if (done)
+        emit_history(hv);
     emit(std::string("{\"event\":\"load\",\"id\":") + std::to_string(hv->id) + ",\"done\":" + (done ? "true" : "false") + "}");
 }
 
@@ -176,6 +187,32 @@ int main(int argc, char** argv)
             if (field_int(line, "id", id)) {
                 if (auto it = host.views.find(id); it != host.views.end())
                     kk_lb_view_stop(it->second.view);
+            }
+            continue;
+        }
+        if (has_cmd(line, "back")) {
+            int id = 0;
+            if (field_int(line, "id", id)) {
+                if (auto it = host.views.find(id); it != host.views.end())
+                    kk_lb_view_go_back(it->second.view);
+            }
+            continue;
+        }
+        if (has_cmd(line, "forward")) {
+            int id = 0;
+            if (field_int(line, "id", id)) {
+                if (auto it = host.views.find(id); it != host.views.end())
+                    kk_lb_view_go_forward(it->second.view);
+            }
+            continue;
+        }
+        if (has_cmd(line, "visible")) {
+            int id = 0;
+            if (field_int(line, "id", id)) {
+                bool on = line.find("\"visible\":true") != std::string::npos
+                    || line.find("\"visible\":1") != std::string::npos;
+                if (auto it = host.views.find(id); it != host.views.end())
+                    kk_lb_view_set_visible(it->second.view, on ? 1 : 0);
             }
             continue;
         }

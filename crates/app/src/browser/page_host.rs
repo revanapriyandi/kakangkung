@@ -149,6 +149,7 @@ impl Browser {
             "downloads" => native::downloads_doc(&self.downloads_list()),
             "extensions" => native::extensions_doc(&self.native.data),
             "taskmanager" => native::taskmanager_doc(&self.native.data),
+            "devtools" => native::devtools_doc(),
             "passwords" => native::passwords_doc(&self.native.data),
             _ => return,
         };

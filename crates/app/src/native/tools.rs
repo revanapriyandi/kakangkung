@@ -108,6 +108,54 @@ pub(crate) fn extensions_doc(answer: &Json) -> PageDoc {
     }
 }
 
+/// Native Ladybird DevTools page (LibWeb inspector docks here when the Boat host links LibWeb).
+pub(crate) fn devtools_doc() -> PageDoc {
+    PageDoc {
+        title: "Developer tools".into(),
+        search: String::new(),
+        nav: nav(&[
+            ("open:devtools", "Inspector", "\u{E90F}"),
+            ("open:taskmanager", "Task manager", "\u{E9D9}"),
+        ]),
+        sections: vec![
+            section(
+                "inspector",
+                "Ladybird inspector",
+                vec![
+                    Row::new(
+                        "Page engine",
+                        "Kakangkung uses Ladybird only. Docked Edge DevTools are not available.",
+                        Control::None,
+                    ),
+                    Row::new(
+                        "Elements & console",
+                        "Build kakangkung-ladybird-host with HAVE_LADYBIRD=1 on Boat to attach LibWeb's inspector to this panel.",
+                        Control::Link {
+                            id: "visit:https://boat.dev/dashboard".into(),
+                        },
+                    ),
+                    Row::new(
+                        "AI agents",
+                        "Drive navigation, screenshots, a11y, and eval through kakangkung-mcp (stdio MCP).",
+                        Control::None,
+                    ),
+                    Row::new("Keyboard", "F12 or Ctrl+Shift+I opens this page on Ladybird tabs", Control::None),
+                ],
+            ),
+            section(
+                "protocol",
+                "Host protocol",
+                vec![
+                    Row::new("Commands", "navigate · back · forward · reload · stop · visible · screenshot · print · a11y · eval", Control::None),
+                    Row::new("Docs", "engines/ladybird/protocol.md", Control::None),
+                ],
+            ),
+        ],
+        nav_on: "open:devtools".into(),
+        ..Default::default()
+    }
+}
+
 /// The Task manager page for the `memory` answer.
 pub(crate) fn taskmanager_doc(m: &Json) -> PageDoc {
     let mut procs: Vec<&Json> = m["processes"].as_array().map(|a| a.iter().collect()).unwrap_or_default();

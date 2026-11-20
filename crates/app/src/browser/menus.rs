@@ -448,6 +448,27 @@ impl Browser {
             "print" => {
                 if let Some(wv) = self.active_webview() {
                     let _ = wv.print();
+                } else if let Some(i) = self.index(self.active) {
+                    if let (Some(host), Some(vid)) = (self.ladybird.as_ref(), self.tabs[i].ladybird_view) {
+                        if let Err(e) = host.print_page(vid) {
+                            eprintln!("print: {e}");
+                        }
+                    }
+                }
+            }
+            "screenshot" => {
+                let base = self
+                    .ctx
+                    .data_directory()
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| self.paths.extensions.parent().unwrap_or(std::path::Path::new(".")).to_path_buf());
+                let dir = base.join("Screenshots");
+                let _ = std::fs::create_dir_all(&dir);
+                let path = dir.join(format!("kakangkung-{}.png", storage::now_ms()));
+                if let Err(e) = platform::capture_window_png(self.window.hwnd(), &path) {
+                    eprintln!("screenshot: {e}");
+                } else {
+                    eprintln!("screenshot saved {}", path.display());
                 }
             }
             "fullscreen" => return self.act(Action::Fullscreen),

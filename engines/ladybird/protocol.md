@@ -20,8 +20,15 @@ Environment: `KAKANGKUNG_LADYBIRD_HOST` may point Kakangkung at a non-default ho
 {"cmd":"create","url":"https://example.com","x":0,"y":0,"w":800,"h":600}
 {"cmd":"navigate","id":1,"url":"https://ladybird.org"}
 {"cmd":"bounds","id":1,"x":0,"y":80,"w":1200,"h":700}
+{"cmd":"visible","id":1,"visible":true}
 {"cmd":"reload","id":1}
 {"cmd":"stop","id":1}
+{"cmd":"back","id":1}
+{"cmd":"forward","id":1}
+{"cmd":"screenshot","id":1,"path":"C:\\\\temp\\\\page.png"}
+{"cmd":"print","id":1}
+{"cmd":"a11y","id":1}
+{"cmd":"eval","id":1,"js":"document.title"}
 {"cmd":"destroy","id":1}
 {"cmd":"quit"}
 ```
@@ -33,8 +40,13 @@ Environment: `KAKANGKUNG_LADYBIRD_HOST` may point Kakangkung at a non-default ho
 {"event":"created","id":1}
 {"event":"url","id":1,"url":"https://ladybird.org"}
 {"event":"title","id":1,"title":"Ladybird"}
+{"event":"history","id":1,"back":true,"forward":false}
 {"event":"load","id":1,"done":false}
 {"event":"load","id":1,"done":true}
+{"event":"screenshot","id":1,"path":"C:\\\\temp\\\\page.png","ok":true}
+{"event":"print","id":1,"ok":false,"reason":"stub"}
+{"event":"a11y","id":1,"tree":[{"role":"document","name":"…","children":[]}]}
+{"event":"eval","id":1,"ok":false,"result":"…"}
 ```
 
 `engine` is `"ladybird"` when LibWeb is linked, `"stub"` for the offline host.

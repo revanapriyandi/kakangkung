@@ -13,8 +13,42 @@ mod hwnd;
 
 struct View {
     url: String,
+    back: Vec<String>,
+    forward: Vec<String>,
     #[cfg(windows)]
     surface: Option<hwnd::Surface>,
+}
+
+impl View {
+    fn emit_nav(&self, id: i32) {
+        emit(&format!(r#"{{"event":"url","id":{id},"url":"{}"}}"#, self.url));
+        let title = if self.url == "about:blank" { "New Tab" } else { self.url.as_str() };
+        emit(&format!(r#"{{"event":"title","id":{id},"title":"{title}"}}"#));
+        emit(&format!(
+            r#"{{"event":"history","id":{id},"back":{},"forward":{}}}"#,
+            !self.back.is_empty(),
+            !self.forward.is_empty()
+        ));
+        emit(&format!(r#"{{"event":"load","id":{id},"done":true}}"#));
+        #[cfg(windows)]
+        if let Some(s) = self.surface.as_ref() {
+            // surface label updated by callers that hold &mut
+            let _ = s;
+        }
+    }
+
+    fn go_to(&mut self, url: String, record: bool) {
+        if record && self.url != url {
+            self.back.push(std::mem::replace(&mut self.url, url));
+            self.forward.clear();
+        } else {
+            self.url = url;
+        }
+        #[cfg(windows)]
+        if let Some(s) = self.surface.as_mut() {
+            s.set_label(&self.url);
+        }
+    }
 }
 
 fn emit(json: &str) {
@@ -91,32 +125,53 @@ fn main() {
             let surface = hwnd::Surface::create(parent, x, y, w, h, &url);
             #[cfg(not(windows))]
             let _ = (parent, x, y, w, h);
-            views.insert(
-                id,
-                View {
-                    url: url.clone(),
-                    #[cfg(windows)]
-                    surface,
-                },
-            );
+            let v = View {
+                url: url.clone(),
+                back: vec![],
+                forward: vec![],
+                #[cfg(windows)]
+                surface,
+            };
             emit(&format!(r#"{{"event":"created","id":{id}}}"#));
-            emit(&format!(r#"{{"event":"url","id":{id},"url":"{url}"}}"#));
-            let title = if url == "about:blank" { "New Tab" } else { &url };
-            emit(&format!(r#"{{"event":"title","id":{id},"title":"{title}"}}"#));
-            emit(&format!(r#"{{"event":"load","id":{id},"done":true}}"#));
+            v.emit_nav(id);
+            views.insert(id, v);
             continue;
         }
         if has_cmd(&line, "navigate") {
             if let (Some(id), Some(url)) = (field_int(&line, "id"), field_str(&line, "url")) {
                 if let Some(v) = views.get_mut(&id) {
-                    v.url = url.clone();
-                    #[cfg(windows)]
-                    if let Some(s) = v.surface.as_mut() {
-                        s.set_label(&url);
+                    v.go_to(url, true);
+                    v.emit_nav(id);
+                }
+            }
+            continue;
+        }
+        if has_cmd(&line, "back") {
+            if let Some(id) = field_int(&line, "id") {
+                if let Some(v) = views.get_mut(&id) {
+                    if let Some(prev) = v.back.pop() {
+                        v.forward.push(std::mem::replace(&mut v.url, prev));
+                        #[cfg(windows)]
+                        if let Some(s) = v.surface.as_mut() {
+                            s.set_label(&v.url);
+                        }
+                        v.emit_nav(id);
                     }
-                    emit(&format!(r#"{{"event":"url","id":{id},"url":"{url}"}}"#));
-                    emit(&format!(r#"{{"event":"title","id":{id},"title":"{url}"}}"#));
-                    emit(&format!(r#"{{"event":"load","id":{id},"done":true}}"#));
+                }
+            }
+            continue;
+        }
+        if has_cmd(&line, "forward") {
+            if let Some(id) = field_int(&line, "id") {
+                if let Some(v) = views.get_mut(&id) {
+                    if let Some(next) = v.forward.pop() {
+                        v.back.push(std::mem::replace(&mut v.url, next));
+                        #[cfg(windows)]
+                        if let Some(s) = v.surface.as_mut() {
+                            s.set_label(&v.url);
+                        }
+                        v.emit_nav(id);
+                    }
                 }
             }
             continue;
@@ -144,17 +199,90 @@ fn main() {
             }
             continue;
         }
+        if has_cmd(&line, "visible") {
+            if let Some(id) = field_int(&line, "id") {
+                let on = line.contains("\"visible\":true") || line.contains("\"visible\":1");
+                if let Some(v) = views.get_mut(&id) {
+                    #[cfg(windows)]
+                    if let Some(s) = v.surface.as_mut() {
+                        s.set_visible(on);
+                    }
+                    #[cfg(not(windows))]
+                    let _ = (v, on);
+                }
+            }
+            continue;
+        }
         if has_cmd(&line, "reload") {
             if let Some(id) = field_int(&line, "id") {
-                if let Some(v) = views.get(&id) {
-                    let url = v.url.clone();
-                    emit(&format!(r#"{{"event":"url","id":{id},"url":"{url}"}}"#));
-                    emit(&format!(r#"{{"event":"load","id":{id},"done":true}}"#));
+                if let Some(v) = views.get_mut(&id) {
+                    #[cfg(windows)]
+                    if let Some(s) = v.surface.as_mut() {
+                        s.set_label(&v.url);
+                    }
+                    v.emit_nav(id);
                 }
             }
             continue;
         }
         if has_cmd(&line, "stop") {
+            if let Some(id) = field_int(&line, "id") {
+                emit(&format!(r#"{{"event":"load","id":{id},"done":true}}"#));
+            }
+            continue;
+        }
+        if has_cmd(&line, "screenshot") {
+            if let Some(id) = field_int(&line, "id") {
+                let path = field_str(&line, "path").unwrap_or_else(|| format!("kakangkung-{id}.png"));
+                let ok = views.get(&id).map(|v| {
+                    #[cfg(windows)]
+                    {
+                        v.surface.as_ref().map(|s| s.capture_png(&path).is_ok()).unwrap_or(false)
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        let _ = (&v, &path);
+                        // Minimal valid 1×1 PNG so agents can exercise the tool off Windows.
+                        let png: &[u8] = &[
+                            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+                            0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+                            0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8,
+                            0xcf, 0xc0, 0x00, 0x00, 0x00, 0x03, 0x00, 0x01, 0x00, 0x05, 0xfe, 0xd4, 0xef, 0x00, 0x00,
+                            0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+                        ];
+                        std::fs::write(&path, png).is_ok()
+                    }
+                }).unwrap_or(false);
+                emit(&format!(
+                    r#"{{"event":"screenshot","id":{id},"path":"{path}","ok":{}}}"#,
+                    if ok { "true" } else { "false" }
+                ));
+            }
+            continue;
+        }
+        if has_cmd(&line, "print") {
+            if let Some(id) = field_int(&line, "id") {
+                // LibWeb print lands with HAVE_LADYBIRD; stub acknowledges the request.
+                emit(&format!(r#"{{"event":"print","id":{id},"ok":false,"reason":"stub"}}"#));
+            }
+            continue;
+        }
+        if has_cmd(&line, "a11y") {
+            if let Some(id) = field_int(&line, "id") {
+                let url = views.get(&id).map(|v| v.url.as_str()).unwrap_or("");
+                emit(&format!(
+                    r#"{{"event":"a11y","id":{id},"tree":[{{"role":"document","name":"{url}","children":[]}}]}}"#
+                ));
+            }
+            continue;
+        }
+        if has_cmd(&line, "eval") {
+            if let Some(id) = field_int(&line, "id") {
+                let _ = field_str(&line, "js");
+                emit(&format!(
+                    r#"{{"event":"eval","id":{id},"ok":false,"result":"eval requires LibWeb-linked host"}}"#
+                ));
+            }
             continue;
         }
     }

@@ -153,7 +153,12 @@ impl Browser {
             Some(wv) => {
                 platform::extension_add(wv, &folder, finish);
             }
-            None => finish(Err("Open a web tab before installing an extension.".into())),
+            // Ladybird-only: install is filesystem + local registry (no WebView2 profile).
+            None => {
+                let id = ext.clone();
+                let name = webstore::display_name(&folder).unwrap_or_else(|| id.clone());
+                finish(Ok(platform::Extension { id, name, enabled: true }));
+            }
         }
     }
 
@@ -175,12 +180,17 @@ impl Browser {
     /// The extensions button was pressed at (`right`, `top`): list the extensions, then show
     /// the menu (`Msg::ExtMenu`).
     pub(crate) fn request_extensions_menu(&mut self, right: f64, top: f64) {
-        let proxy = self.proxy.clone();
         match self.extension_host() {
-            Some(wv) => platform::extensions_list(wv, move |r| {
-                let _ = proxy.send_event(Msg::ExtMenu { list: r.unwrap_or_default(), x: right, y: top });
-            }),
-            None => self.show_extensions_menu(vec![], right, top),
+            Some(wv) => {
+                let proxy = self.proxy.clone();
+                platform::extensions_list(wv, move |r| {
+                    let _ = proxy.send_event(Msg::ExtMenu { list: r.unwrap_or_default(), x: right, y: top });
+                });
+            }
+            None => {
+                let list = webstore::list_installed(&self.paths.extensions);
+                self.show_extensions_menu(list, right, top);
+            }
         }
     }
 
@@ -355,13 +365,20 @@ impl Browser {
             self.toggle_pin(ext);
         }
         self.close_bubble();
-        let Some(wv) = self.extension_host() else { return };
-        let id = ext.to_string();
-        platform::extension_change(wv, ext, None, move |r| {
-            if let Err(e) = r {
-                eprintln!("remove extension {id}: {e}");
-            }
-        });
+        if let Some(wv) = self.extension_host() {
+            let id = ext.to_string();
+            platform::extension_change(wv, ext, None, move |r| {
+                if let Err(e) = r {
+                    eprintln!("remove extension {id}: {e}");
+                }
+            });
+            return;
+        }
+        // Ladybird: drop the unpacked folder (and optional `.disabled` marker).
+        let folder = self.paths.extensions.join(ext);
+        if let Err(e) = std::fs::remove_dir_all(&folder) {
+            eprintln!("remove extension {ext}: {e}");
+        }
     }
 
     /// Open extension `ext`'s pop-up with DevTools on it; it stays open while inspected.
