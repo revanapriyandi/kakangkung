@@ -44,7 +44,10 @@ pub mod page;
 pub mod popup;
 pub mod sqlite;
 
-pub use downloads::{download_action, downloads, take_finished, DownloadAction, DownloadInfo, DownloadState};
+pub use downloads::{
+    download_action, downloads, ladybird_owns, remove_ladybird, take_finished, upsert_ladybird, DownloadAction,
+    DownloadInfo, DownloadState,
+};
 pub use hash::{random_bytes, sha256, sha256_hex};
 pub use secret::{aes_gcm_decrypt, base64_decode, protect, unprotect};
 

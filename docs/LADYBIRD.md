@@ -83,7 +83,10 @@ Or set `KAKANGKUNG_LADYBIRD_HOST` to the host path.
 | Load events → UI / Self-test Ladybird path | Done |
 | Extension pop-ups / `window.open` as Ladybird tabs | Done (no WebView2 surface) |
 | LibWeb `HeadlessWebView` + native blit | `view_ladybird.cpp` (HAVE_LADYBIRD=1) — build on Boat `bx_cnfw3mch` |
-| Memory Saver TrySuspend / SmartScreen | Replace with Ladybird equivalents (KB-9) |
+| Downloads / PastDownload from LibWeb | KB-6 — FileDownloader events → live list + SQLite |
+| Page zoom over host protocol | KB-8 (next) |
+| Adblock request intercept | KB-7 (LibWeb ResourceLoader + EasyList) |
+| Memory Saver (discard, not fake Suspend) | KB-9 — map SuspendDue → DropWebview |
 | Chrome-parity pillars | See store `docs/chrome-parity-roadmap.md` (KB-2…KB-9) |
 
 ## Related

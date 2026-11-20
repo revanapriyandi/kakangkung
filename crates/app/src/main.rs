@@ -435,6 +435,15 @@ fn main() {
 
         // Background clocks: window fallback, idle preparation, memory saver, automatic sync.
         let mut wake = browser.memory_tick();
+        // Drain Ladybird host stdout so spontaneous download events reach Downloads / PastDownload
+        // even when no navigate/create wait is active.
+        if browser.ladybird.is_some() {
+            if browser.ladybird.as_ref().is_some_and(|h| h.poll_events()) {
+                let _ = browser.proxy.send_event(Msg::DownloadsChanged);
+            }
+            let next = Instant::now() + Duration::from_millis(100);
+            wake = Some(wake.map_or(next, |w| w.min(next)));
+        }
         if let Some(at) = browser.preview_tick() {
             wake = Some(wake.map_or(at, |w| w.min(at)));
         }

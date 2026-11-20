@@ -9,11 +9,13 @@
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, TryRecvError};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use engine::{self, Kind, Resolution};
+
+use crate::downloads::{remove_ladybird, upsert_ladybird, DownloadInfo, DownloadState};
 
 /// How long a single host wait (create / navigate / screenshot / …) may block the UI thread.
 const HOST_WAIT: Duration = Duration::from_secs(8);
@@ -118,6 +120,41 @@ impl Host {
         stdin.flush().map_err(|e| format!("Ladybird host flush: {e}"))
     }
 
+    /// Apply spontaneous host events (downloads, …). Returns true when the line was consumed
+    /// as a side effect and should not satisfy a wait for another event.
+    fn apply_side_effect(line: &str) -> bool {
+        if line.contains("\"event\":\"download_removed\"") {
+            if let Some(id) = json_u64_field(line, "downloadId") {
+                remove_ladybird(id);
+                return true;
+            }
+        }
+        if line.contains("\"event\":\"download\"") && line.contains("\"downloadId\"") {
+            if let Some(info) = parse_download_event(line) {
+                upsert_ladybird(info);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Drain queued host stdout without blocking. Returns true if any download side effect applied.
+    pub fn poll_events(&self) -> bool {
+        let mut any = false;
+        loop {
+            match self.lines.try_recv() {
+                Ok(line) => {
+                    if Self::apply_side_effect(&line) {
+                        any = true;
+                    }
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => break,
+            }
+        }
+        any
+    }
+
     /// Read one host line, pumping Win32 messages so cross-process HWND parenting can proceed.
     pub fn read_line(&self) -> Result<String, String> {
         self.read_line_timeout(HOST_WAIT)
@@ -148,6 +185,9 @@ impl Host {
         let deadline = Instant::now() + HOST_WAIT;
         while Instant::now() < deadline {
             let line = self.read_line_timeout(deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50)))?;
+            if Self::apply_side_effect(&line) {
+                continue;
+            }
             if let Some(id) = want_id {
                 if !(line.contains(&format!("\"id\":{id}")) || line.contains(&format!("\"id\": {id}"))) {
                     continue;
@@ -184,6 +224,9 @@ impl Host {
         while Instant::now() < deadline {
             let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
             let line = self.read_line_timeout(remain)?;
+            if Self::apply_side_effect(&line) {
+                continue;
+            }
             if line.contains("\"event\":\"created\"") {
                 if let Some(rest) = line.split("\"id\":").nth(1) {
                     id = rest.trim().trim_matches(|c: char| !c.is_ascii_digit()).parse().unwrap_or(0);
@@ -239,6 +282,9 @@ impl Host {
         while Instant::now() < deadline {
             let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
             let line = self.read_line_timeout(remain)?;
+            if Self::apply_side_effect(&line) {
+                continue;
+            }
             if line.contains("\"event\":\"screenshot\"")
                 && (line.contains(&format!("\"id\":{id}")) || line.contains(&format!("\"id\": {id}")))
             {
@@ -258,6 +304,9 @@ impl Host {
         while Instant::now() < deadline {
             let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
             let line = self.read_line_timeout(remain)?;
+            if Self::apply_side_effect(&line) {
+                continue;
+            }
             if line.contains("\"event\":\"print\"") {
                 return Ok(());
             }
@@ -271,6 +320,9 @@ impl Host {
         while Instant::now() < deadline {
             let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
             let line = self.read_line_timeout(remain)?;
+            if Self::apply_side_effect(&line) {
+                continue;
+            }
             if line.contains("\"event\":\"a11y\"") {
                 return Ok(line);
             }
@@ -295,6 +347,9 @@ impl Host {
         while Instant::now() < deadline {
             let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
             let line = self.read_line_timeout(remain)?;
+            if Self::apply_side_effect(&line) {
+                continue;
+            }
             if line.contains("\"event\":\"download_started\"") {
                 return if line.contains("\"ok\":true") {
                     Ok(())
@@ -342,6 +397,50 @@ fn json_str_field(line: &str, key: &str) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
+fn json_u64_field(line: &str, key: &str) -> Option<u64> {
+    let needle = format!("\"{key}\":");
+    let rest = line.split(&needle).nth(1)?;
+    let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    num.parse().ok()
+}
+
+fn json_i64_field(line: &str, key: &str) -> Option<i64> {
+    let needle = format!("\"{key}\":");
+    let rest = line.split(&needle).nth(1)?;
+    let mut chars = rest.chars().peekable();
+    let neg = chars.peek() == Some(&'-');
+    if neg {
+        chars.next();
+    }
+    let digits: String = chars.take_while(|c| c.is_ascii_digit()).collect();
+    let n: i64 = digits.parse().ok()?;
+    Some(if neg { -n } else { n })
+}
+
+fn parse_download_event(line: &str) -> Option<DownloadInfo> {
+    let id = json_u64_field(line, "downloadId")?;
+    let state = if line.contains("\"state\":\"done\"") {
+        DownloadState::Done
+    } else if line.contains("\"state\":\"paused\"") {
+        DownloadState::Paused
+    } else if line.contains("\"state\":\"stopped\"") {
+        DownloadState::Stopped
+    } else {
+        DownloadState::InProgress
+    };
+    Some(DownloadInfo {
+        id,
+        url: json_str_field(line, "url").unwrap_or_default(),
+        path: json_str_field(line, "path").unwrap_or_default(),
+        received: json_i64_field(line, "received").unwrap_or(0),
+        total: json_i64_field(line, "total").unwrap_or(-1),
+        state,
+        can_resume: line.contains("\"can_resume\":true"),
+        started: 0,
+        private: false,
+    })
+}
+
 /// Human-readable status for Settings / diagnostics.
 pub fn status_line(resolution: &Resolution) -> String {
     match (&resolution.host, resolution.active) {
@@ -352,5 +451,29 @@ pub fn status_line(resolution: &Resolution) -> String {
         (None, Kind::Ladybird) => {
             "Page engine: Ladybird (host missing — build on Boat, see docs/LADYBIRD.md; WebView2 is disabled)".into()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_download_progress_line() {
+        let line = r#"{"event":"download","downloadId":3,"url":"https://ex/a.bin","path":"C:\\a.bin","received":12,"total":-1,"state":"in_progress","can_resume":false}"#;
+        let info = parse_download_event(line).expect("parse");
+        assert_eq!(info.id, 3);
+        assert_eq!(info.received, 12);
+        assert_eq!(info.total, -1);
+        assert_eq!(info.state, DownloadState::InProgress);
+        assert_eq!(info.url, "https://ex/a.bin");
+    }
+
+    #[test]
+    fn parse_download_done_and_id() {
+        let line = r#"{"event":"download","downloadId":9,"url":"u","path":"p","received":100,"total":100,"state":"done","can_resume":false}"#;
+        let info = parse_download_event(line).unwrap();
+        assert_eq!(info.state, DownloadState::Done);
+        assert_eq!(json_u64_field(r#"{"event":"download_removed","downloadId":9}"#, "downloadId"), Some(9));
     }
 }

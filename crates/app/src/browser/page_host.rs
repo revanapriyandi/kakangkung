@@ -282,7 +282,14 @@ impl Browser {
         let path = self.downloads_list().as_array().into_iter().flatten().find(|d| d["id"] == id.as_str()).and_then(|d| d["path"].as_str()).unwrap_or_default().to_string();
         let kept = id.strip_prefix('s').and_then(|n| n.parse::<i64>().ok());
         let live = id.parse::<u64>().unwrap_or(0);
+        let ladybird_host_action = |action: &str| -> Result<(), String> {
+            let host = self.ladybird.as_ref().ok_or_else(|| "no Ladybird host".to_string())?;
+            host.download_action(live, action)
+        };
         let r = match what {
+            "pause" if platform::ladybird_owns(live) => ladybird_host_action("pause"),
+            "resume" if platform::ladybird_owns(live) => ladybird_host_action("resume"),
+            "cancel" if platform::ladybird_owns(live) => ladybird_host_action("cancel"),
             "pause" => download_action(live, DownloadAction::Pause).map_err(|e| e.message()),
             "resume" => download_action(live, DownloadAction::Resume).map_err(|e| e.message()),
             "cancel" => download_action(live, DownloadAction::Cancel).map_err(|e| e.message()),

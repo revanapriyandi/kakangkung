@@ -102,3 +102,8 @@ always emitting that event (even when history is empty — a no-op ack) so waite
 Real LibWeb `FileDownloader` (not WebView2). Host registers a `FileDownloaderObserver` and
 emits `download` / `download_removed` as transfers progress. Start with `download` (url +
 absolute path); control with `download_action` (`pause` / `resume` / `cancel`).
+
+Kakangkung demuxes those events in every host wait loop and polls host stdout while idle
+(`Host::poll_events`). Live rows feed `platform::downloads()` / the Downloads page; finished
+non-incognito rows go through `take_finished` → `PastDownload` SQLite. Pause / resume / cancel
+from the Downloads page call `Host::download_action` when `ladybird_owns(id)`.
