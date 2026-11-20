@@ -216,6 +216,37 @@ int main(int argc, char** argv)
             }
             continue;
         }
+        if (has_cmd(line, "screenshot")) {
+            int id = 0;
+            std::string path;
+            if (field_int(line, "id", id)) {
+                field_str(line, "path", path);
+                // HWND capture is implemented in the Rust stub host; C++ stub acknowledges until LibWeb.
+                emit(std::string("{\"event\":\"screenshot\",\"id\":") + std::to_string(id)
+                    + ",\"path\":\"" + path + "\",\"ok\":false,\"reason\":\"stub\"}");
+            }
+            continue;
+        }
+        if (has_cmd(line, "print")) {
+            int id = 0;
+            if (field_int(line, "id", id))
+                emit(std::string("{\"event\":\"print\",\"id\":") + std::to_string(id) + ",\"ok\":false,\"reason\":\"stub\"}");
+            continue;
+        }
+        if (has_cmd(line, "a11y")) {
+            int id = 0;
+            if (field_int(line, "id", id))
+                emit(std::string("{\"event\":\"a11y\",\"id\":") + std::to_string(id)
+                    + ",\"tree\":[{\"role\":\"document\",\"name\":\"\",\"children\":[]}]}");
+            continue;
+        }
+        if (has_cmd(line, "eval")) {
+            int id = 0;
+            if (field_int(line, "id", id))
+                emit(std::string("{\"event\":\"eval\",\"id\":") + std::to_string(id)
+                    + ",\"ok\":false,\"result\":\"eval requires LibWeb-linked host\"}");
+            continue;
+        }
         kk_lb_session_pump(host.session);
     }
 
