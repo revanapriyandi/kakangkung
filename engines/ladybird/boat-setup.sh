@@ -33,14 +33,20 @@ export PATH="${HOME}/.local/bin:${PATH}"
 if ! python3 -c 'import pathlib,sys; p=pathlib.Path.home()/"Qt"; sys.exit(0 if any(p.glob("6.1*/gcc_64/lib/cmake/Qt6/Qt6Config.cmake")) else 1)' 2>/dev/null; then
   sudo apt-get install -y --no-install-recommends pipx python3-venv || true
   if ! command -v aqt >/dev/null 2>&1; then
-    pipx install aqtinstall || {
+    if ! pipx install aqtinstall; then
       python3 -m venv "${HOME}/aqt-venv"
       "${HOME}/aqt-venv/bin/pip" install -q aqtinstall
-    }
+      export PATH="${HOME}/aqt-venv/bin:${PATH}"
+    fi
   fi
-  AQT="$(command -v aqt || echo "${HOME}/aqt-venv/bin/aqt")"
-  "$AQT" install-qt linux desktop 6.10.0 linux_gcc_64 -O "${HOME}/Qt" -m qtpositioning qtwayland \
-    || "$AQT" install-qt linux desktop 6.10.0 gcc_64 -O "${HOME}/Qt" -m qtpositioning || true
+  AQT="$(command -v aqt || true)"
+  if [[ -z "$AQT" && -x "${HOME}/aqt-venv/bin/aqt" ]]; then
+    AQT="${HOME}/aqt-venv/bin/aqt"
+  fi
+  if [[ -n "$AQT" ]]; then
+    "$AQT" install-qt linux desktop 6.10.0 linux_gcc_64 -O "${HOME}/Qt" -m qtpositioning qtwayland \
+      || "$AQT" install-qt linux desktop 6.10.0 gcc_64 -O "${HOME}/Qt" -m qtpositioning || true
+  fi
 fi
 if QT_CFG=$(echo "${HOME}"/Qt/6.1*/gcc_64/lib/cmake/Qt6/Qt6Config.cmake); then
   QT_PREFIX=$(dirname "$(dirname "$(dirname "$(dirname "$QT_CFG")")")")
