@@ -77,6 +77,17 @@ bool field_int(std::string const& line, char const* key, int& out)
     return true;
 }
 
+bool field_int64(std::string const& line, char const* key, int64_t& out)
+{
+    auto needle = std::string("\"") + key + "\":";
+    auto pos = line.find(needle);
+    if (pos == std::string::npos)
+        return false;
+    pos += needle.size();
+    out = static_cast<int64_t>(std::atoll(line.c_str() + pos));
+    return true;
+}
+
 bool field_double(std::string const& line, char const* key, double& out)
 {
     auto needle = std::string("\"") + key + "\":";
@@ -353,6 +364,24 @@ int main(int argc, char** argv)
                     + ",\"ok\":" + (ok ? "true" : "false")
                     + (ok ? "" : ",\"reason\":\"print unavailable\"") + "}");
             }
+            continue;
+        }
+        if (has_cmd(line, "clear_data")) {
+            bool const has_cookies = line.find("\"cookies\"") != std::string::npos;
+            bool const has_cache = line.find("\"cache\"") != std::string::npos;
+            bool cookies = !has_cookies && !has_cache;
+            bool cache = cookies;
+            if (has_cookies)
+                cookies = line.find("\"cookies\":true") != std::string::npos || line.find("\"cookies\":1") != std::string::npos;
+            if (has_cache)
+                cache = line.find("\"cache\":true") != std::string::npos || line.find("\"cache\":1") != std::string::npos;
+            int64_t since_ms = 0;
+            field_int64(line, "since", since_ms);
+            bool ok = kk_lb_clear_data(cookies ? 1 : 0, cache ? 1 : 0, since_ms) != 0;
+            emit(std::string("{\"event\":\"clear_data\",\"ok\":") + (ok ? "true" : "false")
+                + ",\"cookies\":" + (cookies ? "true" : "false")
+                + ",\"cache\":" + (cache ? "true" : "false")
+                + (ok ? "" : ",\"reason\":\"clear browsing data unavailable\"") + "}");
             continue;
         }
         if (has_cmd(line, "adblock")) {

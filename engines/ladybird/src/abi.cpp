@@ -214,6 +214,7 @@ int kk_lb_download_start(char const*, char const*) { return 0; }
 int kk_lb_download_action(uint64_t, char const*) { return 0; }
 int kk_lb_adblock_configure(int, char const*) { return 0; }
 int kk_lb_adblock_enabled(void) { return 0; }
+int kk_lb_clear_data(int, int, int64_t) { return 0; }
 #endif
 
 void kk_lb_string_free(char* s)

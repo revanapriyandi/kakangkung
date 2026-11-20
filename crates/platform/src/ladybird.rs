@@ -369,6 +369,31 @@ window.ipc=window.ipc||{{postMessage:function(m){{try{{console.log('kk-pw:'+m)}}
         self.eval(id, &bootstrap).map(|_| ())
     }
 
+    /// KB-11: clear LibWeb cookies/site data and/or HTTP cache (`since_ms` 0 = all time).
+    pub fn clear_data(&self, cookies: bool, cache: bool, since_ms: i64) -> Result<(), String> {
+        self.send_line(&format!(
+            r#"{{"cmd":"clear_data","cookies":{},"cache":{},"since":{since_ms}}}"#,
+            if cookies { "true" } else { "false" },
+            if cache { "true" } else { "false" },
+        ))?;
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline {
+            let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
+            let line = self.read_line_timeout(remain)?;
+            if Self::apply_side_effect(&line) {
+                continue;
+            }
+            if line.contains("\"event\":\"clear_data\"") {
+                return if line.contains("\"ok\":true") {
+                    Ok(())
+                } else {
+                    Err(format!("clear_data failed: {line}"))
+                };
+            }
+        }
+        Err("Ladybird host: no clear_data event".into())
+    }
+
     /// KB-7: push adblock on/off + allowlist into LibWeb ContentFilter/ContentBlocker.
     pub fn adblock_configure(&self, enabled: bool, allowlist: &str) -> Result<(), String> {
         let allow = allowlist.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");

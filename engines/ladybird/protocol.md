@@ -39,6 +39,7 @@ Environment: `KAKANGKUNG_LADYBIRD_HOST` may point Kakangkung at a non-default ho
 {"cmd":"download","url":"https://example.com/file.bin","path":"/tmp/file.bin"}
 {"cmd":"download_action","downloadId":1,"action":"pause"}
 {"cmd":"adblock","enabled":true,"allowlist":"news.example.com\\nother.example.com"}
+{"cmd":"clear_data","cookies":true,"cache":true,"since":0}
 {"cmd":"destroy","id":1}
 {"cmd":"quit"}
 ```
@@ -67,6 +68,7 @@ Environment: `KAKANGKUNG_LADYBIRD_HOST` may point Kakangkung at a non-default ho
 {"event":"download","downloadId":1,"url":"https://example.com/file.bin","path":"/tmp/file.bin","received":0,"total":-1,"state":"in_progress","can_resume":false}
 {"event":"download_removed","downloadId":1}
 {"event":"adblock","ok":true,"enabled":true}
+{"event":"clear_data","ok":true,"cookies":true,"cache":true}
 {"event":"page_ipc","id":1,"message":"kk:pw:focus:{…}"}
 ```
 
@@ -128,3 +130,9 @@ Per-site allowlist is enforced in Rust; patterns stay global in LibWeb when enab
 After load, Kakangkung may `eval` `assets/passwords.js` with a Ladybird `window.ipc`
 polyfill that logs `kk-pw:` + message. The host forwards those as `page_ipc` events.
 Fill uses `eval` of `window.__kkPwFill(user, pass)` gated on `location.origin`.
+
+## Clear browsing data (KB-11)
+
+`clear_data` calls LibWeb `Application::clear_browsing_data`: cookies + site storage
+(`delete_site_data`) and/or HTTP cache (`delete_cached_files`). `since` is Unix ms
+(0 = all time). History stays in Kakangkung SQLite. Fail closed when LibWeb is unavailable.

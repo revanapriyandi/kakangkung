@@ -139,6 +139,12 @@ KK_LB_API int kk_lb_download_action(uint64_t id, char const* action_utf8 /* paus
 KK_LB_API int kk_lb_adblock_configure(int enabled, char const* allowlist_utf8);
 KK_LB_API int kk_lb_adblock_enabled(void);
 
+/**
+ * KB-11: clear LibWeb cookies/site storage and/or HTTP cache accessed since since_ms
+ * (Unix ms; 0 = all time). Returns 1 when LibWeb finished the clear, 0 on failure.
+ */
+KK_LB_API int kk_lb_clear_data(int cookies, int cache, int64_t since_ms);
+
 KK_LB_API void kk_lb_string_free(char* s);
 
 /** Pump Ladybird / stub events; return non-zero if the session should quit. */

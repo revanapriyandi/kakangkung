@@ -371,7 +371,11 @@ fn main() {
                 }
                 // "Clear browsing data when you exit": history, cookies, cache and site data.
                 if browser.settings.clear_on_exit && matches!(run, Run::Normal(_) | Run::Window { incognito: false, .. }) {
-                    if let Some(wv) = browser.extension_host() {
+                    if let Some(host) = browser.ladybird.as_ref() {
+                        if let Err(e) = host.clear_data(true, true, 0) {
+                            eprintln!("clear browsing data on exit: {e}");
+                        }
+                    } else if let Some(wv) = browser.extension_host() {
                         let _ = wv.clear_all_browsing_data();
                     }
                     browser.db(|s| s.clear_history());

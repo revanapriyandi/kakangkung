@@ -499,7 +499,11 @@ impl Browser {
                 let all = body.trim() == "all";
                 let s = &self.settings;
                 if all && (s.clear_cookies || s.clear_cache) {
-                    if let Some(wv) = self.extension_host() {
+                    if let Some(host) = self.ladybird.as_ref() {
+                        if let Err(e) = host.clear_data(s.clear_cookies, s.clear_cache, since.unwrap_or(0)) {
+                            eprintln!("clear browsing data: {e}");
+                        }
+                    } else if let Some(wv) = self.extension_host() {
                         platform::clear_browsing_data(wv, s.clear_cookies, s.clear_cache, since.unwrap_or(0), |r| {
                             if let Err(e) = r {
                                 eprintln!("clear browsing data: {e}");
