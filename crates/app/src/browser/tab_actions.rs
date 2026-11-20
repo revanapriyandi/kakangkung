@@ -259,7 +259,7 @@ impl Browser {
         self.popup.show(
             "printpreview",
             12.0,
-            platform::frame::FRAME_H as f32 - 4.0,
+            platform::frame::FRAME_H - 4.0,
             420.0,
             vec![
                 PopupRow { kind: "note".into(), title: "Print preview".into(), ..Default::default() },
