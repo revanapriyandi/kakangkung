@@ -398,6 +398,18 @@ int main(int argc, char** argv)
                 + (ok ? "" : ",\"reason\":\"reset failed\"") + "}");
             continue;
         }
+        if (has_cmd(line, "processes")) {
+            char* list = nullptr;
+            bool ok = kk_lb_processes_json(&list) != 0;
+            if (ok && list) {
+                emit(std::string("{\"event\":\"processes\",\"ok\":true,\"processes\":") + list + "}");
+                kk_lb_string_free(list);
+            } else {
+                emit("{\"event\":\"processes\",\"ok\":false,\"processes\":[],\"reason\":\"process manager unavailable\"}");
+                kk_lb_string_free(list);
+            }
+            continue;
+        }
         if (has_cmd(line, "find")) {
             int id = 0;
             if (field_int(line, "id", id)) {

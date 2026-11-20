@@ -61,6 +61,11 @@ pub struct ProcessMemory {
     pub commit: u64,
 }
 
+/// Private working set, commit, and creation time of `pid` (zeros when it cannot be opened).
+pub fn process_counters(pid: u32) -> (u64, u64, u64) {
+    read(pid)
+}
+
 /// (private working set, commit, creation time) of `pid`; zeros when it cannot be opened.
 pub(crate) fn read(pid: u32) -> (u64, u64, u64) {
     // SAFETY: the handle is closed below; the counters struct size is passed as `cb`; the
@@ -169,9 +174,9 @@ fn webview_kinds(wv: &WebView) -> HashMap<u32, &'static str> {
 }
 
 /// The app tree plus every process reported by the supplied WebView2 environments and optional
-/// Ladybird host PID seeds, deduplicated. A shared runtime belongs to the entire environment;
-/// this is not exact per-tab attribution. Ladybird is one host process with many views — we do
-/// not invent fake per-tab renderer PIDs.
+/// Ladybird host PID seeds, deduplicated. A shared runtime belongs to the entire environment.
+/// Ladybird WebContent PIDs (process-per-site) come from LibWeb `process_snapshots` via the
+/// host `processes` command — this helper only seeds the host PID for ToolHelp ancestry.
 pub fn processes(webviews: &[&WebView], ladybird_host_pid: Option<u32>) -> Vec<ProcessMemory> {
     let procs = snapshot();
     let mut kinds = HashMap::new();

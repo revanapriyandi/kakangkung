@@ -213,7 +213,7 @@ pub(crate) fn taskmanager_doc(m: &Json) -> PageDoc {
             section("processes", "Processes", rows),
             section("about", "", vec![Row::new(
                 "About these numbers",
-                "Memory is the private working set; commit is shown separately. Windows Task Manager may list WebView2 under a separate group, so its Kakangkung group can show less than this total. Renderer processes can serve several tabs or frames, so these are process totals, not exact memory per tab. Updated every 2 seconds.",
+                "Memory is the private working set; commit is shown separately. Ladybird WebContent rows come from LibWeb's ProcessManager (one process per site where isolation applies). Helper processes and the host PID are included. Updated every 2 seconds.",
                 Control::None,
             )]),
         ],

@@ -59,7 +59,7 @@ pub use adblock::{
 };
 pub use hooks::{hook_fullscreen, hook_security, hook, unhook, Hooks, Key};
 pub use identity::{edge_identity, on_close_requested, on_lost_focus, present_as_edge, runtime_version, ParentWindow};
-pub use processes::{processes, ProcessMemory};
+pub use processes::{process_counters, processes, ProcessMemory};
 pub use profile::{clear_browsing_data, clear_passwords, reset_site_permission, site_permissions, SitePermission};
 pub use shell::{create_app_shortcut, confirm, copy_secret, dark_mode, ui_language, is_default_browser, pick_file, pick_folder, register_as_browser, save_file, verify_user, windows_account_email};
 pub use webview::{apply_protection, collect_idle_garbage, devtools_call, document_title, is_suspended, memory_status, open_find, probe_interfaces,

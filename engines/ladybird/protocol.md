@@ -45,6 +45,7 @@ Environment: `KAKANGKUNG_LADYBIRD_HOST` may point Kakangkung at a non-default ho
 {"cmd":"permissions_defaults","geolocation":"block","microphone":"ask","notifications":"block"}
 {"cmd":"permissions_list"}
 {"cmd":"permissions_reset","origin":"https://maps.example","kind":"geolocation"}
+{"cmd":"processes"}
 {"cmd":"destroy","id":1}
 {"cmd":"quit"}
 ```
@@ -77,6 +78,7 @@ Environment: `KAKANGKUNG_LADYBIRD_HOST` may point Kakangkung at a non-default ho
 {"event":"find","id":1,"ok":true,"activeMatch":1,"matchCount":3}
 {"event":"permissions_defaults","ok":true}
 {"event":"permissions_list","ok":true,"permissions":[{"kind":"geolocation","origin":"https://maps.example","allowed":false}]}
+{"event":"processes","ok":true,"processes":[{"pid":1234,"kind":"WebContent","ws":1048576,"site":"https://example.com/"}]}
 {"event":"permissions_reset","ok":true}
 {"event":"page_ipc","id":1,"message":"kk:pw:focus:{…}"}
 ```
@@ -152,11 +154,13 @@ Fill uses `eval` of `window.__kkPwFill(user, pass)` gated on `location.origin`.
 `end:true` or an empty query clears the search. Translate and Reading mode use host
 `eval` (`assets/reader.js` / Google Translate navigation). Print preview is deferred.
 
-## Process model (KB-13)
+## Process model (KB-13 / KB-22)
 
 One `kakangkung-ladybird-host` process owns many views. Task Manager seeds that host PID
-(and ToolHelp children) as kind `Ladybird`. Crash recovery / session restore and Memory
-Saver discard already live in the Rust chrome; process-per-site isolation is not productized.
+(and ToolHelp children) as kind `Ladybird`. KB-22 adds `processes` → LibWeb
+`process_snapshots(ProcessManager)` so WebContent / RequestServer / helper PIDs appear
+with their site URLs. LibWeb already swaps WebContent on cross-site navigation; Kakangkung
+surfaces that tree rather than inventing fake per-tab PIDs.
 
 ## PDF / sync / casting (KB-18 / KB-21)
 

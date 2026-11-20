@@ -92,10 +92,11 @@ Or set `KAKANGKUNG_LADYBIRD_HOST` to the host path.
 | Find / translate / reading mode | KB-12 — LibWeb find + `eval` (print preview deferred) |
 | Task manager process tree | KB-13 — Ladybird host PID + children (session restore already real) |
 | PDF in tab after download | KB-18 — open finished `.pdf` via `file://` in Ladybird |
-| Folder sync passwords | KB-21 — vault merges via sync folder (casting still deferred; no Chromecast API) |
-| Site permission defaults / list / reset | KB-19 — LibWeb PermissionManager (geo/mic/notifications); process-per-site deferred |
+| Site permission defaults / list / reset | KB-19 — LibWeb PermissionManager (geo/mic/notifications) |
 | Print preview | KB-20 — screenshot snapshot tab + Print confirm (paginated layout deferred) |
-| Chrome-parity pillars | See store `docs/chrome-parity-roadmap.md` (KB-2…KB-20) |
+| Folder sync passwords | KB-21 — vault merges via sync folder (casting deferred; no Chromecast API) |
+| Process-per-site visibility | KB-22 — LibWeb ProcessManager snapshots in Task Manager |
+| Chrome-parity pillars | See store `docs/chrome-parity-roadmap.md` (KB-2…KB-22) |
 
 ## Related
 

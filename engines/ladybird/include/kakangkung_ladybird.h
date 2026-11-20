@@ -163,6 +163,13 @@ KK_LB_API int kk_lb_permissions_reset(char const* origin_utf8, char const* kind_
 KK_LB_API int kk_lb_view_find(kk_lb_view* view, char const* query_utf8, int match_case, int forward, int end,
     int* active_match, int* match_count);
 
+/**
+ * KB-22: JSON array of Ladybird ProcessManager snapshots
+ * [{pid,child_id,kind,ws,cpu,title?,site?}]. Caller frees with kk_lb_string_free.
+ * Reflects real WebContent process-per-site (LibWeb swaps processes on cross-site nav).
+ */
+KK_LB_API int kk_lb_processes_json(char** out_utf8);
+
 KK_LB_API void kk_lb_string_free(char* s);
 
 /** Pump Ladybird / stub events; return non-zero if the session should quit. */

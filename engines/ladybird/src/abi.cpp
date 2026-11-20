@@ -223,6 +223,12 @@ int kk_lb_permissions_list_json(char** out)
     return 0;
 }
 int kk_lb_permissions_reset(char const*, char const*) { return 0; }
+int kk_lb_processes_json(char** out)
+{
+    if (out)
+        *out = nullptr;
+    return 0;
+}
 #endif
 
 int kk_lb_view_find(kk_lb_view* view, char const* query_utf8, int match_case, int forward, int end,

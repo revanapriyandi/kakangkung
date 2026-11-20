@@ -400,6 +400,45 @@ window.ipc=window.ipc||{{postMessage:function(m){{try{{console.log('kk-pw:'+m)}}
         Err("Ladybird host: no permissions_defaults event".into())
     }
 
+    /// KB-22: Ladybird ProcessManager snapshots as a JSON array text.
+    pub fn processes_json(&self) -> Result<String, String> {
+        self.send_line(r#"{"cmd":"processes"}"#)?;
+        let deadline = Instant::now() + HOST_WAIT;
+        while Instant::now() < deadline {
+            let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
+            let line = self.read_line_timeout(remain)?;
+            if Self::apply_side_effect(&line) {
+                continue;
+            }
+            if line.contains("\"event\":\"processes\"") {
+                if !line.contains("\"ok\":true") {
+                    return Err(format!("processes failed: {line}"));
+                }
+                if let Some(start) = line.find("\"processes\":") {
+                    let rest = &line[start + "\"processes\":".len()..];
+                    let rest = rest.trim_start();
+                    if rest.starts_with('[') {
+                        let mut depth = 0i32;
+                        for (i, c) in rest.char_indices() {
+                            match c {
+                                '[' => depth += 1,
+                                ']' => {
+                                    depth -= 1;
+                                    if depth == 0 {
+                                        return Ok(rest[..=i].to_string());
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                return Ok("[]".into());
+            }
+        }
+        Err("Ladybird host: no processes event".into())
+    }
+
     /// KB-19: list non-default site permission decisions as JSON array text.
     pub fn permissions_list(&self) -> Result<String, String> {
         self.send_line(r#"{"cmd":"permissions_list"}"#)?;
