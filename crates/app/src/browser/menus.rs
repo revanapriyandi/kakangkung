@@ -469,13 +469,13 @@ impl Browser {
                 if let Some(wv) = self.active_webview() {
                     let _ = wv.print();
                 } else if let Some(i) = self.index(self.active) {
-                    if let (Some(host), Some(vid)) = (self.ladybird.as_ref(), self.tabs[i].ladybird_view) {
-                        if let Err(e) = host.print_page(vid) {
-                            eprintln!("print: {e}");
-                        }
+                    if self.tabs[i].ladybird_view.is_some() {
+                        self.show_print_preview();
                     }
                 }
             }
+            "print-go" => self.confirm_print_preview(true),
+            "print-cancel" => self.confirm_print_preview(false),
             "screenshot" => {
                 let base = self
                     .ctx

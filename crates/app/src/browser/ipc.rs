@@ -239,6 +239,11 @@ impl Browser {
                     "submenu" => return self.on_menu(&value) && !self.tabs.is_empty(),
                     "suggest" => self.navigate(&value),
                     "pwfill" => self.pick_login(&value),
+                    "printpreview" => match value.as_str() {
+                        "print-go" => self.confirm_print_preview(true),
+                        "print-cancel" | "close" => self.confirm_print_preview(false),
+                        _ => {}
+                    },
                     "menu" if value.is_empty() => {}
                     "menu" => return self.on_menu(&value) && !self.tabs.is_empty(),
                     _ => {}

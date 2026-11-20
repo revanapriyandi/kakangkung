@@ -151,6 +151,8 @@ pub(crate) struct Browser {
     pub(crate) overlay_open: bool,
     /// Last find-in-page query (Ladybird Ctrl+F bar).
     pub(crate) find_query: String,
+    /// Ladybird view id waiting for Print preview confirmation.
+    pub(crate) print_preview_view: Option<i32>,
     pub(crate) bookmarked: bool,
     /// Search URL template and engine name (Google unless changed in settings).
     pub(crate) search: (String, String),
@@ -345,6 +347,7 @@ impl Browser {
             overlay_kind: String::new(),
             overlay_open: false,
             find_query: String::new(),
+            print_preview_view: None,
             bookmarked: false,
             search: ui::search_template(""),
             engine_setting: String::new(),

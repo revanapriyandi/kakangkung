@@ -169,3 +169,9 @@ agnostic and already ships. Chromecast-style casting is not in tree (deferred, n
 `permissions_defaults` / `permissions_list` / `permissions_reset` wrap LibWeb
 `PermissionManager` for geolocation, microphone, and notifications. Settings site.*
 ask/block maps to global defaults. Camera and process-per-site isolation remain deferred.
+
+## Print preview (KB-20)
+
+Ctrl+P / ⋮ Print on a Ladybird tab captures a real page screenshot (`screenshot` cmd),
+opens it as a preview tab, then confirms before `print` (`window.print()`). Paginated
+print-layout preview is not productized yet.

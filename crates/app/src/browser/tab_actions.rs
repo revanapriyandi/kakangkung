@@ -229,6 +229,74 @@ impl Browser {
         );
     }
 
+    /// KB-20: capture the active Ladybird page, show a Print / Cancel dialog, then print on confirm.
+    pub(crate) fn show_print_preview(&mut self) {
+        let Some(i) = self.index(self.active) else { return };
+        let Some(vid) = self.tabs[i].ladybird_view else { return };
+        let Some(host) = self.ladybird.as_ref() else { return };
+        let base = self
+            .ctx
+            .data_directory()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| self.paths.extensions.parent().unwrap_or(std::path::Path::new(".")).to_path_buf());
+        let dir = base.join("PrintPreview");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("preview-{}.png", storage::now_ms()));
+        let path_str = path.to_string_lossy().to_string();
+        if let Err(e) = host.screenshot(vid, &path_str) {
+            eprintln!("print preview: {e}");
+            return;
+        }
+        // Open the captured frame as a preview tab (real page pixels, not a stub layout).
+        if let Some(url) = ui::file_url(&path_str) {
+            self.open_after_active(&url);
+        }
+        self.print_preview_view = Some(vid);
+        let dark = self.dark_ui();
+        self.overlay_open = true;
+        self.overlay_kind = "printpreview".into();
+        use platform::popup::PopupRow;
+        self.popup.show(
+            "printpreview",
+            12.0,
+            platform::frame::FRAME_H as f32 - 4.0,
+            420.0,
+            vec![
+                PopupRow { kind: "note".into(), title: "Print preview".into(), ..Default::default() },
+                PopupRow {
+                    kind: "note".into(),
+                    title: "A snapshot of the page is open in the next tab. Print sends the live page to the printer.".into(),
+                    ..Default::default()
+                },
+                PopupRow {
+                    id: "print-go".into(),
+                    kind: "buttons".into(),
+                    title: "Print".into(),
+                    detail: "Cancel".into(),
+                    close: "print-cancel".into(),
+                    ..Default::default()
+                },
+            ],
+            None,
+            false,
+            dark,
+        );
+        self.render();
+    }
+
+    pub(crate) fn confirm_print_preview(&mut self, go: bool) {
+        self.hide_overlay();
+        let Some(vid) = self.print_preview_view.take() else { return };
+        if !go {
+            return;
+        }
+        if let Some(host) = self.ladybird.as_ref() {
+            if let Err(e) = host.print_page(vid) {
+                eprintln!("print: {e}");
+            }
+        }
+    }
+
     /// Run find for the active Ladybird tab; Enter from the find bar.
     pub(crate) fn find_in_page(&mut self, query: &str) {
         self.find_query = query.to_string();
