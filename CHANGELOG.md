@@ -4,6 +4,20 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-11-21
+
+### Added
+- Ladybird (LibWeb) is the page engine on Windows; WebView2/Chromium path removed from the
+  product surface.
+- Chrome-parity slices through KB-25: crash reload and unclean cold-start session restore,
+  `chrome.storage.local` for content scripts, extension `ext_message` demux/`ext_reply`,
+  downloads, zoom, find, passwords eval, Memory Saver discard, clear data, permissions,
+  PDF open, print preview (screenshot), task-manager host PID/ProcessManager surface,
+  MV3 content scripts and DevTools/MCP waits.
+
+### Known blockers (documented, no stubs)
+- Presentation/Cast API, MV3 background service workers, paginated `print_to_pdf`.
+
 ## [0.4.3] - 2026-11-10
 
 ### Fixed
