@@ -33,6 +33,12 @@ public:
     void go_back();
     void go_forward();
 
+    /// Real LibWeb ops (return false when host is not linked / unavailable).
+    bool screenshot_png(std::string const& path);
+    bool print_page();
+    bool a11y_json(std::string& out_json);
+    bool eval_js(std::string const& js, std::string& out_result);
+
 private:
     Session& m_session;
 

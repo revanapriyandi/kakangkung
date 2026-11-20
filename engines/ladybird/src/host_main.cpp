@@ -94,6 +94,35 @@ bool has_cmd(std::string const& line, char const* cmd)
     return line.find(needle) != std::string::npos;
 }
 
+std::string json_escape(std::string const& in)
+{
+    std::string out;
+    out.reserve(in.size() + 8);
+    for (char c : in) {
+        switch (c) {
+        case '\\':
+            out += "\\\\";
+            break;
+        case '"':
+            out += "\\\"";
+            break;
+        case '\n':
+            out += "\\n";
+            break;
+        case '\r':
+            out += "\\r";
+            break;
+        case '\t':
+            out += "\\t";
+            break;
+        default:
+            out += c;
+            break;
+        }
+    }
+    return out;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -221,30 +250,59 @@ int main(int argc, char** argv)
             std::string path;
             if (field_int(line, "id", id)) {
                 field_str(line, "path", path);
-                // HWND capture is implemented in the Rust stub host; C++ stub acknowledges until LibWeb.
+                bool ok = false;
+                if (auto it = host.views.find(id); it != host.views.end())
+                    ok = kk_lb_view_screenshot(it->second.view, path.c_str()) != 0;
                 emit(std::string("{\"event\":\"screenshot\",\"id\":") + std::to_string(id)
-                    + ",\"path\":\"" + path + "\",\"ok\":false,\"reason\":\"stub\"}");
+                    + ",\"path\":\"" + json_escape(path) + "\",\"ok\":" + (ok ? "true" : "false")
+                    + (ok ? "" : ",\"reason\":\"screenshot failed\"") + "}");
             }
             continue;
         }
         if (has_cmd(line, "print")) {
             int id = 0;
-            if (field_int(line, "id", id))
-                emit(std::string("{\"event\":\"print\",\"id\":") + std::to_string(id) + ",\"ok\":false,\"reason\":\"stub\"}");
+            if (field_int(line, "id", id)) {
+                bool ok = false;
+                if (auto it = host.views.find(id); it != host.views.end())
+                    ok = kk_lb_view_print(it->second.view) != 0;
+                emit(std::string("{\"event\":\"print\",\"id\":") + std::to_string(id)
+                    + ",\"ok\":" + (ok ? "true" : "false")
+                    + (ok ? "" : ",\"reason\":\"print unavailable\"") + "}");
+            }
             continue;
         }
         if (has_cmd(line, "a11y")) {
             int id = 0;
-            if (field_int(line, "id", id))
-                emit(std::string("{\"event\":\"a11y\",\"id\":") + std::to_string(id)
-                    + ",\"tree\":[{\"role\":\"document\",\"name\":\"\",\"children\":[]}]}");
+            if (field_int(line, "id", id)) {
+                char* tree = nullptr;
+                bool ok = false;
+                if (auto it = host.views.find(id); it != host.views.end())
+                    ok = kk_lb_view_a11y_json(it->second.view, &tree) != 0;
+                if (ok && tree) {
+                    emit(std::string("{\"event\":\"a11y\",\"id\":") + std::to_string(id)
+                        + ",\"tree\":" + tree + "}");
+                    kk_lb_string_free(tree);
+                } else {
+                    emit(std::string("{\"event\":\"a11y\",\"id\":") + std::to_string(id)
+                        + ",\"tree\":null,\"ok\":false,\"reason\":\"a11y unavailable\"}");
+                }
+            }
             continue;
         }
         if (has_cmd(line, "eval")) {
             int id = 0;
-            if (field_int(line, "id", id))
+            std::string js;
+            if (field_int(line, "id", id)) {
+                field_str(line, "js", js);
+                char* result = nullptr;
+                bool ok = false;
+                if (auto it = host.views.find(id); it != host.views.end())
+                    ok = kk_lb_view_eval(it->second.view, js.c_str(), &result) != 0;
                 emit(std::string("{\"event\":\"eval\",\"id\":") + std::to_string(id)
-                    + ",\"ok\":false,\"result\":\"eval requires LibWeb-linked host\"}");
+                    + ",\"ok\":" + (ok ? "true" : "false")
+                    + ",\"result\":\"" + json_escape(result ? result : "") + "\"}");
+                kk_lb_string_free(result);
+            }
             continue;
         }
         kk_lb_session_pump(host.session);
