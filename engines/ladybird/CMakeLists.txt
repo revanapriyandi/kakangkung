@@ -8,12 +8,18 @@ option(HAVE_LADYBIRD "Link against a Ladybird / LibWebView build" OFF)
 set(LADYBIRD_SOURCE_DIR "" CACHE PATH "Path to a Ladybird checkout (required when HAVE_LADYBIRD=ON)")
 set(LADYBIRD_BUILD_DIR "" CACHE PATH "Path to a Ladybird build directory (required when HAVE_LADYBIRD=ON)")
 
-add_executable(kakangkung-ladybird-host
+set(HOST_SOURCES
     src/host_main.cpp
     src/application.cpp
-    src/stub_page.cpp
     src/abi.cpp
 )
+if(HAVE_LADYBIRD)
+    list(APPEND HOST_SOURCES src/view_ladybird.cpp)
+else()
+    list(APPEND HOST_SOURCES src/stub_page.cpp)
+endif()
+
+add_executable(kakangkung-ladybird-host ${HOST_SOURCES})
 
 target_include_directories(kakangkung-ladybird-host PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -32,14 +38,15 @@ if(HAVE_LADYBIRD)
         ${LADYBIRD_SOURCE_DIR}/Userland/Libraries
         ${LADYBIRD_BUILD_DIR}
     )
-    # Consumers must pass the Ladybird library set for their platform, e.g.:
-    #   -DHAVE_LADYBIRD=ON -DLADYBIRD_SOURCE_DIR=... -DLADYBIRD_BUILD_DIR=...
-    #   and link LibWebView + dependencies via LADYBIRD_LIBRARIES.
     if(DEFINED LADYBIRD_LIBRARIES)
         target_link_libraries(kakangkung-ladybird-host PRIVATE ${LADYBIRD_LIBRARIES})
     else()
-        message(WARNING "HAVE_LADYBIRD=ON but LADYBIRD_LIBRARIES is empty; stub sources still compile. Add view_ladybird.cpp and link LibWebView to finish the UI port.")
+        message(WARNING "HAVE_LADYBIRD=ON but LADYBIRD_LIBRARIES is empty; finish view_ladybird.cpp + LibWebView link on Boat.")
     endif()
+endif()
+
+if(WIN32)
+    target_link_libraries(kakangkung-ladybird-host PRIVATE user32 gdi32)
 endif()
 
 install(TARGETS kakangkung-ladybird-host RUNTIME DESTINATION bin)

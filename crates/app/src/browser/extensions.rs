@@ -214,12 +214,18 @@ impl Browser {
     /// Show extension `id`'s toolbar pop-up under the button at (`right`, `top`) DIPs; one
     /// without a pop-up opens its options page in a tab, one Kakangkung cannot read (loaded from
     /// elsewhere) opens the Extensions page.
-    /// Chrome extension pop-ups need a Chromium webview; Kakangkung is Ladybird-only now, so the
-    /// toolbar button opens the native Extensions page until LibWebView hosts them.
+    /// Without WebView2, pop-ups open as a Ladybird tab (stub HWND today; LibWeb on Boat later).
     pub(crate) fn open_bubble(&mut self, id: &str, right: f64, top: f64) {
         let _ = (right, top);
         self.close_bubble();
-        eprintln!("extension pop-up {id}: blocked (WebView2 disabled; Ladybird-only)");
+        let folder = self.paths.extensions.join(id);
+        if let Some((page, _)) = webstore::button_page(&folder) {
+            let url = format!("chrome-extension://{id}/{page}");
+            eprintln!("extension pop-up {id}: opening as Ladybird tab ({url})");
+            self.open_tab(&url, None);
+            return;
+        }
+        eprintln!("extension pop-up {id}: no pop-up page; opening Extensions");
         self.open_after_active(&format!("{}extensions", ui::INTERNAL));
     }
 

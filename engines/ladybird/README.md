@@ -70,9 +70,11 @@ compile LibWeb:
 | Gap | Impact |
 |---|---|
 | No public C embedding API in Ladybird — UI ports must implement `ViewImplementation` in C++ | This folder *is* that port; Rust talks over a small C ABI + IPC |
-| Ladybird alpha targets Linux/macOS; native Windows is experimental | Full Windows LibWeb link needs clang-cl + Ladybird Windows work; WSL2 builds the Linux host |
+| Ladybird alpha targets Linux/macOS; native Windows is experimental | Prefer Boat Linux host / WSL2; stub HWND paint works on Windows today |
 | Kakangkung chrome is Win32/Direct2D; Ladybird Qt UI is separate | We embed LibWebView, not Ladybird's Qt chrome |
-| Extensions, WebView2 DevTools docking, TrySuspend, SmartScreen | Ladybird path reimplements what LibWebView exposes; Chromium-only features stay WebView2-only until replaced |
-| This CI image cannot build Ladybird (CMake/Qt/compiler/RAM) | Host build is opt-in via `engines/ladybird`; main `cargo` CI stays on WebView2 fallback |
+| `view_ladybird.cpp` still a scaffold | Finish against a Ladybird tree on Boat (`bx_cnfw3mch`) |
+| Extensions / TrySuspend / SmartScreen | Pop-ups open as Ladybird tabs; full LibWeb APIs TBD |
+
+Preferred build surface: [Boat dashboard](https://boat.dev/dashboard) — see `boat-setup.sh`.
 
 See [docs/LADYBIRD.md](../../docs/LADYBIRD.md) for architecture and the migration plan.

@@ -420,14 +420,19 @@ impl TabKit {
     /// (Google refuses sign-in pop-ups that announce WebView2), and shows as a tab next to its
     /// opener that closes again when the page calls `window.close()`.
     fn popup(&self, opener: u64, private: bool, url: String, features: wry::NewWindowFeatures) -> NewWindowResponse {
-        let _ = (opener, private, features);
-        // No WebView2 pop-ups. Ladybird will own window.open once the UI port paints HWNDs.
-        eprintln!("pop-up blocked (WebView2 disabled): {url}");
+        let _ = (private, features);
+        // No WebView2: sized window.open becomes a Ladybird tab next to the opener.
+        eprintln!("window.open → Ladybird tab (opener={opener}): {url}");
+        let _ = self.proxy.send_event(Msg::OpenTab(url));
         NewWindowResponse::Deny
     }
 }
 
 impl Browser {
+    /// `window.open` / host-requested pop-up without WebView2: open as a normal Ladybird tab.
+    pub(crate) fn open_ladybird_popup(&mut self, url: &str) {
+        self.open_tab(url, self.index(self.active).map(|i| i + 1));
+    }
 
     pub(crate) fn hook_tab(&self, id: u64, wv: &WebView) -> platform::Hooks {
         let (p1, p2, p3, p4) = (self.proxy.clone(), self.proxy.clone(), self.proxy.clone(), self.proxy.clone());

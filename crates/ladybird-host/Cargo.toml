@@ -8,3 +8,11 @@ description = "Kakangkung Ladybird UI-port host (Rust stub). Replace with LibWeb
 [[bin]]
 name = "kakangkung-ladybird-host"
 path = "src/main.rs"
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
+] }

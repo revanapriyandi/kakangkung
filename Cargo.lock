@@ -1098,6 +1098,9 @@ dependencies = [
 [[package]]
 name = "ladybird-host"
 version = "0.4.3"
+dependencies = [
+ "windows",
+]
 
 [[package]]
 name = "libc"

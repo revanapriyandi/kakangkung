@@ -27,28 +27,27 @@ to Chrome’s engine.
 Ladybird has no public C embedding API. The supported path is a **UI port**: subclass
 `WebView::ViewImplementation` ([Porting.md](https://github.com/LadybirdBrowser/ladybird/blob/master/Documentation/Porting.md)).
 `engines/ladybird/` is that port. Until LibWeb is linked, `crates/ladybird-host` provides a
-protocol-compatible stub so the app runs without WebView2.
+protocol-compatible stub that parents a child HWND into Kakangkung and paints a stub page.
 
 ## Development on Boat (preferred)
 
-Use **[boat.dev/dashboard](https://boat.dev/dashboard)** for Ladybird / LibWeb builds and
-iteration (full Ubuntu VM, desktop stream, Qt toolchain).
+Use **[boat.dev/dashboard](https://boat.dev/dashboard)** for Ladybird / LibWeb builds.
+Sandbox: **`kakangkung-ladybird` / `bx_cnfw3mch`**.
 
 ```bash
 curl -fsSL https://boat.dev/install | sh
 boat login
-boat new --name kakangkung-ladybird   # or: boat resume <id>
+boat resume bx_cnfw3mch   # or: boat new --name kakangkung-ladybird
 
-# Stub host (protocol only) — also available via cargo on any machine:
-boat exec kakangkung-ladybird 'cargo build -p ladybird-host --release'
+boat exec bx_cnfw3mch 'bash engines/ladybird/boat-setup.sh'
+boat exec bx_cnfw3mch 'cargo build -p ladybird-host --release'
+boat exec bx_cnfw3mch './engines/ladybird/build.sh --stub'
 
-# Full LibWeb host (after Ladybird itself builds):
-boat scp ./engines/ladybird kakangkung-ladybird:~/kakangkung-ladybird
-boat exec kakangkung-ladybird './kakangkung-ladybird/build.sh --ladybird'
+# Full LibWeb (after Ladybird itself builds in the sandbox):
+boat exec bx_cnfw3mch './engines/ladybird/build.sh --ladybird'
 ```
 
-Open the sandbox desktop from the dashboard to watch Ladybird’s Qt UI while bringing up the
-real host. Snapshot with `boat stop` between sessions.
+Open the sandbox desktop from the dashboard to watch Qt / LibWeb while bringing up the real host.
 
 ## Local Windows build
 
@@ -56,7 +55,7 @@ real host. Snapshot with `boat stop` between sessions.
 cargo build --release -p ladybird-host -p app
 # Both land in target\release\:
 #   kakangkung.exe
-#   kakangkung-ladybird-host.exe
+#   kakangkung-ladybird-host.exe   (stub HWND paint)
 cargo run --release -p app
 ```
 
@@ -66,18 +65,19 @@ Or set `KAKANGKUNG_LADYBIRD_HOST` to the host path.
 
 `browser.page_engine` = `ladybird` only. Changing it to WebView2 / Chromium is rejected.
 
-## Remaining gaps
+## Status
 
 | Item | Status |
 |---|---|
 | Native chrome (no HTML UI) | Done |
 | Ladybird-only engine selection | Done — WebView2 removed |
-| Rust stub host (`crates/ladybird-host`) | Done — protocol + cargo build |
-| LibWeb-linked C++ host | Scaffold in `engines/ladybird` — finish on Boat |
-| HWND parenting / paint into Kakangkung | TBD in ViewImplementation |
-| `window.open`, Chrome Web Store extensions | Disabled with WebView2; reimplement on LibWebView |
-| Memory Saver TrySuspend / SmartScreen | WebView2-era APIs — replace with Ladybird equivalents |
-| Windows CI self-test against live pages | Needs host beside exe (`cargo build -p ladybird-host`) |
+| Rust stub host + child HWND paint | Done (`crates/ladybird-host`) |
+| C++ stub HWND paint | Done (`engines/ladybird` stub) |
+| Load events → UI / Self-test Ladybird path | Done |
+| Extension pop-ups / `window.open` as Ladybird tabs | Done (no WebView2 surface) |
+| LibWeb-linked `ViewImplementation` | Scaffold `view_ladybird.cpp` — finish on Boat |
+| Memory Saver TrySuspend / SmartScreen | WebView2-era — replace with Ladybird equivalents |
+| Boat LibWeb full build | Needs `boat login` + Ladybird tree on `bx_cnfw3mch` |
 
 ## Related
 
