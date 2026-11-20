@@ -82,9 +82,9 @@ Or set `KAKANGKUNG_LADYBIRD_HOST` to the host path.
 | C++ stub HWND paint | Done (`engines/ladybird` stub) |
 | Load events → UI / Self-test Ladybird path | Done |
 | Extension pop-ups / `window.open` as Ladybird tabs | Done (no WebView2 surface) |
-| LibWeb-linked `ViewImplementation` | Scaffold `view_ladybird.cpp` — finish on Boat |
-| Memory Saver TrySuspend / SmartScreen | WebView2-era — replace with Ladybird equivalents |
-| Boat LibWeb full build | Needs `boat login` + Ladybird tree on `bx_cnfw3mch` |
+| LibWeb `HeadlessWebView` + native blit | `view_ladybird.cpp` (HAVE_LADYBIRD=1) — build on Boat `bx_cnfw3mch` |
+| Memory Saver TrySuspend / SmartScreen | Replace with Ladybird equivalents (KB-9) |
+| Chrome-parity pillars | See store `docs/chrome-parity-roadmap.md` (KB-2…KB-9) |
 
 ## Related
 
