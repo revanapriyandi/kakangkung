@@ -275,7 +275,7 @@ fn privacy(v: &Values, permissions: Option<&[Json]>) -> Section {
         Row::new("Delete browsing data", "What is switched on above, within the time range", buttons(&[("clear-all", "Delete data", ButtonStyle::Danger)])),
         v.toggle("privacy.clear_on_exit", "Clear browsing data when you exit", "History, cookies, cache and site data are removed when Kakangkung closes"),
         Row::heading("Security"),
-        v.toggle("privacy.safe_browsing", "Safe Browsing", "Microsoft Defender SmartScreen warns about dangerous sites and downloads"),
+        v.toggle("privacy.safe_browsing", "Safe Browsing", "Warns about known-dangerous hosts (Ladybird list; SmartScreen applied only when a WebView2 surface exists)"),
         v.toggle("privacy.adblock", "Block ads", "Built-in ad blocker: ad and tracker requests, ad frames, pop-ups and leftover ad boxes are blocked; pause it per site from the shield if a site breaks"),
         v.toggle("privacy.https_first", "Always use secure connections", "HTTPS-First: typed http:// addresses open over https://"),
         v.select("privacy.tracking", "Tracking prevention", "Blocks trackers from sites you haven't visited; Strict may break some sites", &[("0", "Off"), ("1", "Basic"), ("2", "Balanced (recommended)"), ("3", "Strict")]),

@@ -75,7 +75,7 @@ asks twice):
 | Browsing history · Cookies and other site data · Cached images and files | `privacy.clear_history`, `privacy.clear_cookies`, `privacy.clear_cache` | **on** / off each — what Delete data removes | Live |
 | Delete browsing data | — | button (the types above, within the time range; passwords and autofill stay) | Live |
 | Clear browsing data when you exit | `privacy.clear_on_exit` | on / **off** | On exit (and again at the next start) |
-| Safe Browsing (SmartScreen) | `privacy.safe_browsing` | **on** / off | Live |
+| Safe Browsing | `privacy.safe_browsing` | **on** / off | Live (Ladybird: bundled dangerous-host list; SmartScreen was WebView2-only) |
 | Block ads | `privacy.adblock` | **on** / off (requests to known ad networks are refused; a site is never blocked on its own domain) | Live |
 | Always use secure connections (HTTPS-First) | `privacy.https_first` | **on** / off | Live |
 | Tracking prevention | `privacy.tracking` | off / basic / **balanced** / strict | Live |
