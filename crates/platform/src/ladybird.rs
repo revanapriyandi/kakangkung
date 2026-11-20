@@ -15,7 +15,19 @@ use std::time::{Duration, Instant};
 
 use engine::{self, Kind, Resolution};
 
+use std::cell::RefCell;
+
 use crate::downloads::{remove_ladybird, upsert_ladybird, DownloadInfo, DownloadState};
+
+thread_local! {
+    /// Spontaneous `page_ipc` events from the host (password manager, …), drained by the UI.
+    static PAGE_IPC: RefCell<Vec<(i32, String)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Take queued page IPC messages `(ladybird_view_id, message)`.
+pub fn take_page_ipc() -> Vec<(i32, String)> {
+    PAGE_IPC.with(|q| std::mem::take(&mut *q.borrow_mut()))
+}
 
 /// How long a single host wait (create / navigate / screenshot / …) may block the UI thread.
 const HOST_WAIT: Duration = Duration::from_secs(8);
@@ -120,8 +132,8 @@ impl Host {
         stdin.flush().map_err(|e| format!("Ladybird host flush: {e}"))
     }
 
-    /// Apply spontaneous host events (downloads, …). Returns true when the line was consumed
-    /// as a side effect and should not satisfy a wait for another event.
+    /// Apply spontaneous host events (downloads, page IPC, …). Returns true when the line was
+    /// consumed as a side effect and should not satisfy a wait for another event.
     fn apply_side_effect(line: &str) -> bool {
         if line.contains("\"event\":\"download_removed\"") {
             if let Some(id) = json_u64_field(line, "downloadId") {
@@ -135,10 +147,16 @@ impl Host {
                 return true;
             }
         }
+        if line.contains("\"event\":\"page_ipc\"") {
+            if let (Some(id), Some(msg)) = (json_i64_field(line, "id").map(|n| n as i32), json_str_field(line, "message")) {
+                PAGE_IPC.with(|q| q.borrow_mut().push((id, msg)));
+                return true;
+            }
+        }
         false
     }
 
-    /// Drain queued host stdout without blocking. Returns true if any download side effect applied.
+    /// Drain queued host stdout without blocking. Returns true if any side effect applied.
     pub fn poll_events(&self) -> bool {
         let mut any = false;
         loop {
@@ -312,6 +330,43 @@ impl Host {
             }
         }
         Err("Ladybird host: no print event".into())
+    }
+
+    /// Run JavaScript in the page (LibWeb `js_console_input` / `run_javascript` path).
+    pub fn eval(&self, id: i32, js: &str) -> Result<String, String> {
+        let escaped = js
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+            .replace('\t', "\\t");
+        self.send_line(&format!(r#"{{"cmd":"eval","id":{id},"js":"{escaped}"}}"#))?;
+        let deadline = Instant::now() + HOST_WAIT;
+        while Instant::now() < deadline {
+            let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
+            let line = self.read_line_timeout(remain)?;
+            if Self::apply_side_effect(&line) {
+                continue;
+            }
+            if line.contains("\"event\":\"eval\"")
+                && (line.contains(&format!("\"id\":{id}")) || line.contains(&format!("\"id\": {id}")))
+            {
+                if !line.contains("\"ok\":true") {
+                    return Err(format!("eval failed: {line}"));
+                }
+                return Ok(json_str_field(&line, "result").unwrap_or_default());
+            }
+        }
+        Err("Ladybird host: no eval event".into())
+    }
+
+    /// Inject the password-manager page script (assets/passwords.js) with a Ladybird IPC bridge.
+    pub fn inject_passwords(&self, id: i32, script: &str) -> Result<(), String> {
+        let bootstrap = format!(
+            "(function(){{if(window.top!==window||window.__kkPwFill)return;\
+window.ipc=window.ipc||{{postMessage:function(m){{try{{console.log('kk-pw:'+m)}}catch(e){{}}}}}};}})();\n{script}"
+        );
+        self.eval(id, &bootstrap).map(|_| ())
     }
 
     /// KB-7: push adblock on/off + allowlist into LibWeb ContentFilter/ContentBlocker.

@@ -146,6 +146,13 @@ void on_ext_message(void* user, char const* extension_id, char const* request_id
         + ",\"message\":" + (message_json && message_json[0] ? message_json : "null") + "}");
 }
 
+void on_page_ipc(void* user, char const* message)
+{
+    auto* hv = static_cast<HostView*>(user);
+    emit(std::string("{\"event\":\"page_ipc\",\"id\":") + std::to_string(hv->id)
+        + ",\"message\":\"" + json_escape(message ? message : "") + "\"}");
+}
+
 std::string extract_raw_json_field(std::string const& line, char const* key)
 {
     auto needle = std::string("\"") + key + "\":";
@@ -235,6 +242,7 @@ int main(int argc, char** argv)
             cb.on_url = on_url;
             cb.on_load = on_load;
             cb.on_ext_message = on_ext_message;
+            cb.on_page_ipc = on_page_ipc;
             int x = 0, y = 0, w = 800, h = 600;
             field_int(line, "x", x);
             field_int(line, "y", y);
@@ -444,9 +452,31 @@ int main(int argc, char** argv)
         }
         if (has_cmd(line, "eval")) {
             int id = 0;
-            std::string js;
             if (field_int(line, "id", id)) {
-                field_str(line, "js", js);
+                // Prefer raw JSON string field so escaped quotes / newlines in scripts survive.
+                std::string js = extract_raw_json_field(line, "js");
+                if (js.size() >= 2 && js.front() == '"' && js.back() == '"') {
+                    js = js.substr(1, js.size() - 2);
+                    std::string unesc;
+                    for (size_t i = 0; i < js.size(); ++i) {
+                        if (js[i] == '\\' && i + 1 < js.size()) {
+                            char n = js[++i];
+                            if (n == 'n')
+                                unesc += '\n';
+                            else if (n == 'r')
+                                unesc += '\r';
+                            else if (n == 't')
+                                unesc += '\t';
+                            else
+                                unesc += n;
+                        } else {
+                            unesc += js[i];
+                        }
+                    }
+                    js = std::move(unesc);
+                } else if (!field_str(line, "js", js)) {
+                    js.clear();
+                }
                 char* result = nullptr;
                 bool ok = false;
                 if (auto it = host.views.find(id); it != host.views.end())

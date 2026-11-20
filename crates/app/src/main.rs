@@ -436,11 +436,25 @@ fn main() {
 
         // Background clocks: window fallback, idle preparation, memory saver, automatic sync.
         let mut wake = browser.memory_tick();
-        // Drain Ladybird host stdout so spontaneous download events reach Downloads / PastDownload
+        // Drain Ladybird host stdout so spontaneous download / page_ipc events reach the UI
         // even when no navigate/create wait is active.
         if browser.ladybird.is_some() {
-            if browser.ladybird.as_ref().is_some_and(|h| h.poll_events()) {
+            let drained = browser.ladybird.as_ref().is_some_and(|h| h.poll_events());
+            if drained {
                 let _ = browser.proxy.send_event(Msg::DownloadsChanged);
+            }
+            for (vid, message) in platform::take_page_ipc() {
+                if let Some(what) = message.strip_prefix("kk:pw:") {
+                    if let Some(i) = browser.tabs.iter().position(|t| t.ladybird_view == Some(vid)) {
+                        let tab = browser.tabs[i].view.id;
+                        let url = browser.tabs[i].view.url.clone();
+                        let _ = browser.proxy.send_event(Msg::Password {
+                            tab,
+                            url,
+                            what: what.to_string(),
+                        });
+                    }
+                }
             }
             let next = Instant::now() + Duration::from_millis(100);
             wake = Some(wake.map_or(next, |w| w.min(next)));

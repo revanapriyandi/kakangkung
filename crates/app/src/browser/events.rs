@@ -185,6 +185,9 @@ impl Browser {
                         let (url, title) = (v.url.clone(), v.title.clone());
                         self.db(move |s| s.add_visit(&url, &title, storage::now_ms()));
                     }
+                    if done {
+                        self.inject_ladybird_passwords(id);
+                    }
                 }
                 self.render();
             }

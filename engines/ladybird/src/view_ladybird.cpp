@@ -221,6 +221,7 @@ private:
         on_console_message = [this](WebView::ConsoleOutput const& output) {
             append_console(output);
             // chrome.runtime.sendMessage bridge: content scripts log kk-ext:{...}
+            // Password / page IPC: scripts log kk-pw:kk:pw:… (see Host::inject_passwords).
             output.output.visit(
                 [this](WebView::ConsoleLog const& log) {
                     for (auto const& arg : log.arguments) {
@@ -230,6 +231,14 @@ private:
                         else
                             text = arg.serialized().to_byte_string();
                         auto view = StringView { text };
+                        if (auto pos = view.find("kk-pw:"sv); pos.has_value()) {
+                            auto payload = view.substring_view(*pos + 6);
+                            if (payload.starts_with('"') && payload.ends_with('"') && payload.length() >= 2)
+                                payload = payload.substring_view(1, payload.length() - 2);
+                            if (m_cb.on_page_ipc)
+                                m_cb.on_page_ipc(m_cb.user, payload.to_byte_string().characters());
+                            continue;
+                        }
                         auto pos = view.find("kk-ext:"sv);
                         if (!pos.has_value())
                             continue;

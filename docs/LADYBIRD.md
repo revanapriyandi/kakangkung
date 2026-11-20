@@ -87,6 +87,7 @@ Or set `KAKANGKUNG_LADYBIRD_HOST` to the host path.
 | Page zoom over host protocol | KB-8 — `zoom` cmd + CSS zoom via LibWeb |
 | Adblock request intercept | KB-7 — ContentFilter/Blocker + EasyList document gate |
 | Memory Saver (discard, not fake Suspend) | KB-9 — Idle timeout → DiscardDue / DropWebview |
+| Password manager inject / fill | KB-10 — `eval` + `page_ipc` (`kk:pw:`) |
 | Chrome-parity pillars | See store `docs/chrome-parity-roadmap.md` (KB-2…KB-9) |
 
 ## Related

@@ -67,6 +67,7 @@ Environment: `KAKANGKUNG_LADYBIRD_HOST` may point Kakangkung at a non-default ho
 {"event":"download","downloadId":1,"url":"https://example.com/file.bin","path":"/tmp/file.bin","received":0,"total":-1,"state":"in_progress","can_resume":false}
 {"event":"download_removed","downloadId":1}
 {"event":"adblock","ok":true,"enabled":true}
+{"event":"page_ipc","id":1,"message":"kk:pw:focus:{…}"}
 ```
 
 `engine` is `"ladybird"` when LibWeb is linked, `"stub"` for the offline host.
@@ -121,3 +122,9 @@ from the Downloads page call `Host::download_action` when `ladybird_owns(id)`.
 `data/adblock-domains.txt` (or `KAKANGKUNG_ADBLOCK_LIST`). `enabled:false` clears patterns.
 Document navigations are also gated in Rust via EasyList (`blocks_document_navigation`).
 Per-site allowlist is enforced in Rust; patterns stay global in LibWeb when enabled.
+
+## Passwords (KB-10)
+
+After load, Kakangkung may `eval` `assets/passwords.js` with a Ladybird `window.ipc`
+polyfill that logs `kk-pw:` + message. The host forwards those as `page_ipc` events.
+Fill uses `eval` of `window.__kkPwFill(user, pass)` gated on `location.origin`.
