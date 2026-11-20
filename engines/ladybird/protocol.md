@@ -51,6 +51,9 @@ Environment: `KAKANGKUNG_LADYBIRD_HOST` may point Kakangkung at a non-default ho
 
 `engine` is `"ladybird"` when LibWeb is linked, `"stub"` for the offline host.
 
-Strings in this first revision are not fully JSON-escaped; URLs and titles must not contain
-raw quotes or newlines. A later revision should switch to a proper encoder once the host is
-wired into production Windows builds.
+The Rust stub host (`crates/ladybird-host`) JSON-escapes string fields in events. Clients that
+`wait` on `load` with `done:true` can rely on **back** / **forward** / **reload** always emitting
+that event (even when history is empty — a no-op ack) so waiters never hang.
+
+C++ host string fields are still lightly escaped until LibWeb production wiring; prefer the Rust
+stub for agent/MCP work until then.

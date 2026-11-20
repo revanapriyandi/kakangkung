@@ -8,10 +8,15 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use engine::{self, Kind, Resolution};
+
+/// How long a single host wait (create / navigate / screenshot / …) may block the UI thread.
+const HOST_WAIT: Duration = Duration::from_secs(8);
 
 /// Resolve the page engine (always Ladybird).
 pub fn resolve_page_engine(requested_setting: &str) -> Resolution {
@@ -25,11 +30,30 @@ pub fn host_path() -> Option<PathBuf> {
     engine::find_ladybird_host(exe_dir.as_deref())
 }
 
+/// Pump Win32 messages so a cross-process child HWND (`CreateWindowEx` in the host) can finish
+/// while this process waits on the host's stdout pipe. Without this, Self-test / navigate deadlock.
+#[cfg(windows)]
+fn pump_messages() {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE,
+    };
+    unsafe {
+        let mut msg = MSG::default();
+        while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+            let _ = TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn pump_messages() {}
+
 /// A running `kakangkung-ladybird-host` process speaking the JSON-lines protocol.
 pub struct Host {
     child: Child,
     stdin: Mutex<ChildStdin>,
-    stdout: Mutex<BufReader<ChildStdout>>,
+    lines: Receiver<String>,
     pub engine_id: String,
 }
 
@@ -48,10 +72,34 @@ impl Host {
             .map_err(|e| format!("spawn Ladybird host: {e}"))?;
         let stdout = child.stdout.take().ok_or_else(|| "Ladybird host: no stdout".to_string())?;
         let stdin = child.stdin.take().ok_or_else(|| "Ladybird host: no stdin".to_string())?;
-        let mut reader = BufReader::new(stdout);
-        let mut line = String::new();
-        reader.read_line(&mut line).map_err(|e| format!("Ladybird host ready: {e}"))?;
-        let engine_id = if line.contains("\"engine\":\"ladybird\"") {
+        let (tx, rx) = mpsc::channel::<String>();
+        std::thread::Builder::new()
+            .name("ladybird-host-stdout".into())
+            .spawn(move || {
+                let mut reader = BufReader::new(stdout);
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) => break,
+                        Ok(_) => {
+                            if tx.send(line.clone()).is_err() {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+            })
+            .map_err(|e| format!("Ladybird host stdout thread: {e}"))?;
+        let mut this = Self {
+            child,
+            stdin: Mutex::new(stdin),
+            lines: rx,
+            engine_id: String::new(),
+        };
+        let line = this.read_line_timeout(HOST_WAIT)?;
+        this.engine_id = if line.contains("\"engine\":\"ladybird\"") {
             "ladybird".into()
         } else if line.contains("\"engine\":\"stub\"") {
             "stub".into()
@@ -61,7 +109,7 @@ impl Host {
         if !line.contains("\"event\":\"ready\"") {
             return Err(format!("Ladybird host: expected ready event, got {line:?}"));
         }
-        Ok(Self { child, stdin: Mutex::new(stdin), stdout: Mutex::new(reader), engine_id })
+        Ok(this)
     }
 
     pub fn send_line(&self, json: &str) -> Result<(), String> {
@@ -70,19 +118,36 @@ impl Host {
         stdin.flush().map_err(|e| format!("Ladybird host flush: {e}"))
     }
 
+    /// Read one host line, pumping Win32 messages so cross-process HWND parenting can proceed.
     pub fn read_line(&self) -> Result<String, String> {
-        let mut stdout = self.stdout.lock().map_err(|_| "Ladybird host stdout poisoned")?;
-        let mut line = String::new();
-        stdout.read_line(&mut line).map_err(|e| format!("Ladybird host read: {e}"))?;
-        Ok(line)
+        self.read_line_timeout(HOST_WAIT)
+    }
+
+    fn read_line_timeout(&self, budget: Duration) -> Result<String, String> {
+        let deadline = Instant::now() + budget;
+        loop {
+            match self.lines.recv_timeout(Duration::from_millis(16)) {
+                Ok(line) => return Ok(line),
+                Err(RecvTimeoutError::Timeout) => {
+                    pump_messages();
+                    if Instant::now() >= deadline {
+                        return Err("Ladybird host: timed out waiting for a line".into());
+                    }
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err("Ladybird host: stdout closed".into());
+                }
+            }
+        }
     }
 
     /// Read host events until `load` with `done:true` for `want_id` (or any id when `want_id` is None).
     /// Returns the last `url` / history flags seen for that view (from `url` / `history` events).
     fn wait_load_done(&self, want_id: Option<i32>) -> Result<NavResult, String> {
         let mut result = NavResult::default();
-        for _ in 0..32 {
-            let line = self.read_line()?;
+        let deadline = Instant::now() + HOST_WAIT;
+        while Instant::now() < deadline {
+            let line = self.read_line_timeout(deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50)))?;
             if let Some(id) = want_id {
                 if !(line.contains(&format!("\"id\":{id}")) || line.contains(&format!("\"id\": {id}"))) {
                     continue;
@@ -115,8 +180,10 @@ impl Host {
             r#"{{"cmd":"create","url":"{escaped}","x":{x},"y":{y},"w":{w},"h":{h}}}"#
         ))?;
         let mut id = 0i32;
-        for _ in 0..32 {
-            let line = self.read_line()?;
+        let deadline = Instant::now() + HOST_WAIT;
+        while Instant::now() < deadline {
+            let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
+            let line = self.read_line_timeout(remain)?;
             if line.contains("\"event\":\"created\"") {
                 if let Some(rest) = line.split("\"id\":").nth(1) {
                     id = rest.trim().trim_matches(|c: char| !c.is_ascii_digit()).parse().unwrap_or(0);
@@ -168,8 +235,10 @@ impl Host {
     pub fn screenshot(&self, id: i32, path: &str) -> Result<(), String> {
         let escaped = path.replace('\\', "\\\\").replace('"', "\\\"");
         self.send_line(&format!(r#"{{"cmd":"screenshot","id":{id},"path":"{escaped}"}}"#))?;
-        for _ in 0..32 {
-            let line = self.read_line()?;
+        let deadline = Instant::now() + HOST_WAIT;
+        while Instant::now() < deadline {
+            let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
+            let line = self.read_line_timeout(remain)?;
             if line.contains("\"event\":\"screenshot\"")
                 && (line.contains(&format!("\"id\":{id}")) || line.contains(&format!("\"id\": {id}")))
             {
@@ -185,8 +254,10 @@ impl Host {
 
     pub fn print_page(&self, id: i32) -> Result<(), String> {
         self.send_line(&format!(r#"{{"cmd":"print","id":{id}}}"#))?;
-        for _ in 0..16 {
-            let line = self.read_line()?;
+        let deadline = Instant::now() + HOST_WAIT;
+        while Instant::now() < deadline {
+            let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
+            let line = self.read_line_timeout(remain)?;
             if line.contains("\"event\":\"print\"") {
                 return Ok(());
             }
@@ -196,8 +267,10 @@ impl Host {
 
     pub fn a11y_tree(&self, id: i32) -> Result<String, String> {
         self.send_line(&format!(r#"{{"cmd":"a11y","id":{id}}}"#))?;
-        for _ in 0..16 {
-            let line = self.read_line()?;
+        let deadline = Instant::now() + HOST_WAIT;
+        while Instant::now() < deadline {
+            let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
+            let line = self.read_line_timeout(remain)?;
             if line.contains("\"event\":\"a11y\"") {
                 return Ok(line);
             }

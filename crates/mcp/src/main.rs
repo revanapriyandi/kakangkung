@@ -153,8 +153,16 @@ fn err_rpc(id: Option<Value>, code: i64, message: &str) -> Option<Value> {
     id.map(|i| json!({"jsonrpc":"2.0","id":i,"error":{"code":code,"message":message}}))
 }
 
+fn require_view(host: &Host, id: i32) -> Result<i32, String> {
+    let id = if id > 0 { id } else { host.active };
+    if id <= 0 {
+        return Err("no active view — call browser_open first".into());
+    }
+    Ok(id)
+}
+
 fn call_tool(host: &mut Host, name: &str, args: &Value) -> Result<String, String> {
-    let id = args.get("id").and_then(|v| v.as_i64()).unwrap_or(host.active as i64) as i32;
+    let id_arg = args.get("id").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
     match name {
         "browser_open" => {
             let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("about:blank");
@@ -163,7 +171,7 @@ fn call_tool(host: &mut Host, name: &str, args: &Value) -> Result<String, String
         }
         "browser_navigate" => {
             let url = args.get("url").and_then(|v| v.as_str()).ok_or("url required")?;
-            let id = if id > 0 { id } else { host.active };
+            let id = if id_arg > 0 { id_arg } else { host.active };
             if id <= 0 {
                 let vid = host.create(url)?;
                 return Ok(format!("opened view {vid} → {url}"));
@@ -172,21 +180,25 @@ fn call_tool(host: &mut Host, name: &str, args: &Value) -> Result<String, String
             Ok(format!("navigated {id} → {url}"))
         }
         "browser_back" => {
+            let id = require_view(host, id_arg)?;
             host.send(&format!(r#"{{"cmd":"back","id":{id}}}"#))?;
             let _ = host.wait_event("load", Some(id))?;
             Ok(format!("back on {id}"))
         }
         "browser_forward" => {
+            let id = require_view(host, id_arg)?;
             host.send(&format!(r#"{{"cmd":"forward","id":{id}}}"#))?;
             let _ = host.wait_event("load", Some(id))?;
             Ok(format!("forward on {id}"))
         }
         "browser_reload" => {
+            let id = require_view(host, id_arg)?;
             host.send(&format!(r#"{{"cmd":"reload","id":{id}}}"#))?;
             let _ = host.wait_event("load", Some(id))?;
             Ok(format!("reloaded {id}"))
         }
         "browser_screenshot" => {
+            let id = require_view(host, id_arg)?;
             let path = args.get("path").and_then(|v| v.as_str()).ok_or("path required")?;
             let escaped = path.replace('\\', "\\\\").replace('"', "\\\"");
             host.send(&format!(r#"{{"cmd":"screenshot","id":{id},"path":"{escaped}"}}"#))?;
@@ -194,16 +206,19 @@ fn call_tool(host: &mut Host, name: &str, args: &Value) -> Result<String, String
             Ok(line.trim().to_string())
         }
         "browser_a11y" => {
+            let id = require_view(host, id_arg)?;
             host.send(&format!(r#"{{"cmd":"a11y","id":{id}}}"#))?;
             let line = host.wait_event("a11y", Some(id))?;
             Ok(line.trim().to_string())
         }
         "browser_print" => {
+            let id = require_view(host, id_arg)?;
             host.send(&format!(r#"{{"cmd":"print","id":{id}}}"#))?;
             let line = host.wait_event("print", Some(id))?;
             Ok(line.trim().to_string())
         }
         "browser_eval" => {
+            let id = require_view(host, id_arg)?;
             let js = args.get("js").and_then(|v| v.as_str()).ok_or("js required")?;
             let escaped = js.replace('\\', "\\\\").replace('"', "\\\"");
             host.send(&format!(r#"{{"cmd":"eval","id":{id},"js":"{escaped}"}}"#))?;
@@ -211,7 +226,7 @@ fn call_tool(host: &mut Host, name: &str, args: &Value) -> Result<String, String
             Ok(line.trim().to_string())
         }
         "browser_info" => Ok(format!(
-            "active={} host={}",
+            "active={} host={} engine=stub-or-ladybird",
             host.active,
             find_host().map(|p| p.display().to_string()).unwrap_or_else(|| "missing".into())
         )),

@@ -72,7 +72,8 @@ Or set `KAKANGKUNG_LADYBIRD_HOST` to the host path.
 | Native chrome (no HTML UI) | Done |
 | Ladybird-only engine selection | Done — WebView2 removed |
 | Rust stub host + child HWND paint | Done (`crates/ladybird-host`) |
-| Nav (back/forward/reload/visible/history) | Done (stub + C++ host protocol) |
+| Nav (back/forward/reload/visible/history) | Done (stub + C++ host protocol; empty history acks load) |
+| Host wait / HWND parenting | Done — UI pumps messages while waiting (avoids Self-test deadlock) |
 | Screenshot / print / a11y / eval cmds | Done (screenshot real on HWND; others stub→LibWeb) |
 | MCP server for AI agents | Done (`kakangkung-mcp`) |
 | Chrome Web Store CRX → Ladybird registry | Done (MV3 on disk; APIs need LibWebView) |

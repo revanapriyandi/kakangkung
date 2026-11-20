@@ -19,16 +19,46 @@ struct View {
     surface: Option<hwnd::Surface>,
 }
 
+/// Escape a string for embedding in a JSON string value (protocol lines are hand-built).
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 impl View {
+    fn paint_label(&mut self) {
+        #[cfg(windows)]
+        if let Some(s) = self.surface.as_mut() {
+            s.set_label(&self.url);
+        }
+    }
+
     fn emit_nav(&self, id: i32) {
-        emit(&format!(r#"{{"event":"url","id":{id},"url":"{}"}}"#, self.url));
-        let title = if self.url == "about:blank" { "New Tab" } else { self.url.as_str() };
+        let url = json_escape(&self.url);
+        let title = if self.url == "about:blank" {
+            "New Tab".to_string()
+        } else {
+            json_escape(&self.url)
+        };
+        emit(&format!(r#"{{"event":"url","id":{id},"url":"{url}"}}"#));
         emit(&format!(r#"{{"event":"title","id":{id},"title":"{title}"}}"#));
         emit(&format!(
             r#"{{"event":"history","id":{id},"back":{},"forward":{}}}"#,
-            !self.back.is_empty(),
-            !self.forward.is_empty()
+            if self.back.is_empty() { "false" } else { "true" },
+            if self.forward.is_empty() { "false" } else { "true" }
         ));
+        // Clients (`wait_load_done`, MCP) block until done:true — always emit it, even for no-op nav.
         emit(&format!(r#"{{"event":"load","id":{id},"done":true}}"#));
     }
 
@@ -39,10 +69,7 @@ impl View {
         } else {
             self.url = url;
         }
-        #[cfg(windows)]
-        if let Some(s) = self.surface.as_mut() {
-            s.set_label(&self.url);
-        }
+        self.paint_label();
     }
 }
 
@@ -116,6 +143,9 @@ fn main() {
             let y = field_int(&line, "y").unwrap_or(0);
             let w = field_int(&line, "w").unwrap_or(800);
             let h = field_int(&line, "h").unwrap_or(600);
+            // Emit `created` before CreateWindowEx: parenting into Kakangkung's HWND can wait on
+            // the parent's message pump, which only runs while Kakangkung reads our stdout.
+            emit(&format!(r#"{{"event":"created","id":{id}}}"#));
             #[cfg(windows)]
             let surface = hwnd::Surface::create(parent, x, y, w, h, &url);
             #[cfg(not(windows))]
@@ -127,7 +157,6 @@ fn main() {
                 #[cfg(windows)]
                 surface,
             };
-            emit(&format!(r#"{{"event":"created","id":{id}}}"#));
             v.emit_nav(id);
             views.insert(id, v);
             continue;
@@ -146,12 +175,10 @@ fn main() {
                 if let Some(v) = views.get_mut(&id) {
                     if let Some(prev) = v.back.pop() {
                         v.forward.push(std::mem::replace(&mut v.url, prev));
-                        #[cfg(windows)]
-                        if let Some(s) = v.surface.as_mut() {
-                            s.set_label(&v.url);
-                        }
-                        v.emit_nav(id);
+                        v.paint_label();
                     }
+                    // Always ack so UI/MCP waiters never hang on empty history.
+                    v.emit_nav(id);
                 }
             }
             continue;
@@ -161,12 +188,9 @@ fn main() {
                 if let Some(v) = views.get_mut(&id) {
                     if let Some(next) = v.forward.pop() {
                         v.back.push(std::mem::replace(&mut v.url, next));
-                        #[cfg(windows)]
-                        if let Some(s) = v.surface.as_mut() {
-                            s.set_label(&v.url);
-                        }
-                        v.emit_nav(id);
+                        v.paint_label();
                     }
+                    v.emit_nav(id);
                 }
             }
             continue;
@@ -248,8 +272,9 @@ fn main() {
                         std::fs::write(&path, png).is_ok()
                     }
                 }).unwrap_or(false);
+                let path_esc = json_escape(&path);
                 emit(&format!(
-                    r#"{{"event":"screenshot","id":{id},"path":"{path}","ok":{}}}"#,
+                    r#"{{"event":"screenshot","id":{id},"path":"{path_esc}","ok":{}}}"#,
                     if ok { "true" } else { "false" }
                 ));
             }
@@ -264,7 +289,7 @@ fn main() {
         }
         if has_cmd(&line, "a11y") {
             if let Some(id) = field_int(&line, "id") {
-                let url = views.get(&id).map(|v| v.url.as_str()).unwrap_or("");
+                let url = views.get(&id).map(|v| json_escape(&v.url)).unwrap_or_default();
                 emit(&format!(
                     r#"{{"event":"a11y","id":{id},"tree":[{{"role":"document","name":"{url}","children":[]}}]}}"#
                 ));
@@ -280,5 +305,24 @@ fn main() {
             }
             continue;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_escape_quotes_and_controls() {
+        assert_eq!(json_escape(r#"a"b\c"#), r#"a\"b\\c"#);
+        assert_eq!(json_escape("a\nb"), r#"a\nb"#);
+    }
+
+    #[test]
+    fn field_parsers() {
+        let line = r#"{"cmd":"navigate","id":3,"url":"https://example.com/x"}"#;
+        assert!(has_cmd(line, "navigate"));
+        assert_eq!(field_int(line, "id"), Some(3));
+        assert_eq!(field_str(line, "url").as_deref(), Some("https://example.com/x"));
     }
 }
