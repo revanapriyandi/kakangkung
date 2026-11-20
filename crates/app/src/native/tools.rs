@@ -95,7 +95,7 @@ pub(crate) fn extensions_doc(answer: &Json) -> PageDoc {
     ]));
     sections.push(section("about", "", vec![Row::new(
         "How extensions run",
-        "Extensions run in Kakangkung's tabs through Microsoft WebView2: content scripts, background work and blocking rules run. The extensions button in the toolbar opens an extension's own pop-up; it runs beside the page, so an extension that acts on \"the current tab\" may not see the page behind it.",
+        "Extensions install to the profile folder. With the LibWeb host linked, matching MV3 content scripts inject on navigation (chrome.runtime bootstrap + disk JS). The extensions button opens the Extensions page until LibWeb can host toolbar pop-ups.",
         Control::None,
     )]));
     PageDoc {
@@ -108,7 +108,7 @@ pub(crate) fn extensions_doc(answer: &Json) -> PageDoc {
     }
 }
 
-/// Native Ladybird DevTools page (LibWeb inspector docks here when the Boat host links LibWeb).
+/// Native Ladybird DevTools page — surfaces real LibWeb inspect/console/a11y via host + MCP.
 pub(crate) fn devtools_doc() -> PageDoc {
     PageDoc {
         title: "Developer tools".into(),
@@ -120,33 +120,61 @@ pub(crate) fn devtools_doc() -> PageDoc {
         sections: vec![
             section(
                 "inspector",
-                "Ladybird inspector",
+                "Ladybird LibWeb",
                 vec![
                     Row::new(
                         "Page engine",
-                        "Kakangkung uses Ladybird only. Docked Edge DevTools are not available.",
+                        "Kakangkung is Ladybird-only. DOM, a11y, console, eval, and capabilities come from LibWeb — not Edge DevTools.",
                         Control::None,
                     ),
                     Row::new(
-                        "Elements & console",
-                        "Build kakangkung-ladybird-host with HAVE_LADYBIRD=1 on Boat to attach LibWeb's inspector to this panel.",
-                        Control::Link {
-                            id: "visit:https://boat.dev/dashboard".into(),
-                        },
+                        "Elements",
+                        "Host cmd `dom` → inspect_dom_tree. MCP: browser_dom.",
+                        Control::None,
                     ),
                     Row::new(
-                        "AI agents",
-                        "Drive navigation, screenshots, a11y, and eval through kakangkung-mcp (stdio MCP).",
+                        "Accessibility",
+                        "Host cmd `a11y` → inspect_accessibility_tree. MCP: browser_a11y.",
+                        Control::None,
+                    ),
+                    Row::new(
+                        "Console",
+                        "Host buffers LibWeb console output (`console` cmd). MCP: browser_console / browser_eval.",
+                        Control::None,
+                    ),
+                    Row::new(
+                        "Screenshot",
+                        "Waits for a presented CPU frame, then PNG via take_frame_snapshot / displayed_frame.",
                         Control::None,
                     ),
                     Row::new("Keyboard", "F12 or Ctrl+Shift+I opens this page on Ladybird tabs", Control::None),
                 ],
             ),
             section(
+                "mcp",
+                "Stable MCP (kakangkung-mcp)",
+                vec![
+                    Row::new(
+                        "Transport",
+                        "stdio JSON-RPC 2.0 — requires engine=ladybird host (refuses stub).",
+                        Control::None,
+                    ),
+                    Row::new(
+                        "Tools",
+                        "open · navigate · back/forward/reload · screenshot · a11y · dom · console · print · eval · capabilities · info",
+                        Control::None,
+                    ),
+                ],
+            ),
+            section(
                 "protocol",
                 "Host protocol",
                 vec![
-                    Row::new("Commands", "navigate · back · forward · reload · stop · visible · screenshot · print · a11y · eval", Control::None),
+                    Row::new(
+                        "Commands",
+                        "navigate · screenshot · print · a11y · dom · console · eval · capabilities",
+                        Control::None,
+                    ),
                     Row::new("Docs", "engines/ladybird/protocol.md", Control::None),
                 ],
             ),
@@ -185,7 +213,7 @@ pub(crate) fn taskmanager_doc(m: &Json) -> PageDoc {
             section("processes", "Processes", rows),
             section("about", "", vec![Row::new(
                 "About these numbers",
-                "Memory is the private working set; commit is shown separately. Windows Task Manager may list WebView2 under a separate group, so its Kakangkung group can show less than this total. Renderer processes can serve several tabs or frames, so these are process totals, not exact memory per tab. Updated every 2 seconds.",
+                "Memory is the private working set; commit is shown separately. Ladybird WebContent rows come from LibWeb's ProcessManager (one process per site where isolation applies). Helper processes and the host PID are included. Updated every 2 seconds.",
                 Control::None,
             )]),
         ],

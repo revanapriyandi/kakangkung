@@ -94,6 +94,24 @@ fn restore_requested() -> bool {
     std::env::args().any(|a| a == "--restore-session")
 }
 
+/// Marker left while a Normal run is alive. Present on the next cold start ⇒ prior exit was unclean
+/// (crash / power cut); force session restore like `--restore-session`.
+fn session_running_marker(base: &std::path::Path) -> std::path::PathBuf {
+    base.join("session.running")
+}
+
+fn mark_session_running(base: &std::path::Path) {
+    let _ = std::fs::write(session_running_marker(base), format!("{}\n", std::process::id()));
+}
+
+fn clear_session_running(base: &std::path::Path) {
+    let _ = std::fs::remove_file(session_running_marker(base));
+}
+
+fn unclean_shutdown(base: &std::path::Path) -> bool {
+    session_running_marker(base).is_file()
+}
+
 /// Switches that may come with any run; `parse_args` skips them.
 fn is_global(a: &str) -> bool {
     a == "--restore-session" || a == "--no-first-run" || a.starts_with("--user-data-dir=")
@@ -284,6 +302,8 @@ fn main() {
     // "Clear browsing data when you exit" also runs at the next start (WebView2 clears
     // asynchronously, so the exit may beat it); done when the first webview exists.
     platform::configure_adblock_sites(&browser.settings.adblock_allowlist);
+    browser.sync_ladybird_adblock();
+    browser.sync_ladybird_permissions();
     browser.clear_at_start = browser.settings.clear_on_exit && matches!(run, Run::Normal(_));
     browser.update_dir = base.join("Updates");
     // The native frame is ready as soon as it exists: show the window now, before any webview
@@ -293,15 +313,23 @@ fn main() {
     browser.show_launch();
     // "On startup": continue where you left off, or open specific pages. Tabs other than the
     // selected one come back lazily (no page loads until selected).
+    // KB-25: unclean prior exit (session.running still present) forces tab restore.
+    let force_restore = restore_requested() || (matches!(run, Run::Normal(_)) && unclean_shutdown(&base));
+    if force_restore && unclean_shutdown(&base) {
+        eprintln!("KB-25: unclean shutdown detected — restoring last session");
+    }
     let restore = match (&run, &prefs) {
-        (Run::Normal(url), Some(p)) if url == ui::NEWTAB_URL && (p.startup == "continue" || restore_requested()) && !p.session.is_empty() => {
+        (Run::Normal(url), Some(p)) if url == ui::NEWTAB_URL && (p.startup == "continue" || force_restore) && !p.session.is_empty() => {
             Some((p.session.clone(), p.session_active))
         }
-        (Run::Normal(url), Some(p)) if url == ui::NEWTAB_URL && p.startup == "pages" && !p.startup_pages.is_empty() => {
+        (Run::Normal(url), Some(p)) if url == ui::NEWTAB_URL && p.startup == "pages" && !p.startup_pages.is_empty() && !force_restore => {
             Some((p.startup_pages.clone(), 0))
         }
         _ => None,
     };
+    if matches!(run, Run::Normal(_)) {
+        mark_session_running(&base);
+    }
     match restore {
         Some((urls, active)) => {
             let ids: Vec<u64> = urls.iter().map(|u| browser.open_tab_lazy(u)).collect();
@@ -370,7 +398,11 @@ fn main() {
                 }
                 // "Clear browsing data when you exit": history, cookies, cache and site data.
                 if browser.settings.clear_on_exit && matches!(run, Run::Normal(_) | Run::Window { incognito: false, .. }) {
-                    if let Some(wv) = browser.extension_host() {
+                    if let Some(host) = browser.ladybird.as_ref() {
+                        if let Err(e) = host.clear_data(true, true, 0) {
+                            eprintln!("clear browsing data on exit: {e}");
+                        }
+                    } else if let Some(wv) = browser.extension_host() {
                         let _ = wv.clear_all_browsing_data();
                     }
                     browser.db(|s| s.clear_history());
@@ -396,6 +428,10 @@ fn main() {
                 }));
                 let _ = done_rx.recv_timeout(Duration::from_secs(5));
                 drop(storage_thread.take());
+                // Clean exit only after session flush — next cold start skips forced restore.
+                if matches!(run, Run::Normal(_)) {
+                    clear_session_running(&base);
+                }
             }
             Event::WindowEvent { event: WindowEvent::Moved(_), .. } => browser.hide_overlay(),
             // Tab search takes the keyboard into its own pop-up window and closes itself when it
@@ -435,6 +471,61 @@ fn main() {
 
         // Background clocks: window fallback, idle preparation, memory saver, automatic sync.
         let mut wake = browser.memory_tick();
+        // Drain Ladybird host stdout so spontaneous download / page_ipc events reach the UI
+        // even when no navigate/create wait is active.
+        if browser.ladybird.is_some() {
+            // Pull console-missed kk-ext queue entries from the active view, then drain stdout.
+            if let Some(vid) = browser.index(browser.active).and_then(|i| browser.tabs[i].ladybird_view) {
+                if let Some(host) = browser.ladybird.as_ref() {
+                    let _ = host.ext_drain(vid);
+                }
+            }
+            let drained = browser.ladybird.as_ref().is_some_and(|h| h.poll_events());
+            if drained {
+                let _ = browser.proxy.send_event(Msg::DownloadsChanged);
+            }
+            for (vid, message) in platform::take_page_ipc() {
+                if let Some(what) = message.strip_prefix("kk:pw:") {
+                    if let Some(i) = browser.tabs.iter().position(|t| t.ladybird_view == Some(vid)) {
+                        let tab = browser.tabs[i].view.id;
+                        let url = browser.tabs[i].view.url.clone();
+                        let _ = browser.proxy.send_event(Msg::Password {
+                            tab,
+                            url,
+                            what: what.to_string(),
+                        });
+                    }
+                }
+            }
+            // KB-25: LibWeb already respawned WebContent; reload the tab URL into the new process.
+            for (vid, reason) in platform::take_web_crashes() {
+                if let Some(i) = browser.tabs.iter().position(|t| t.ladybird_view == Some(vid)) {
+                    let url = browser.tabs[i].view.url.clone();
+                    eprintln!("KB-25: WebContent crashed ({reason}) on view {vid}; reloading {url}");
+                    if reason != "ExceededMemoryLimit" {
+                        if let (Some(host), Some(vid)) = (browser.ladybird.as_ref(), browser.tabs[i].ladybird_view) {
+                            match host.navigate(vid, &url) {
+                                Ok(nav) => browser.tabs[i].apply_ladybird_nav(&nav),
+                                Err(e) => eprintln!("KB-25: reload after crash failed: {e}"),
+                            }
+                        }
+                    }
+                }
+            }
+            // Content→host sendMessage (no MV3 SW). Resolve with null until a native handler exists.
+            for msg in platform::take_ext_messages() {
+                if let Some(host) = browser.ladybird.as_ref() {
+                    if let Err(e) = host.ext_reply(msg.view_id, &msg.extension_id, &msg.request_id, "null") {
+                        eprintln!(
+                            "ext_reply {} / {} failed: {e}",
+                            msg.extension_id, msg.request_id
+                        );
+                    }
+                }
+            }
+            let next = Instant::now() + Duration::from_millis(100);
+            wake = Some(wake.map_or(next, |w| w.min(next)));
+        }
         if let Some(at) = browser.preview_tick() {
             wake = Some(wake.map_or(at, |w| w.min(at)));
         }

@@ -15,7 +15,8 @@ impl Browser {
                 "native":tab.webview.as_ref().map(platform::memory_status)})
         }).collect();
         let webviews: Vec<_> = self.tabs.iter().filter_map(|tab|tab.webview.as_ref()).collect();
-        let processes = platform::processes(&webviews);
+        let host_pid = self.ladybird.as_ref().map(|h| h.pid());
+        let processes = platform::processes(&webviews, host_pid);
         let total_ws: u64 = processes.iter().map(|process|process.private_ws).sum();
         let total_commit: u64 = processes.iter().map(|process|process.commit).sum();
         let processes: Vec<_> = processes.iter().map(|process|json!({"pid":process.pid,"kind":process.kind,

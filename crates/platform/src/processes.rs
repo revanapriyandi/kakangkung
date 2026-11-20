@@ -61,6 +61,11 @@ pub struct ProcessMemory {
     pub commit: u64,
 }
 
+/// Private working set, commit, and creation time of `pid` (zeros when it cannot be opened).
+pub fn process_counters(pid: u32) -> (u64, u64, u64) {
+    read(pid)
+}
+
 /// (private working set, commit, creation time) of `pid`; zeros when it cannot be opened.
 pub(crate) fn read(pid: u32) -> (u64, u64, u64) {
     // SAFETY: the handle is closed below; the counters struct size is passed as `cb`; the
@@ -168,9 +173,11 @@ fn webview_kinds(wv: &WebView) -> HashMap<u32, &'static str> {
     out
 }
 
-/// The app tree plus every process reported by the supplied WebView2 environments, deduplicated.
-/// A shared runtime belongs to the entire environment; this is not exact per-tab attribution.
-pub fn processes(webviews: &[&WebView]) -> Vec<ProcessMemory> {
+/// The app tree plus every process reported by the supplied WebView2 environments and optional
+/// Ladybird host PID seeds, deduplicated. A shared runtime belongs to the entire environment.
+/// Ladybird WebContent PIDs (process-per-site) come from LibWeb `process_snapshots` via the
+/// host `processes` command — this helper only seeds the host PID for ToolHelp ancestry.
+pub fn processes(webviews: &[&WebView], ladybird_host_pid: Option<u32>) -> Vec<ProcessMemory> {
     let procs = snapshot();
     let mut kinds = HashMap::new();
     let mut environments = HashSet::new();
@@ -179,6 +186,9 @@ pub fn processes(webviews: &[&WebView]) -> Vec<ProcessMemory> {
         if identity.is_some_and(|id| !environments.insert(id)) { continue; }
         kinds.extend(webview_kinds(wv));
     }
+    if let Some(pid) = ladybird_host_pid.filter(|&p| p != 0) {
+        kinds.entry(pid).or_insert("Ladybird");
+    }
     let mut counters = HashMap::new();
     select_processes(&procs, std::process::id(), kinds.keys().copied(), |pid| counters.entry(pid).or_insert_with(|| read(pid)).2)
         .into_iter()
@@ -186,7 +196,13 @@ pub fn processes(webviews: &[&WebView]) -> Vec<ProcessMemory> {
             let (private_ws, commit, created) = read(pid);
             if counters.get(&pid).is_some_and(|(_, _, before)| *before != created) { return None; }
             let name = procs.get(&pid).map_or("", |(_, n)| n.as_str());
-            let kind = kinds.get(&pid).copied().unwrap_or(if name == "kakangkung.exe" { "Kakangkung" } else { "Helper" });
+            let kind = kinds.get(&pid).copied().unwrap_or(if name == "kakangkung.exe" {
+                "Kakangkung"
+            } else if name.contains("ladybird") {
+                "Ladybird"
+            } else {
+                "Helper"
+            });
             Some(ProcessMemory { pid, kind, private_ws, commit })
         })
         .collect()

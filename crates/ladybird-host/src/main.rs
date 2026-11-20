@@ -100,6 +100,28 @@ fn has_cmd(line: &str, cmd: &str) -> bool {
     line.contains(&format!("\"cmd\":\"{cmd}\""))
 }
 
+/// Optionally parent a stub HWND without blocking stdin.
+///
+/// Cross-process `CreateWindowEx(WS_CHILD, parent)` waits for the parent's message pump. Doing that
+/// on the stdin thread deadlocks Kakangkung's next `send_line`. HWND is also `!Send`, so we cannot
+/// create on a helper and return the surface here. Fire-and-forget a helper that owns (and leaks)
+/// the surface if create ever completes; protocol already acked `load` with `surface: None`.
+#[cfg(windows)]
+fn spawn_surface_best_effort(parent: usize, x: i32, y: i32, w: i32, h: i32, url: &str) {
+    if parent == 0 {
+        return;
+    }
+    let url = url.to_string();
+    let _ = std::thread::Builder::new()
+        .name("ladybird-stub-hwnd".into())
+        .spawn(move || {
+            if let Some(surface) = hwnd::Surface::create(parent, x, y, w, h, &url) {
+                // Keep the HWND alive for the process lifetime; we are not tracking it on View.
+                std::mem::forget(surface);
+            }
+        });
+}
+
 fn main() {
     let mut profile = String::new();
     let mut parent: usize = 0;
@@ -143,22 +165,24 @@ fn main() {
             let y = field_int(&line, "y").unwrap_or(0);
             let w = field_int(&line, "w").unwrap_or(800);
             let h = field_int(&line, "h").unwrap_or(600);
-            // Emit `created` before CreateWindowEx: parenting into Kakangkung's HWND can wait on
-            // the parent's message pump, which only runs while Kakangkung reads our stdout.
+            // Protocol first: Kakangkung's create_view waits on `created` + `load`. Never block
+            // those behind CreateWindowEx — cross-process WS_CHILD parenting can stall until the
+            // parent pumps, and while we stall we stop reading stdin so Kakangkung's next
+            // send_line fills the pipe and deadlocks the UI thread (Self-test hung for hours).
             emit(&format!(r#"{{"event":"created","id":{id}}}"#));
-            #[cfg(windows)]
-            let surface = hwnd::Surface::create(parent, x, y, w, h, &url);
-            #[cfg(not(windows))]
-            let _ = (parent, x, y, w, h);
             let v = View {
                 url: url.clone(),
                 back: vec![],
                 forward: vec![],
                 #[cfg(windows)]
-                surface,
+                surface: None,
             };
             v.emit_nav(id);
             views.insert(id, v);
+            #[cfg(windows)]
+            spawn_surface_best_effort(parent, x, y, w, h, &url);
+            #[cfg(not(windows))]
+            let _ = (parent, x, y, w, h);
             continue;
         }
         if has_cmd(&line, "navigate") {
@@ -287,11 +311,37 @@ fn main() {
             }
             continue;
         }
+        if has_cmd(&line, "ext_reply") {
+            // Stub has no page JS to resolve; still ack so Kakangkung waiters complete.
+            if let Some(id) = field_int(&line, "id") {
+                emit(&format!(r#"{{"event":"ext_reply","id":{id},"ok":true}}"#));
+            }
+            continue;
+        }
+        if has_cmd(&line, "ext_drain") {
+            // No content-script queue in the stub host.
+            continue;
+        }
         if has_cmd(&line, "a11y") {
             if let Some(id) = field_int(&line, "id") {
-                let url = views.get(&id).map(|v| json_escape(&v.url)).unwrap_or_default();
                 emit(&format!(
-                    r#"{{"event":"a11y","id":{id},"tree":[{{"role":"document","name":"{url}","children":[]}}]}}"#
+                    r#"{{"event":"a11y","id":{id},"tree":null,"ok":false,"reason":"a11y requires LibWeb-linked host"}}"#
+                ));
+            }
+            continue;
+        }
+        if has_cmd(&line, "dom") {
+            if let Some(id) = field_int(&line, "id") {
+                emit(&format!(
+                    r#"{{"event":"dom","id":{id},"tree":null,"ok":false,"reason":"dom requires LibWeb-linked host"}}"#
+                ));
+            }
+            continue;
+        }
+        if has_cmd(&line, "console") {
+            if let Some(id) = field_int(&line, "id") {
+                emit(&format!(
+                    r#"{{"event":"console","id":{id},"messages":null,"ok":false,"reason":"console requires LibWeb-linked host"}}"#
                 ));
             }
             continue;
@@ -301,6 +351,14 @@ fn main() {
                 let _ = field_str(&line, "js");
                 emit(&format!(
                     r#"{{"event":"eval","id":{id},"ok":false,"result":"eval requires LibWeb-linked host"}}"#
+                ));
+            }
+            continue;
+        }
+        if has_cmd(&line, "capabilities") {
+            if let Some(id) = field_int(&line, "id") {
+                emit(&format!(
+                    r#"{{"event":"capabilities","id":{id},"ok":false,"caps":null,"reason":"capabilities requires LibWeb-linked host"}}"#
                 ));
             }
             continue;

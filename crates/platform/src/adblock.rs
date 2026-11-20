@@ -35,6 +35,11 @@ pub(crate) fn set_enabled(on: bool) {
     if changed { refresh_scripts(); }
 }
 
+/// Ladybird path: enable/disable the shared EasyList engine without a WebView2 tab.
+pub fn set_adblock_enabled(on: bool) {
+    set_enabled(on);
+}
+
 fn refresh_scripts() {
     let sites = ALLOWED_SITES.with(|sites| sites.borrow().iter().cloned().collect::<Vec<_>>().join("\n"));
     crate::adblock_script::update_adblock_scripts(ON.with(Cell::get), &sites);
@@ -126,6 +131,18 @@ fn should_block(page: &str, url: &str) -> bool {
     let Some(entry) = listed(&host(url)) else { return false };
     let page = host(page);
     !(page == entry || page.ends_with(&format!(".{entry}")))
+}
+
+/// Ladybird document navigations: block top-level loads that EasyList marks as `document`
+/// (and domain-list hits) when the ad blocker is on and the site is not allowlisted.
+pub fn blocks_document_navigation(url: &str) -> bool {
+    if !ON.with(Cell::get) || adblock_site_allowed(url) {
+        return false;
+    }
+    if crate::filter_engine::blocks_with_method(url, url, "document", "GET") {
+        return true;
+    }
+    listed(&host(url)).is_some() && should_block("https://example.invalid/", url)
 }
 
 fn resource_kind(context: COREWEBVIEW2_WEB_RESOURCE_CONTEXT) -> &'static str {

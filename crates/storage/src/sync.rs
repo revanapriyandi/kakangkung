@@ -1,8 +1,9 @@
 //! Kakangkung account sync through a folder that a cloud drive (OneDrive, Google Drive, Dropbox…)
 //! already replicates. Every PC signed in with the same account email uses the same sub-folder;
-//! each writes `<device-id>.json` (history, bookmarks, open tabs, settings, extension names — the
-//! data types the person chose) and merges the files of the other devices. No server.
-//! Conflicts: newest visit wins for history, bookmarks are united, newest settings win.
+//! each writes `<device-id>.json` (history, bookmarks, open tabs, settings, extension names,
+//! passwords — the data types the person chose) and merges the files of the other devices. No
+//! server. Conflicts: newest visit wins for history, bookmarks/passwords are united, newest
+//! settings win. Synced passwords are plaintext in the device file (same trust as CSV export).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -38,6 +39,10 @@ struct DeviceFile {
     settings_updated: i64,
     #[serde(default)]
     extensions: Vec<String>,
+    /// Plain passwords for cross-device vault merge (KB-21). Same trust model as CSV export:
+    /// anyone with the sync folder can read them. Empty when passwords sync is off.
+    #[serde(default)]
+    passwords: Vec<crate::passwords::Credential>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -56,21 +61,36 @@ pub struct Types {
     pub tabs: bool,
     pub settings: bool,
     pub extensions: bool,
+    pub passwords: bool,
 }
 
 impl Types {
-    pub const ALL: Types = Types { history: true, bookmarks: true, tabs: true, settings: true, extensions: true };
-    pub const NAMES: [&'static str; 5] = ["history", "bookmarks", "tabs", "settings", "extensions"];
+    pub const ALL: Types = Types {
+        history: true,
+        bookmarks: true,
+        tabs: true,
+        settings: true,
+        extensions: true,
+        passwords: true,
+    };
+    pub const NAMES: [&'static str; 6] = ["history", "bookmarks", "tabs", "settings", "extensions", "passwords"];
 
     /// From a comma list like "history,bookmarks" (empty setting = everything).
     pub fn parse(list: Option<&str>) -> Types {
         let Some(list) = list else { return Types::ALL };
         let has = |n: &str| list.split(',').any(|x| x.trim() == n);
-        Types { history: has("history"), bookmarks: has("bookmarks"), tabs: has("tabs"), settings: has("settings"), extensions: has("extensions") }
+        Types {
+            history: has("history"),
+            bookmarks: has("bookmarks"),
+            tabs: has("tabs"),
+            settings: has("settings"),
+            extensions: has("extensions"),
+            passwords: has("passwords"),
+        }
     }
 
     pub fn list(&self) -> String {
-        let on = [self.history, self.bookmarks, self.tabs, self.settings, self.extensions];
+        let on = [self.history, self.bookmarks, self.tabs, self.settings, self.extensions, self.passwords];
         Types::NAMES.iter().zip(on).filter(|(_, o)| *o).map(|(n, _)| *n).collect::<Vec<_>>().join(",")
     }
 }
@@ -83,6 +103,7 @@ pub struct Outgoing {
     /// When the settings were last changed on this device (ms).
     pub settings_updated: i64,
     pub extensions: Vec<String>,
+    pub passwords: Vec<crate::passwords::Credential>,
 }
 
 /// What a sync brought in.
@@ -92,6 +113,7 @@ pub struct Incoming {
     /// Settings from another device that changed them more recently than this one.
     pub settings: Option<(i64, BTreeMap<String, String>)>,
     pub new_bookmarks: usize,
+    pub new_passwords: usize,
 }
 
 /// The account's own sub-folder of the sync folder (FNV-1a of the lower-cased email), so several
@@ -168,6 +190,13 @@ pub fn sync(store: &Store, folder: &Path, device: &str, name: &str, out: Outgoin
             .max_by_key(|f| f.settings_updated)
             .map(|f| (f.settings_updated, f.settings.clone()));
     }
+    if types.passwords {
+        for f in &remote {
+            if !f.passwords.is_empty() {
+                incoming.new_passwords += store.import_passwords(&f.passwords)?;
+            }
+        }
+    }
     let mine = DeviceFile {
         version: 2,
         device: device.into(),
@@ -179,6 +208,7 @@ pub fn sync(store: &Store, folder: &Path, device: &str, name: &str, out: Outgoin
         settings: if types.settings { out.settings } else { BTreeMap::new() },
         settings_updated: out.settings_updated,
         extensions: if types.extensions { out.extensions } else { vec![] },
+        passwords: if types.passwords { out.passwords } else { vec![] },
     };
     let json = serde_json::to_vec(&mine).map_err(|e| e.to_string())?;
     if json.len() as u64 > MAX_FILE {
@@ -230,6 +260,29 @@ mod tests {
         assert_eq!(seen_by_a[0].tabs, vec![tab("https://b.example/")], "script URLs are not shared");
         assert_eq!(a.history("", 10).unwrap().len(), 2, "A merged B's history");
         assert!(sync(&a, &folder, "../x", "bad", out(vec![]), Types::ALL).is_err());
+    }
+
+    #[test]
+    fn passwords_merge_when_type_enabled() {
+        let root = std::env::temp_dir().join(format!("kakangkung-sync-pw-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let folder = root.join("cloud");
+        let open = |n: &str| Store::open(&root.join(format!("{n}.db"))).unwrap();
+        let (a, b) = (open("a"), open("b"));
+        a.save_password(&crate::passwords::Credential {
+            origin: "https://mail.example/".into(),
+            username: "ada".into(),
+            password: "hunter2".into(),
+        })
+        .unwrap();
+        let only_pw = Types::parse(Some("passwords"));
+        let a_out = Outgoing { passwords: a.export_passwords().unwrap(), ..Default::default() };
+        sync(&a, &folder, "aa01", "Laptop", a_out, only_pw).unwrap();
+        let incoming = sync(&b, &folder, "bb02", "Desktop", Outgoing::default(), only_pw).unwrap();
+        assert_eq!(incoming.new_passwords, 1);
+        assert_eq!(b.password_count().unwrap(), 1);
+        let (_, clear) = b.password(b.logins("").unwrap()[0].id, false).unwrap();
+        assert_eq!(clear, "hunter2");
     }
 
     #[test]

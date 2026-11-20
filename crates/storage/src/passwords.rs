@@ -2,7 +2,7 @@
 //! with Windows DPAPI (only this Windows user on this PC can open it, like Chrome's key). Imports
 //! CSV exports from other browsers and password managers, and exports the same format.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::Store;
 
@@ -17,8 +17,8 @@ pub struct Login {
     pub used: i64,
 }
 
-/// A login with its password in clear, as imported or exported.
-#[derive(Debug, Clone, PartialEq)]
+/// A login with its password in clear, as imported or exported (and folder-sync when enabled).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Credential {
     pub origin: String,
     pub username: String,

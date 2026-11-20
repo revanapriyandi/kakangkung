@@ -483,13 +483,13 @@ impl SelfTest {
                         "act",
                         ok,
                         format!(
-                            "Ladybird: Ctrl+T opened tab {id} ({n} tabs, {ladybird_views} Ladybird views); PrevTab active=1={back_on_1}; Ctrl+W left one tab={one_left} (WebView2 Memory Saver N/A)"
+                            "Ladybird: Ctrl+T opened tab {id} ({n} tabs, {ladybird_views} Ladybird views); PrevTab active=1={back_on_1}; Ctrl+W left one tab={one_left} (Memory Saver = DropWebview discard)"
                         ),
                     ));
                     self.steps.push((
                         "memoryretained",
                         true,
-                        "Ladybird: page JS retain check skipped (no WebView2 evaluate_script)".into(),
+                        "Ladybird: page JS retain check skipped (discard recreates the host view)".into(),
                     ));
                     // HUD expects the native New Tab chrome chip.
                     b.navigate(ui::NEWTAB_URL);

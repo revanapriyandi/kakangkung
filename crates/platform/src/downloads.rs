@@ -62,6 +62,8 @@ struct Item {
 
 thread_local! {
     static LIST: RefCell<Vec<Item>> = const { RefCell::new(Vec::new()) };
+    /// Live downloads from the Ladybird LibWeb FileDownloader (no WebView2 COM).
+    static LADYBIRD: RefCell<Vec<DownloadInfo>> = const { RefCell::new(Vec::new()) };
     static NEXT: RefCell<u64> = const { RefCell::new(1) };
     static ASK: Cell<bool> = const { Cell::new(false) };
     static LATER: RefCell<Vec<Box<dyn FnOnce()>>> = const { RefCell::new(Vec::new()) };
@@ -206,15 +208,46 @@ fn info(item: &Item) -> DownloadInfo {
     DownloadInfo { id: item.id, url, path, received, total, state, can_resume: can_resume.as_bool(), started: item.started, private: item.private }
 }
 
-/// Every download of this run, newest first.
+/// Every download of this run, newest first (WebView2 + Ladybird).
 pub fn downloads() -> Vec<DownloadInfo> {
-    LIST.with(|l| l.borrow().iter().rev().map(info).collect())
+    let mut out = LIST.with(|l| l.borrow().iter().rev().map(info).collect::<Vec<_>>());
+    LADYBIRD.with(|l| out.extend(l.borrow().iter().cloned()));
+    out.sort_by_key(|d| std::cmp::Reverse(d.started));
+    out
+}
+
+/// True when `id` is tracked from the Ladybird host (not a WebView2 COM op).
+pub fn ladybird_owns(id: u64) -> bool {
+    LADYBIRD.with(|l| l.borrow().iter().any(|d| d.id == id))
+}
+
+/// Upsert a LibWeb FileDownloader snapshot into the live list.
+pub fn upsert_ladybird(mut info: DownloadInfo) {
+    LADYBIRD.with(|l| {
+        let mut list = l.borrow_mut();
+        if let Some(existing) = list.iter_mut().find(|d| d.id == info.id) {
+            if existing.started > 0 {
+                info.started = existing.started;
+            }
+            *existing = info;
+        } else {
+            if info.started <= 0 {
+                info.started = now_ms();
+            }
+            list.push(info);
+        }
+    });
+}
+
+/// Remove a Ladybird-tracked download (host `download_removed` or Forget).
+pub fn remove_ladybird(id: u64) {
+    LADYBIRD.with(|l| l.borrow_mut().retain(|d| d.id != id));
 }
 
 /// Take the downloads that ended (done, cancelled or failed) off this list, except Incognito
 /// ones, for the caller to keep on disk.
 pub fn take_finished() -> Vec<DownloadInfo> {
-    LIST.with(|l| {
+    let mut finished = LIST.with(|l| {
         let mut list = l.borrow_mut();
         let mut finished = vec![];
         list.retain(|item| {
@@ -226,10 +259,37 @@ pub fn take_finished() -> Vec<DownloadInfo> {
             !ended
         });
         finished
-    })
+    });
+    LADYBIRD.with(|l| {
+        let mut list = l.borrow_mut();
+        list.retain(|d| {
+            let ended = matches!(d.state, DownloadState::Done | DownloadState::Stopped) && !d.private;
+            if ended {
+                finished.push(d.clone());
+            }
+            !ended
+        });
+    });
+    finished
 }
 
 pub fn download_action(id: u64, action: DownloadAction) -> crate::Result<()> {
+    if ladybird_owns(id) {
+        match action {
+            DownloadAction::Forget => {
+                remove_ladybird(id);
+                return Ok(());
+            }
+            // Pause / resume / cancel must go through the Ladybird host (`Host::download_action`).
+            // Callers with a host should branch on `ladybird_owns` first.
+            DownloadAction::Pause | DownloadAction::Resume | DownloadAction::Cancel => {
+                return Err(windows::core::Error::new(
+                    windows::core::HRESULT(0x80004001u32 as i32), // E_NOTIMPL
+                    "Ladybird download action requires Host::download_action",
+                ));
+            }
+        }
+    }
     LIST.with(|l| {
         let mut list = l.borrow_mut();
         let Some(i) = list.iter().position(|d| d.id == id) else { return Ok(()) };

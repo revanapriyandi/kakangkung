@@ -1,25 +1,928 @@
-// Real Ladybird UI port — compiled only with -DHAVE_LADYBIRD=1 and LADYBIRD_* paths.
-// Subclass WebView::ViewImplementation per Ladybird Documentation/Porting.md.
-// Parent the view's native surface into Kakangkung's HWND (passed as parent_hwnd).
-//
-// Build on Boat (https://boat.dev/dashboard), sandbox kakangkung-ladybird / bx_cnfw3mch:
-//   ./engines/ladybird/build.sh --ladybird
-//
-// Until this file is wired into CMakeLists when HAVE_LADYBIRD=ON and linked against
-// LibWebView, the stub in stub_page.cpp paints an explanatory child HWND instead.
+// Real Ladybird UI port — HAVE_LADYBIRD=1.
+// WebView::HeadlessWebView (LibWeb) + CPU frame blit into native surface
+// (Win32 HWND parented into Kakangkung, or X11 window on Linux/Boat).
 
-#if defined(HAVE_LADYBIRD)
-
-#    include "view.h"
-
-#    include "application.h"
-
-// Placeholder: include Ladybird headers once the Boat tree is present, e.g.:
-//   #include <LibWebView/ViewImplementation.h>
-//   #include <LibWebView/Application.h>
-//
-// class kakangkung::ladybird::View final : public WebView::ViewImplementation { ... };
-
-#    error "view_ladybird.cpp: implement ViewImplementation against a Ladybird checkout (Boat). See engines/ladybird/README.md."
-
+#if !defined(HAVE_LADYBIRD)
+#    error "view_ladybird.cpp requires -DHAVE_LADYBIRD=1"
 #endif
+
+#include "view.h"
+#include "application.h"
+#include "extensions.h"
+#if !defined(_WIN32)
+#    include "x11_surface.h"
+#endif
+
+#include <AK/ByteString.h>
+#include <AK/JsonArray.h>
+#include <AK/JsonObject.h>
+#include <AK/JsonValue.h>
+#include <AK/String.h>
+#include <AK/StringUtils.h>
+#include <AK/Utf16String.h>
+#include <LibCore/EventLoop.h>
+#include <LibCore/File.h>
+#include <LibGfx/Bitmap.h>
+#include <LibGfx/ImageFormats/PNGWriter.h>
+#include <LibGfx/ShareableBitmap.h>
+#include <LibGfx/SystemTheme.h>
+#include <LibURL/URL.h>
+#include <LibJS/ConsoleLogLevel.h>
+#include <LibWebCommon/WebView/ConsoleOutput.h>
+#include <LibWebCommon/WebView/Debugger.h>
+#include <LibWebView/Application.h>
+#include <LibWebView/HeadlessWebView.h>
+#include <LibWebView/PageBackingStores.h>
+#include <LibWebView/URL.h>
+
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <mutex>
+#include <utility>
+#include <vector>
+
+#if defined(_WIN32)
+#    ifndef NOMINMAX
+#        define NOMINMAX
+#    endif
+#    include <windows.h>
+#endif
+
+namespace kakangkung::ladybird {
+
+namespace {
+
+class KakangkungApplication final : public WebView::Application {
+    WEB_VIEW_APPLICATION(KakangkungApplication)
+public:
+    KakangkungApplication() = default;
+};
+
+class LibWebSurface final : public WebView::HeadlessWebView {
+public:
+    static NonnullOwnPtr<LibWebSurface> create(Core::AnonymousBuffer theme, Web::DevicePixelSize size,
+        std::uintptr_t parent_hwnd, kk_lb_callbacks callbacks, std::string profile_dir)
+    {
+        auto view = adopt_own(*new LibWebSurface(move(theme), size, parent_hwnd, callbacks, move(profile_dir)));
+        view->initialize_tab(Web::HTML::VisibilityState::Visible);
+        view->set_presents_from_cpu_memory(true);
+        view->wire_callbacks();
+        return view;
+    }
+
+    void set_native_bounds(int x, int y, int w, int h)
+    {
+        m_x = x;
+        m_y = y;
+        m_w = w > 0 ? w : 1;
+        m_h = h > 0 ? h : 1;
+#if defined(_WIN32)
+        if (m_hwnd)
+            MoveWindow(m_hwnd, m_x, m_y, m_w, m_h, TRUE);
+#else
+        kk_x11_surface_set_bounds(m_x11, m_x, m_y, m_w, m_h);
+#endif
+        reset_viewport_size({ m_w, m_h });
+    }
+
+    void set_native_visible(bool on)
+    {
+#if defined(_WIN32)
+        if (m_hwnd)
+            ShowWindow(m_hwnd, on ? SW_SHOW : SW_HIDE);
+#else
+        kk_x11_surface_set_visible(m_x11, on ? 1 : 0);
+#endif
+        set_system_visibility_state(on ? Web::HTML::VisibilityState::Visible : Web::HTML::VisibilityState::Hidden);
+    }
+
+    bool has_presented_frame() const { return m_has_presented_frame; }
+
+    bool wait_for_presented_frame(std::chrono::milliseconds budget)
+    {
+        if (m_has_presented_frame)
+            return true;
+        auto const deadline = std::chrono::steady_clock::now() + budget;
+        while (!m_has_presented_frame) {
+            Core::EventLoop::current().pump(Core::EventLoop::WaitMode::PollForEvents);
+            if (std::chrono::steady_clock::now() >= deadline)
+                return false;
+        }
+        return true;
+    }
+
+    std::string take_console_json(bool clear)
+    {
+        std::lock_guard lock(m_console_mutex);
+        std::string out = "[";
+        for (size_t i = 0; i < m_console.size(); ++i) {
+            if (i)
+                out += ',';
+            out += m_console[i];
+        }
+        out += ']';
+        if (clear)
+            m_console.clear();
+        return out;
+    }
+
+    void ingest_ext_queue_json(std::string result)
+    {
+        if (result.size() >= 2 && result.front() == '"' && result.back() == '"') {
+            std::string unescaped;
+            for (size_t i = 1; i + 1 < result.size(); ++i) {
+                if (result[i] == '\\' && i + 1 < result.size()) {
+                    char n = result[++i];
+                    if (n == '"' || n == '\\' || n == '/')
+                        unescaped += n;
+                    else if (n == 'n')
+                        unescaped += '\n';
+                    else
+                        unescaped += n;
+                } else {
+                    unescaped += result[i];
+                }
+            }
+            result = std::move(unescaped);
+        }
+        if (result.size() < 2 || result.front() != '[')
+            return;
+        size_t i = 1;
+        while (i < result.size()) {
+            while (i < result.size() && (result[i] == ' ' || result[i] == ',' || result[i] == '\n'))
+                ++i;
+            if (i >= result.size() || result[i] == ']')
+                break;
+            if (result[i] != '{')
+                break;
+            size_t start = i;
+            int depth = 0;
+            do {
+                if (result[i] == '{')
+                    ++depth;
+                else if (result[i] == '}')
+                    --depth;
+                ++i;
+            } while (i < result.size() && depth > 0);
+            handle_kk_ext(std::string("kk-ext:") + result.substr(start, i - start));
+        }
+    }
+
+    ~LibWebSurface() override
+    {
+#if defined(_WIN32)
+        if (m_hwnd) {
+            DestroyWindow(m_hwnd);
+            m_hwnd = nullptr;
+        }
+#else
+        kk_x11_surface_destroy(m_x11);
+        m_x11 = nullptr;
+#endif
+    }
+
+private:
+    LibWebSurface(Core::AnonymousBuffer theme, Web::DevicePixelSize size, std::uintptr_t parent_hwnd, kk_lb_callbacks callbacks,
+        std::string profile_dir)
+        : HeadlessWebView(move(theme), size)
+        , m_cb(callbacks)
+        , m_parent(parent_hwnd)
+        , m_profile_dir(move(profile_dir))
+        , m_w(size.width().value())
+        , m_h(size.height().value())
+    {
+        create_native_window();
+    }
+
+    void wire_callbacks()
+    {
+        on_title_change = [this](auto const& title) {
+            if (m_cb.on_title)
+                m_cb.on_title(m_cb.user, title.to_byte_string().characters());
+        };
+        on_url_change = [this](auto const& url) {
+            auto text = url.to_byte_string();
+            m_url = text.characters();
+            if (m_cb.on_url)
+                m_cb.on_url(m_cb.user, text.characters());
+        };
+        on_load_start = [this] {
+            m_has_presented_frame = false;
+            inject_content_scripts("document_start");
+            if (m_cb.on_load)
+                m_cb.on_load(m_cb.user, 0);
+        };
+        on_load_finish = [this](auto const&) {
+            inject_content_scripts("document_end");
+            inject_content_scripts("document_idle");
+            if (m_cb.on_load)
+                m_cb.on_load(m_cb.user, 1);
+        };
+        // LibWeb respawns WebContent itself; tell Kakangkung so chrome can reload / show UI.
+        on_web_content_crashed = [this](WebView::ViewImplementation::WebContentCrashReason reason) {
+            if (!m_cb.on_crash)
+                return;
+            char const* token = "ProcessCrash";
+            using R = WebView::ViewImplementation::WebContentCrashReason;
+            if (reason == R::RejectedIPC)
+                token = "RejectedIPC";
+            else if (reason == R::ExceededMemoryLimit)
+                token = "ExceededMemoryLimit";
+            m_cb.on_crash(m_cb.user, token);
+        };
+        on_console_message = [this](WebView::ConsoleOutput const& output) {
+            append_console(output);
+            // chrome.runtime.sendMessage bridge: content scripts log kk-ext:{...}
+            // Password / page IPC: scripts log kk-pw:kk:pw:… (see Host::inject_passwords).
+            output.output.visit(
+                [this](WebView::ConsoleLog const& log) {
+                    for (auto const& arg : log.arguments) {
+                        ByteString text;
+                        if (arg.is_string())
+                            text = arg.as_string().to_byte_string();
+                        else
+                            text = arg.serialized().to_byte_string();
+                        auto view = StringView { text };
+                        if (auto pos = view.find("kk-pw:"sv); pos.has_value()) {
+                            auto payload = view.substring_view(*pos + 6);
+                            if (payload.starts_with('"') && payload.ends_with('"') && payload.length() >= 2)
+                                payload = payload.substring_view(1, payload.length() - 2);
+                            if (m_cb.on_page_ipc)
+                                m_cb.on_page_ipc(m_cb.user, payload.to_byte_string().characters());
+                            continue;
+                        }
+                        auto pos = view.find("kk-ext:"sv);
+                        if (!pos.has_value())
+                            continue;
+                        auto payload = view.substring_view(*pos);
+                        // Trim wrapping quotes from serialized JSON strings.
+                        if (payload.starts_with('"') && payload.ends_with('"') && payload.length() >= 2)
+                            payload = payload.substring_view(1, payload.length() - 2);
+                        handle_kk_ext(std::string { payload.to_byte_string().characters() });
+                    }
+                },
+                [](auto const&) {});
+        };
+    }
+
+    void handle_kk_ext(std::string const& payload)
+    {
+        std::string extension_id;
+        std::string type;
+        std::string request_id;
+        std::string message_json;
+        if (!parse_kk_ext_payload(payload, extension_id, type, request_id, message_json))
+            return;
+        // KB-24: chrome.storage.local — resolve in-host from profile JSON (no stub).
+        if (type == "storageGet" || type == "storageSet" || type == "storageRemove" || type == "storageClear") {
+            std::string response = "undefined";
+            if (type == "storageGet")
+                response = chrome_storage_get(m_profile_dir, extension_id, message_json);
+            else if (type == "storageSet")
+                response = chrome_storage_set(m_profile_dir, extension_id, message_json);
+            else if (type == "storageRemove")
+                response = chrome_storage_remove(m_profile_dir, extension_id, message_json);
+            else
+                response = chrome_storage_clear(m_profile_dir, extension_id);
+            auto reply = chrome_runtime_reply_script(extension_id, request_id, response);
+            if (auto script_or_error = String::from_utf8(StringView { reply.data(), reply.size() }); !script_or_error.is_error())
+                run_javascript(script_or_error.release_value());
+            return;
+        }
+        // Notify Kakangkung first (avoid re-entrancy issues with page script).
+        if (type == "sendMessage" && m_cb.on_ext_message)
+            m_cb.on_ext_message(m_cb.user, extension_id.c_str(), request_id.c_str(), message_json.c_str());
+        // Deliver to same-page onMessage listeners (content ↔ content).
+        auto deliver = chrome_runtime_deliver_script(extension_id, message_json);
+        auto script_or_error = String::from_utf8(StringView { deliver.data(), deliver.size() });
+        if (!script_or_error.is_error())
+            run_javascript(script_or_error.release_value());
+    }
+
+    static StringView console_level_name(JS::ConsoleLogLevel level)
+    {
+        using JS::ConsoleLogLevel;
+        switch (level) {
+        case ConsoleLogLevel::Assert:
+            return "assert"sv;
+        case ConsoleLogLevel::Count:
+            return "count"sv;
+        case ConsoleLogLevel::CountReset:
+            return "countReset"sv;
+        case ConsoleLogLevel::Debug:
+            return "debug"sv;
+        case ConsoleLogLevel::Dir:
+            return "dir"sv;
+        case ConsoleLogLevel::DirXML:
+            return "dirxml"sv;
+        case ConsoleLogLevel::Error:
+            return "error"sv;
+        case ConsoleLogLevel::Group:
+            return "group"sv;
+        case ConsoleLogLevel::GroupCollapsed:
+            return "groupCollapsed"sv;
+        case ConsoleLogLevel::Info:
+            return "info"sv;
+        case ConsoleLogLevel::Log:
+            return "log"sv;
+        case ConsoleLogLevel::TimeEnd:
+            return "timeEnd"sv;
+        case ConsoleLogLevel::TimeLog:
+            return "timeLog"sv;
+        case ConsoleLogLevel::Table:
+            return "table"sv;
+        case ConsoleLogLevel::Trace:
+            return "trace"sv;
+        case ConsoleLogLevel::Warn:
+            return "warn"sv;
+        }
+        return "log"sv;
+    }
+
+    void append_console(WebView::ConsoleOutput const& output)
+    {
+        JsonObject entry;
+        entry.set("ts"sv, JsonValue { output.timestamp.milliseconds_since_epoch() });
+        output.output.visit(
+            [&](WebView::ConsoleLog const& log) {
+                entry.set("kind"sv, JsonValue { "log"sv });
+                entry.set("level"sv, JsonValue { console_level_name(log.level) });
+                JsonArray args;
+                for (auto const& arg : log.arguments)
+                    args.must_append(arg);
+                entry.set("args"sv, JsonValue { move(args) });
+            },
+            [&](WebView::ConsoleError const& err) {
+                entry.set("kind"sv, JsonValue { "error"sv });
+                entry.set("name"sv, JsonValue { err.name });
+                entry.set("message"sv, JsonValue { err.message });
+                entry.set("inside_promise"sv, JsonValue { err.inside_promise });
+            },
+            [&](WebView::ConsoleTrace const& trace) {
+                entry.set("kind"sv, JsonValue { "trace"sv });
+                entry.set("label"sv, JsonValue { trace.label });
+            },
+            [&](WebView::ConsoleGroupEnd const&) {
+                entry.set("kind"sv, JsonValue { "groupEnd"sv });
+            });
+        auto serialized = entry.serialized().to_byte_string();
+        std::lock_guard lock(m_console_mutex);
+        if (m_console.size() >= 256)
+            m_console.erase(m_console.begin());
+        m_console.emplace_back(serialized.characters());
+    }
+
+    void inject_content_scripts(char const* run_at)
+    {
+        if (m_url.empty() || m_profile_dir.empty())
+            return;
+        auto scripts = scripts_for_url(load_content_scripts(m_profile_dir), m_url, run_at ? run_at : "");
+        for (auto const& src : scripts) {
+            auto script = MUST(String::from_utf8(StringView { src.data(), src.size() }));
+            run_javascript(script);
+        }
+    }
+
+    void create_native_window()
+    {
+#if defined(_WIN32)
+        static bool registered = false;
+        if (!registered) {
+            WNDCLASSW wc {};
+            wc.lpfnWndProc = DefWindowProcW;
+            wc.hInstance = GetModuleHandleW(nullptr);
+            wc.lpszClassName = L"KakangkungLibWebSurface";
+            wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+            RegisterClassW(&wc);
+            registered = true;
+        }
+        HWND parent = reinterpret_cast<HWND>(m_parent);
+        DWORD style = parent ? (WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS) : (WS_OVERLAPPEDWINDOW | WS_VISIBLE);
+        m_hwnd = CreateWindowExW(0, L"KakangkungLibWebSurface", L"LibWeb", style, m_x, m_y, m_w, m_h,
+            parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+#else
+        m_x11 = kk_x11_surface_create(m_x, m_y, m_w, m_h);
+#endif
+    }
+
+    virtual void did_accept_presented_backing_store(i32, Gfx::IntRect) override
+    {
+        auto frame = backing_stores().displayed_frame();
+        if (!frame.has_value() || !frame->shared_image_buffer)
+            return;
+        auto bitmap = frame->shared_image_buffer->bitmap_if_present();
+        if (!bitmap)
+            return;
+        m_has_presented_frame = true;
+        blit_bitmap(*bitmap);
+    }
+
+    void blit_bitmap(Gfx::Bitmap const& bitmap)
+    {
+        int const bw = bitmap.width();
+        int const bh = bitmap.height();
+        if (bw <= 0 || bh <= 0)
+            return;
+
+        Vector<u32> pixels;
+        pixels.resize(static_cast<size_t>(bw) * bh);
+        bool const red_low = bitmap.format() == Gfx::BitmapFormat::RGBA8888 || bitmap.format() == Gfx::BitmapFormat::RGBx8888;
+        for (int y = 0; y < bh; ++y) {
+            auto const* src = bitmap.scanline(y);
+            for (int x = 0; x < bw; ++x) {
+                u32 const p = src[x];
+                u8 const a = (p >> 24) & 0xff;
+                u8 const lo = p & 0xff;
+                u8 const mid = (p >> 8) & 0xff;
+                u8 const hi = (p >> 16) & 0xff;
+                u8 const r = red_low ? lo : hi;
+                u8 const b = red_low ? hi : lo;
+                pixels[static_cast<size_t>(y) * bw + x] = (u32(a) << 24) | (u32(r) << 16) | (u32(mid) << 8) | u32(b);
+            }
+        }
+
+#if defined(_WIN32)
+        if (!m_hwnd)
+            return;
+        BITMAPINFO info {};
+        info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        info.bmiHeader.biWidth = bw;
+        info.bmiHeader.biHeight = -bh;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB;
+        HDC hdc = GetDC(m_hwnd);
+        StretchDIBits(hdc, 0, 0, m_w, m_h, 0, 0, bw, bh, pixels.data(), &info, DIB_RGB_COLORS, SRCCOPY);
+        ReleaseDC(m_hwnd, hdc);
+#else
+        kk_x11_surface_blit(m_x11, bw, bh, pixels.data());
+#endif
+    }
+
+    kk_lb_callbacks m_cb {};
+    std::uintptr_t m_parent {};
+    std::string m_profile_dir;
+    std::string m_url;
+    int m_x {}, m_y {}, m_w { 800 }, m_h { 600 };
+    bool m_has_presented_frame { false };
+    std::mutex m_console_mutex;
+    std::vector<std::string> m_console;
+#if defined(_WIN32)
+    HWND m_hwnd { nullptr };
+#else
+    KkX11Surface* m_x11 { nullptr };
+#endif
+};
+
+static OwnPtr<KakangkungApplication> g_app;
+
+static ErrorOr<void> ensure_application()
+{
+    if (WebView::Application::is_initialized())
+        return {};
+    // Chrome-parity engine knobs (KB-5): experimental IDL (WebGPU etc.), media autoplay,
+    // and CPU painting so HeadlessWebView frames reach our HWND/X11 blit path.
+    static char arg0[] = "kakangkung-ladybird-host";
+    static char arg_exp[] = "--expose-experimental-interfaces";
+    static char arg_auto[] = "--enable-autoplay";
+    static char arg_cpu[] = "--force-cpu-painting";
+    static char* argv[] = { arg0, arg_exp, arg_auto, arg_cpu, nullptr };
+    static StringView string_storage[] = {
+        StringView { arg0, sizeof(arg0) - 1 },
+        StringView { arg_exp, sizeof(arg_exp) - 1 },
+        StringView { arg_auto, sizeof(arg_auto) - 1 },
+        StringView { arg_cpu, sizeof(arg_cpu) - 1 },
+    };
+    Main::Arguments arguments {
+        .argc = 4,
+        .argv = argv,
+        .strings = Span<StringView> { string_storage },
+    };
+    g_app = TRY(KakangkungApplication::create(arguments));
+    kk_lb_downloads_ensure_observer();
+    // Default: load domain list into LibWeb ContentFilter/ContentBlocker (Settings can clear).
+    (void)kk_lb_adblock_configure(1, "");
+    return {};
+}
+
+static ErrorOr<Core::AnonymousBuffer> load_theme()
+{
+    char const* src = getenv("LADYBIRD_SOURCE_DIR");
+    if (src && *src) {
+        auto path = ByteString::formatted("{}/Base/res/themes/Default.ini", src);
+        if (auto theme = Gfx::load_system_theme(path); !theme.is_error())
+            return theme.release_value();
+    }
+    return TRY(Core::AnonymousBuffer::create_with_size(4096));
+}
+
+} // namespace
+
+struct View::LibWeb {
+    OwnPtr<LibWebSurface> surface;
+};
+
+View::View(Session& session, std::uintptr_t parent_hwnd, kk_lb_callbacks callbacks)
+    : m_session(session)
+    , m_libweb(std::make_unique<LibWeb>())
+{
+    if (auto result = ensure_application(); result.is_error()) {
+        warnln("Kakangkung LibWeb Application failed: {}", result.error());
+        return;
+    }
+    auto theme_or_error = load_theme();
+    if (theme_or_error.is_error()) {
+        warnln("Kakangkung LibWeb theme failed: {}", theme_or_error.error());
+        return;
+    }
+    m_libweb->surface = LibWebSurface::create(theme_or_error.release_value(), { 800, 600 }, parent_hwnd, callbacks, session.profile_dir());
+    if (callbacks.on_load)
+        callbacks.on_load(callbacks.user, 1);
+}
+
+View::~View() = default;
+
+void View::navigate(std::string url)
+{
+    if (!m_libweb || !m_libweb->surface)
+        return;
+    auto view = StringView { url.data(), url.size() };
+    if (auto parsed = WebView::sanitize_url(view); parsed.has_value()) {
+        m_libweb->surface->load(*parsed);
+        return;
+    }
+    if (auto fallback = URL::create_with_url_or_path(ByteString { url.c_str(), url.size() }); fallback.has_value())
+        m_libweb->surface->load(*fallback);
+}
+
+void View::stop()
+{
+    if (m_libweb && m_libweb->surface)
+        m_libweb->surface->stop_loading();
+}
+
+void View::reload()
+{
+    if (m_libweb && m_libweb->surface)
+        m_libweb->surface->reload();
+}
+
+void View::set_bounds(int x, int y, int w, int h)
+{
+    if (m_libweb && m_libweb->surface)
+        m_libweb->surface->set_native_bounds(x, y, w, h);
+}
+
+void View::set_visible(bool visible)
+{
+    if (m_libweb && m_libweb->surface)
+        m_libweb->surface->set_native_visible(visible);
+}
+
+bool View::can_go_back() const
+{
+    return m_libweb && m_libweb->surface && m_libweb->surface->can_navigate_back();
+}
+
+bool View::can_go_forward() const
+{
+    return m_libweb && m_libweb->surface && m_libweb->surface->can_navigate_forward();
+}
+
+void View::go_back()
+{
+    if (m_libweb && m_libweb->surface)
+        m_libweb->surface->traverse_the_history_by_delta(-1);
+}
+
+void View::go_forward()
+{
+    if (m_libweb && m_libweb->surface)
+        m_libweb->surface->traverse_the_history_by_delta(1);
+}
+
+namespace {
+
+bool pump_until(bool const& done, std::chrono::milliseconds budget)
+{
+    auto const deadline = std::chrono::steady_clock::now() + budget;
+    while (!done) {
+        Core::EventLoop::current().pump(Core::EventLoop::WaitMode::PollForEvents);
+        if (std::chrono::steady_clock::now() >= deadline)
+            return false;
+    }
+    return true;
+}
+
+std::string debugger_value_to_string(WebView::DebuggerValue const& value)
+{
+    using WebView::DebuggerValueType;
+    switch (value.type) {
+    case DebuggerValueType::Undefined:
+        return "undefined";
+    case DebuggerValueType::Null:
+        return "null";
+    case DebuggerValueType::Boolean:
+        return value.boolean_value ? "true" : "false";
+    case DebuggerValueType::Number: {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%g", value.number_value);
+        return buf;
+    }
+    case DebuggerValueType::String:
+    case DebuggerValueType::BigInt:
+        return std::string { value.text.to_byte_string().characters() };
+    case DebuggerValueType::Object: {
+        auto klass = value.object_class.to_byte_string();
+        return std::string("[object ") + klass.characters() + "]";
+    }
+    case DebuggerValueType::Uninitialized:
+        return "uninitialized";
+    }
+    return {};
+}
+
+} // namespace
+
+bool View::screenshot_png(std::string const& path)
+{
+    if (!m_libweb || !m_libweb->surface || path.empty())
+        return false;
+
+    auto write_bitmap = [&](Gfx::Bitmap const& bitmap) -> bool {
+        auto encoded = Gfx::PNGWriter::encode(bitmap);
+        if (encoded.is_error())
+            return false;
+        auto file_or_error = Core::File::open(StringView { path.data(), path.size() }, Core::File::OpenMode::Write);
+        if (file_or_error.is_error())
+            return false;
+        return !file_or_error.value()->write_until_depleted(encoded.value()).is_error();
+    };
+
+    // Wait until LibWeb presents a CPU frame (blit path) before capturing.
+    if (!m_libweb->surface->wait_for_presented_frame(std::chrono::seconds(15))) {
+        // Still try snapshot / displayed_frame — some pages paint once then settle.
+    }
+
+    // Prefer a compositor snapshot; fall back to the CPU-presented frame we already blit.
+    bool done = false;
+    bool ok = false;
+    m_libweb->surface->take_frame_snapshot([&](Optional<Gfx::ShareableBitmap> snapshot) {
+        if (snapshot.has_value() && snapshot->bitmap())
+            ok = write_bitmap(*snapshot->bitmap());
+        done = true;
+    });
+    if (pump_until(done, std::chrono::seconds(5)) && ok)
+        return true;
+
+    if (auto frame = m_libweb->surface->backing_stores().displayed_frame(); frame.has_value()) {
+        if (auto bitmap = frame->shared_image_buffer ? frame->shared_image_buffer->bitmap_if_present() : nullptr)
+            return write_bitmap(*bitmap);
+    }
+    return false;
+}
+
+bool View::print_page()
+{
+    if (!m_libweb || !m_libweb->surface)
+        return false;
+    // LibWeb has no separate host print IPC yet; window.print() is the real document print path.
+    m_libweb->surface->run_javascript("window.print()"_string);
+    return true;
+}
+
+bool View::set_zoom(double const* relative, double const* absolute, double& out_factor)
+{
+    if (!m_libweb || !m_libweb->surface)
+        return false;
+    if (absolute) {
+        m_zoom = *absolute;
+    } else if (relative) {
+        m_zoom *= *relative;
+    } else {
+        m_zoom = 1.0;
+    }
+    if (m_zoom < 0.25)
+        m_zoom = 0.25;
+    if (m_zoom > 5.0)
+        m_zoom = 5.0;
+    out_factor = m_zoom;
+    // CSS zoom is the page-level scale LibWeb applies from documentElement (same path as print JS).
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "document.documentElement.style.zoom=String(%.6g)", m_zoom);
+    auto script = MUST(String::from_utf8(StringView { buf, std::strlen(buf) }));
+    m_libweb->surface->run_javascript(script);
+    return true;
+}
+
+bool View::a11y_json(std::string& out_json)
+{
+    if (!m_libweb || !m_libweb->surface)
+        return false;
+
+    bool done = false;
+    bool ok = false;
+    m_libweb->surface->on_received_accessibility_tree = [&](JsonObject tree) {
+        out_json = std::string { tree.serialized().to_byte_string().characters() };
+        ok = true;
+        done = true;
+        m_libweb->surface->on_received_accessibility_tree = nullptr;
+    };
+    m_libweb->surface->inspect_accessibility_tree();
+    if (!pump_until(done, std::chrono::seconds(10))) {
+        m_libweb->surface->on_received_accessibility_tree = nullptr;
+        return false;
+    }
+    return ok;
+}
+
+bool View::dom_json(std::string& out_json)
+{
+    if (!m_libweb || !m_libweb->surface)
+        return false;
+
+    bool done = false;
+    bool ok = false;
+    m_libweb->surface->on_received_dom_tree = [&](JsonObject tree) {
+        out_json = std::string { tree.serialized().to_byte_string().characters() };
+        ok = true;
+        done = true;
+        m_libweb->surface->on_received_dom_tree = nullptr;
+    };
+    m_libweb->surface->inspect_dom_tree();
+    if (!pump_until(done, std::chrono::seconds(10))) {
+        m_libweb->surface->on_received_dom_tree = nullptr;
+        return false;
+    }
+    return ok;
+}
+
+bool View::console_json(std::string& out_json, bool clear)
+{
+    if (!m_libweb || !m_libweb->surface)
+        return false;
+    out_json = m_libweb->surface->take_console_json(clear);
+    return true;
+}
+
+bool View::eval_js(std::string const& js, std::string& out_result)
+{
+    if (!m_libweb || !m_libweb->surface || js.empty())
+        return false;
+
+    bool done = false;
+    bool ok = false;
+    m_libweb->surface->on_received_js_console_result = [&](WebView::DebuggerValue result) {
+        out_result = debugger_value_to_string(result);
+        ok = true;
+        done = true;
+        m_libweb->surface->on_received_js_console_result = nullptr;
+    };
+    auto script = MUST(String::from_utf8(StringView { js.data(), js.size() }));
+    m_libweb->surface->js_console_input(script);
+    if (!pump_until(done, std::chrono::seconds(10))) {
+        m_libweb->surface->on_received_js_console_result = nullptr;
+        return false;
+    }
+    return ok;
+}
+
+bool View::ext_reply(std::string const& extension_id, std::string const& request_id, std::string const& response_json)
+{
+    if (!m_libweb || !m_libweb->surface || extension_id.empty() || request_id.empty())
+        return false;
+    auto js = chrome_runtime_reply_script(extension_id, request_id, response_json);
+    auto script = MUST(String::from_utf8(StringView { js.data(), js.size() }));
+    m_libweb->surface->run_javascript(script);
+    return true;
+}
+
+void View::drain_ext_queue()
+{
+    if (!m_libweb || !m_libweb->surface)
+        return;
+    std::string result;
+    static char const* drain = R"JS((() => {
+  const q = window.__kk_ext_queue || [];
+  window.__kk_ext_queue = [];
+  return JSON.stringify(q);
+})())JS";
+    if (!eval_js(drain, result))
+        return;
+    m_libweb->surface->ingest_ext_queue_json(std::move(result));
+}
+
+bool View::find_in_page(std::string const& query, bool match_case, bool forward, bool end, int& active_match,
+    int& match_count)
+{
+    if (!m_libweb || !m_libweb->surface)
+        return false;
+    active_match = 0;
+    match_count = 0;
+
+    if (end || query.empty()) {
+        m_libweb->surface->find_in_page_end();
+        m_find_query.clear();
+        return true;
+    }
+
+    bool done = false;
+    bool ok = false;
+    m_libweb->surface->on_find_in_page = [&](size_t current, Optional<size_t> const& total) {
+        active_match = total.has_value() && *total > 0 ? static_cast<int>(current) + 1 : 0;
+        match_count = total.has_value() ? static_cast<int>(*total) : 0;
+        ok = true;
+        done = true;
+    };
+
+    auto sensitivity = match_case ? CaseSensitivity::CaseSensitive : CaseSensitivity::CaseInsensitive;
+    if (query == m_find_query) {
+        if (forward)
+            m_libweb->surface->find_in_page_next_match();
+        else
+            m_libweb->surface->find_in_page_previous_match();
+    } else {
+        m_find_query = query;
+        auto utf16 = Utf16String::from_utf8(StringView { query.data(), query.size() });
+        m_libweb->surface->find_in_page(utf16, sensitivity, true);
+        if (!forward)
+            m_libweb->surface->find_in_page_previous_match();
+    }
+
+    if (!pump_until(done, std::chrono::seconds(5))) {
+        m_libweb->surface->on_find_in_page = nullptr;
+        return false;
+    }
+    // Keep callback for subsequent next/prev; LibWeb may fire again asynchronously.
+    return ok;
+}
+
+bool View::capabilities_json(std::string& out_json)
+{
+    // Live LibWeb feature probe — sync console eval (async Promises are not awaited by js_console_input).
+    // webgpu_adapter_api records whether requestAdapter exists; a live adapter needs async eval.
+    static char const* probe = R"JS((() => {
+  const can = (fn) => { try { return !!fn(); } catch (e) { return false; } };
+  const css = (q) => can(() => CSS.supports(q));
+  return JSON.stringify({
+    engine: "ladybird",
+    html: typeof document !== "undefined",
+    css_grid: css("display:grid"),
+    css_flex: css("display:flex"),
+    css_container: css("container-type:inline-size"),
+    es_modules: can(() => typeof HTMLScriptElement !== "undefined"),
+    wasm: typeof WebAssembly !== "undefined",
+    webgl: can(() => {
+      const c = document.createElement("canvas");
+      return !!(c.getContext("webgl") || c.getContext("experimental-webgl"));
+    }),
+    webgl2: can(() => !!document.createElement("canvas").getContext("webgl2")),
+    webgpu: typeof navigator !== "undefined" && "gpu" in navigator,
+    webgpu_adapter_api: !!(typeof navigator !== "undefined" && navigator.gpu && navigator.gpu.requestAdapter),
+    webrtc: typeof RTCPeerConnection !== "undefined",
+    service_worker: typeof navigator !== "undefined" && "serviceWorker" in navigator,
+    media_source: typeof MediaSource !== "undefined",
+    audio: typeof Audio !== "undefined",
+    video: typeof HTMLVideoElement !== "undefined",
+    codecs: {
+      av1: can(() => MediaSource && MediaSource.isTypeSupported('video/mp4; codecs="av01.0.01M.08"')),
+      vp9: can(() => MediaSource && MediaSource.isTypeSupported('video/webm; codecs="vp9"')),
+      opus: can(() => MediaSource && MediaSource.isTypeSupported('audio/webm; codecs="opus"')),
+      mp3: can(() => {
+        const a = document.createElement("audio");
+        return a.canPlayType('audio/mpeg') !== "";
+      })
+    }
+  });
+})())JS";
+    std::string result;
+    if (!eval_js(probe, result))
+        return false;
+    // Console may wrap string results in quotes — strip one layer if present.
+    if (result.size() >= 2 && result.front() == '"' && result.back() == '"') {
+        out_json = result.substr(1, result.size() - 2);
+        // Unescape minimal JSON string escapes produced by DebuggerValue stringification.
+        std::string unescaped;
+        for (size_t i = 0; i < out_json.size(); ++i) {
+            if (out_json[i] == '\\' && i + 1 < out_json.size()) {
+                char n = out_json[++i];
+                if (n == '"' || n == '\\' || n == '/')
+                    unescaped += n;
+                else if (n == 'n')
+                    unescaped += '\n';
+                else
+                    unescaped += n;
+            } else {
+                unescaped += out_json[i];
+            }
+        }
+        out_json = std::move(unescaped);
+    } else {
+        out_json = std::move(result);
+    }
+    return !out_json.empty() && out_json.front() == '{';
+}
+
+} // namespace kakangkung::ladybird
