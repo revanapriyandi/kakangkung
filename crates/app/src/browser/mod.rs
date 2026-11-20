@@ -32,7 +32,7 @@ use tao::platform::windows::WindowExtWindows;
 use tao::window::Window;
 use platform::frame::{Chip, Frame, FrameGroup, FrameState, FrameTab};
 use ui::{Action, TabView};
-use wry::{NewWindowResponse, PageLoadEvent, Rect, WebContext, WebView, WebViewBuilder, WebViewBuilderExtWindows, WebViewExtWindows};
+use wry::{NewWindowResponse, PageLoadEvent, Rect, WebContext, WebView, WebViewBuilder, WebViewExtWindows};
 use wry::dpi::{PhysicalPosition, PhysicalSize};
 
 use crate::{timing, APP};
@@ -213,7 +213,8 @@ pub(crate) struct Browser {
     pub(crate) menu_place: (f64, f64, bool),
     /// Self-test only: windows that would open, as (address, Incognito), instead of starting them.
     pub(crate) window_probe: Option<Vec<(String, bool)>>,
-    /// Next id for a pop-up tab (handed out inside the new-window handler).
+    /// Next id for a pop-up tab (handed out inside the new-window handler). Unused until Ladybird hosts pop-ups.
+    #[allow(dead_code)]
     pub(crate) next_popup: std::rc::Rc<std::cell::Cell<u64>>,
     /// An extension's toolbar pop-up, open under the extensions button.
     pub(crate) ext_bubble: Option<WebView>,
@@ -395,28 +396,6 @@ impl Browser {
         })
     }
 
-    /// What every tab webview is built with (also handed to the pop-up handler).
-    fn tab_kit(&self) -> TabKit {
-        TabKit {
-            proxy: self.proxy.clone(),
-            token: self.token.clone(),
-            focus_highlight: self.settings.focus_highlight,
-            page_bg: self.page_bg,
-            theme: self.settings.wry_theme(),
-            app: self.installed_app.clone(),
-            parent: self.window.hwnd(),
-            bounds: page_bounds(&self.window),
-            next_popup: self.next_popup.clone(),
-        }
-    }
-
-    pub(crate) fn build_tab_webview(&mut self, id: u64, url: &str, visible: bool, private: bool) -> wry::Result<WebView> {
-        let _ = (id, url, visible, private);
-        // WebView2 / Chromium page surfaces are removed. Pages go through the Ladybird host.
-        Err(wry::Error::Io(std::io::Error::other(
-            "WebView2 is disabled. Kakangkung renders pages with Ladybird only (see docs/LADYBIRD.md).",
-        )))
-    }
 }
 
 thread_local! {
@@ -435,10 +414,12 @@ pub(crate) fn take_popup(id: u64) -> Option<WebView> {
 }
 
 /// Ids of pop-up tabs start here, apart from the ids the strip hands out.
+#[allow(dead_code)]
 pub(crate) const FIRST_POPUP_ID: u64 = 1 << 40;
 
-/// Everything a tab webview is configured with; cloned into the new-window handler so a pop-up
-/// is built exactly like a tab.
+/// Former WebView2 tab/pop-up kit. Kept (unused) until Ladybird hosts `window.open` / tab page
+/// surfaces in-process; clippy: dead until that lands.
+#[allow(dead_code)]
 #[derive(Clone)]
 pub(crate) struct TabKit {
     proxy: EventLoopProxy<Msg>,
@@ -452,6 +433,7 @@ pub(crate) struct TabKit {
     app: Option<crate::webapps::WebApp>,
 }
 
+#[allow(dead_code)]
 impl TabKit {
     /// A sized `window.open` (sign-in, payment): our own webview instead of WebView2's bare
     /// window, so it keeps `window.opener`, gets the tab handlers and the tab's browser identity
