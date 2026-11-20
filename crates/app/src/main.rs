@@ -253,6 +253,30 @@ fn main() {
         browser.account_picture = platform::load_avatar_file(Path::new(&p.account_picture)).unwrap_or_default();
         browser.downloads_folder = Some(p.downloads.clone()).filter(|f| f.is_dir());
     }
+    // Ladybird only — no WebView2 / Chromium. Host binary from cargo (stub) or engines/ladybird (LibWeb on Boat).
+    {
+        let resolution = platform::resolve_page_engine(&browser.settings.page_engine);
+        eprintln!("{}", platform::ladybird_status(&resolution));
+        browser.page_engine = resolution.active;
+        if let Some(host_path) = resolution.host.clone() {
+            let profile = browser.ctx.data_directory().cloned().unwrap_or_else(|| base.clone());
+            let hwnd = browser.window.hwnd() as usize;
+            match platform::LadybirdHost::spawn(&host_path, &profile, hwnd) {
+                Ok(host) => {
+                    eprintln!("Ladybird host engine={}", host.engine_id);
+                    browser.ladybird = Some(host);
+                }
+                Err(e) => eprintln!("Ladybird host failed ({e}). Pages will not load until the host runs."),
+            }
+        } else {
+            eprintln!(
+                "Ladybird host not found. Build with `cargo build -p ladybird-host` and place \
+                 kakangkung-ladybird-host next to the exe, or set KAKANGKUNG_LADYBIRD_HOST. \
+                 Full LibWeb builds: Boat https://boat.dev/dashboard — see docs/LADYBIRD.md. \
+                 WebView2/Chromium is disabled."
+            );
+        }
+    }
     // "Clear browsing data when you exit" also runs at the next start (WebView2 clears
     // asynchronously, so the exit may beat it); done when the first webview exists.
     platform::configure_adblock_sites(&browser.settings.adblock_allowlist);

@@ -8,6 +8,7 @@ Kakangkung is original work. No files, images or code from other browsers are in
   used through DirectWrite (not redistributed).
 - Illustrations: drawn in code with Direct2D (`crates/platform/src/page/art.rs`).
 
-Third-party software it runs on: Microsoft Edge WebView2 Runtime (renders web pages, installed
-with Windows 11 or by the installer) and the SQLite library that ships with Windows
-(`winsqlite3.dll`). Rust crates and their licences are listed in `Cargo.lock`.
+Third-party software it runs on: the [Ladybird](https://ladybird.org) web engine (LibWeb /
+LibWebView) for page rendering, and the SQLite library that ships with Windows (`winsqlite3.dll`).
+Microsoft Edge WebView2 / Chromium are not used. Rust crates and their licences are listed in
+`Cargo.lock`. Ladybird is BSD-2-Clause; see `engines/ladybird/` and [docs/LADYBIRD.md](docs/LADYBIRD.md).

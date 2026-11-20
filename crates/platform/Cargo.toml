@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 adblock = "=0.13.5"
+engine.workspace = true
 wry.workspace = true
 webview2-com.workspace = true
 serde_json.workspace = true

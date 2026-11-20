@@ -78,6 +78,8 @@ pub(crate) struct Paths {
 pub(crate) struct Tab {
     pub(crate) view: TabView,
     pub(crate) webview: Option<WebView>,
+    /// Ladybird host view id when `page_engine` is Ladybird (mutually exclusive with `webview`).
+    pub(crate) ladybird_view: Option<i32>,
     pub(crate) hooks: platform::Hooks,
     pub(crate) state: Lifecycle,
     /// When the tab stopped being visible (memory saver clock).
@@ -96,7 +98,21 @@ pub(crate) struct Tab {
 impl Tab {
     /// A tab without a webview yet: activating it creates one (restored and background tabs).
     pub(crate) fn unloaded(view: TabView) -> Self {
-        Self { view, webview: None, hooks: platform::Hooks::default(), state: Lifecycle::Discarded, hidden_since: None, compacted: false, media_frames: media::MediaFrames::default(), revision: 0, document_ready: false, web_app: None, connection: Default::default(), before: vec![] }
+        Self {
+            view,
+            webview: None,
+            ladybird_view: None,
+            hooks: platform::Hooks::default(),
+            state: Lifecycle::Discarded,
+            hidden_since: None,
+            compacted: false,
+            media_frames: media::MediaFrames::default(),
+            revision: 0,
+            document_ready: false,
+            web_app: None,
+            connection: Default::default(),
+            before: vec![],
+        }
     }
 }
 
@@ -108,6 +124,10 @@ pub(crate) struct Browser {
     /// Profile folder of the tabs; the first tab creates the shared WebView2 environment from it.
     pub(crate) ctx: WebContext,
     pub(crate) env: Option<platform::Environment>,
+    /// Active page engine after resolution (Ladybird when the host is present, else WebView2).
+    pub(crate) page_engine: engine::Kind,
+    /// Ladybird UI-port host process, when `page_engine` is Ladybird.
+    pub(crate) ladybird: Option<platform::LadybirdHost>,
     /// Browser-process switches, applied when the environment is created.
     pub(crate) browser_args: String,
     /// Finished downloads already seen ("Show downloads when they're done" opens the page for new ones).
@@ -302,6 +322,8 @@ impl Browser {
             frame,
             ctx,
             env: None,
+            page_engine: engine::Kind::Ladybird,
+            ladybird: None,
             browser_args,
             done_downloads: vec![],
             omnibox: omnibox::Omnibox::default(),
@@ -389,29 +411,11 @@ impl Browser {
     }
 
     pub(crate) fn build_tab_webview(&mut self, id: u64, url: &str, visible: bool, private: bool) -> wry::Result<WebView> {
-        let kit = self.tab_kit();
-        // WebView2 started early while the address bar was typed in (see `prewarm_webview2`).
-        if self.env.is_none() {
-            self.env = platform::take_prewarmed_environment();
-        }
-        let builder = match &self.env {
-            Some(env) => WebViewBuilder::new().with_environment(env.clone()),
-            None => WebViewBuilder::new_with_web_context(&mut self.ctx)
-                .with_additional_browser_args(&self.browser_args)
-                .with_browser_extensions_enabled(true),
-        };
-        let wv = kit.configure(builder, id, private).with_visible(visible).build_as_child(&self.window)?;
-        if self.env.is_none() {
-            self.env = Some(wv.environment());
-        }
-        // The identity applies from the first request, so the page loads after it.
-        if let Err(e) = platform::present_as_edge(&wv) {
-            eprintln!("tab {id}: browser identity: {e}");
-        }
-        if let Err(error) = platform::prepare_adblock_script(&wv, Some(url), self.settings.protection.adblock, &self.settings.adblock_allowlist) {
-            eprintln!("tab {id}: ad blocker: {error}");
-        }
-        Ok(wv)
+        let _ = (id, url, visible, private);
+        // WebView2 / Chromium page surfaces are removed. Pages go through the Ladybird host.
+        Err(wry::Error::Io(std::io::Error::other(
+            "WebView2 is disabled. Kakangkung renders pages with Ladybird only (see docs/LADYBIRD.md).",
+        )))
     }
 }
 
@@ -454,25 +458,10 @@ impl TabKit {
     /// (Google refuses sign-in pop-ups that announce WebView2), and shows as a tab next to its
     /// opener that closes again when the page calls `window.close()`.
     fn popup(&self, opener: u64, private: bool, url: String, features: wry::NewWindowFeatures) -> NewWindowResponse {
-        let id = self.next_popup.get();
-        self.next_popup.set(id + 1);
-        let builder = WebViewBuilder::new().with_environment(features.opener.environment);
-        let built = self.configure(builder, id, private).with_visible(false).build_as_child(&platform::ParentWindow(self.parent));
-        match built {
-            Ok(wv) => {
-                if let Err(e) = platform::present_as_edge(&wv) {
-                    eprintln!("pop-up: browser identity: {e}");
-                }
-                let core = wv.webview();
-                POPUPS.with(|p| p.borrow_mut().push((id, wv)));
-                let _ = self.proxy.send_event(Msg::Popup { id, opener, url });
-                NewWindowResponse::Create { webview: core }
-            }
-            Err(e) => {
-                eprintln!("pop-up: {e}");
-                NewWindowResponse::Allow
-            }
-        }
+        let _ = (opener, private, features);
+        // No WebView2 pop-ups. Ladybird will own window.open once the UI port paints HWNDs.
+        eprintln!("pop-up blocked (WebView2 disabled): {url}");
+        NewWindowResponse::Deny
     }
 
     fn configure<'a>(&self, builder: WebViewBuilder<'a>, id: u64, private: bool) -> WebViewBuilder<'a> {
@@ -794,7 +783,11 @@ impl Browser {
                 return;
             }
             self.tabs[i].view.url = url.clone();
-            if let Some(wv) = &self.tabs[i].webview {
+            if let (Some(host), Some(vid)) = (self.ladybird.as_ref(), self.tabs[i].ladybird_view) {
+                if let Err(e) = host.navigate(vid, &url) {
+                    eprintln!("ladybird navigate({url}) failed: {e}");
+                }
+            } else if let Some(wv) = &self.tabs[i].webview {
                 if let Err(e) = wv.load_url(&url) {
                     eprintln!("load_url({url}) failed: {e}");
                 }

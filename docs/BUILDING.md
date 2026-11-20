@@ -8,8 +8,8 @@
   also the *MSVC ARM64 build tools* component.
 - [Rust](https://rustup.rs). `rust-toolchain.toml` pins the stable MSVC toolchain; rustup installs
   it the first time you run `cargo`.
-- Microsoft Edge WebView2 Runtime (part of Windows 11; on Windows 10 it comes with Edge or from
-  [Microsoft](https://developer.microsoft.com/microsoft-edge/webview2/)).
+- Ladybird page-engine host: build the stub with Cargo (below), or the LibWeb-linked host on
+  [Boat](https://boat.dev/dashboard) — see [LADYBIRD.md](LADYBIRD.md). WebView2 is not required.
 
 No C compiler is needed for SQLite: Kakangkung uses the copy that ships with Windows
 (`winsqlite3.dll`).
@@ -17,10 +17,13 @@ No C compiler is needed for SQLite: Kakangkung uses the copy that ships with Win
 ## Build and run
 
 ```powershell
-cargo build --release
+cargo build --release -p ladybird-host -p app
 target\release\kakangkung.exe                 # the New Tab page (Welcome on the very first start)
 target\release\kakangkung.exe example.com     # open an address
 ```
+
+`kakangkung-ladybird-host.exe` is built next to `kakangkung.exe`. Without it, the native chrome
+still starts but pages will not load (there is no WebView2 fallback).
 
 `cargo build` (debug) works too; third-party crates are optimised even in debug builds, so it
 stays usable.

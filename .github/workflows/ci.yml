@@ -32,6 +32,9 @@ jobs:
       - name: Unit tests
         run: cargo test --workspace --locked
 
+      - name: Ladybird stub host
+        run: cargo build --release -p ladybird-host --locked
+
       - name: Password form regressions
         run: node --test assets/passwords.test.js assets/webstore.test.js assets/adblock.test.js assets/media-watch.test.js assets/webapps.test.js
 
@@ -44,7 +47,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --release --locked
+        run: cargo build --release --locked -p ladybird-host -p app
 
       - name: Run the self-test
         shell: pwsh

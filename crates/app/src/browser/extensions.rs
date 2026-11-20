@@ -1,36 +1,22 @@
 //! Extensions in the browser window: installs from the Chrome Web Store (the store page's button
-//! talks to `store_message`), the toolbar's extensions menu, and an extension's toolbar pop-up
-//! shown under that button (WebView2 has no extension toolbar of its own).
+//! talks to `store_message`) and the toolbar's extensions menu. Toolbar pop-ups used to be
+//! WebView2 child windows; with Ladybird-only rendering they open the native Extensions page
+//! until LibWebView can host them.
 
 use serde_json::json;
 use crate::i18n::tr;
 use wry::dpi::{LogicalPosition, LogicalSize};
-use wry::{Rect, WebViewBuilder, WebViewBuilderExtWindows};
+use wry::Rect;
 
 use crate::browser::Browser;
 use crate::msg::Msg;
 use crate::webstore;
 
-/// Extension pop-up size limits in DIPs (Chrome: 25×25 up to 800×600).
+/// Extension pop-up size limits in DIPs (kept for resize handling if a bubble is ever restored).
 const BUBBLE_MIN: (f64, f64) = (25.0, 25.0);
 const BUBBLE_MAX: (f64, f64) = (800.0, 600.0);
-/// Size before the pop-up has reported its content (estimated, a typical pop-up).
-const BUBBLE_START: (f64, f64) = (360.0, 480.0);
 /// Browser version asked of the store when the runtime does not say (a recent Chromium).
 const FALLBACK_VERSION: &str = "150.0.0.0";
-
-/// Runs in the extension pop-up: reports the size its content wants, so the pop-up fits it.
-const BUBBLE_SIZE_JS: &str = r#"(() => {
-  const send = () => {
-    const b = document.body;
-    if (!b || !window.ipc) return;
-    const r = b.getBoundingClientRect(), s = getComputedStyle(b);
-    const w = r.width + parseFloat(s.marginLeft) + parseFloat(s.marginRight);
-    const h = Math.max(b.scrollHeight, r.height) + parseFloat(s.marginTop) + parseFloat(s.marginBottom);
-    window.ipc.postMessage("kk:size:" + Math.ceil(w) + "," + Math.ceil(h));
-  };
-  addEventListener("load", () => { send(); new ResizeObserver(send).observe(document.body); });
-})();"#;
 
 impl Browser {
     /// Show `text` on the store page's button for `ext` in tab `tab`.
@@ -228,49 +214,13 @@ impl Browser {
     /// Show extension `id`'s toolbar pop-up under the button at (`right`, `top`) DIPs; one
     /// without a pop-up opens its options page in a tab, one Kakangkung cannot read (loaded from
     /// elsewhere) opens the Extensions page.
-    /// Limit: the pop-up is its own webview, so an extension asking for "the active tab" gets
-    /// the pop-up, not the page behind it (WebView2 has no API to tell it otherwise).
+    /// Chrome extension pop-ups need a Chromium webview; Kakangkung is Ladybird-only now, so the
+    /// toolbar button opens the native Extensions page until LibWebView hosts them.
     pub(crate) fn open_bubble(&mut self, id: &str, right: f64, top: f64) {
+        let _ = (right, top);
         self.close_bubble();
-        let Some((page, is_popup)) = webstore::button_page(&self.paths.extensions.join(id)) else {
-            return self.open_after_active(&format!("{}extensions", ui::INTERNAL));
-        };
-        let url = format!("chrome-extension://{id}/{page}");
-        let Some(env) = self.env.clone().filter(|_| is_popup) else { return self.open_tab(&url, None) };
-        let (w, h) = BUBBLE_START;
-        let p = self.proxy.clone();
-        let built = WebViewBuilder::new()
-            .with_environment(env)
-            .with_url(&url)
-            .with_initialization_script(BUBBLE_SIZE_JS)
-            .with_ipc_handler(move |req| {
-                let size = req.body().strip_prefix("kk:size:").and_then(|s| s.split_once(',')).and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)));
-                if size.is_some() {
-                    let _ = p.send_event(Msg::Bubble { close: false, size });
-                }
-            })
-            .with_bounds(Rect { position: LogicalPosition::new(right - w, top).into(), size: LogicalSize::new(w, h).into() })
-            // Chrome shows pop-ups on white unless the extension paints its own background.
-            .with_background_color((255, 255, 255, 255))
-            .with_theme(self.settings.wry_theme())
-            .build_as_child(&self.window);
-        let wv = match built {
-            Ok(wv) => wv,
-            Err(e) => {
-                eprintln!("extension pop-up {id}: {e}");
-                return;
-            }
-        };
-        let (p1, p2) = (self.proxy.clone(), self.proxy.clone());
-        let _ = platform::on_lost_focus(&wv, move || {
-            let _ = p1.send_event(Msg::Bubble { close: true, size: None });
-        });
-        let _ = platform::on_close_requested(&wv, move || {
-            let _ = p2.send_event(Msg::Bubble { close: true, size: None });
-        });
-        let _ = wv.focus();
-        self.bubble_at = (right, top);
-        self.ext_bubble = Some(wv);
+        eprintln!("extension pop-up {id}: blocked (WebView2 disabled; Ladybird-only)");
+        self.open_after_active(&format!("{}extensions", ui::INTERNAL));
     }
 
     /// Pin extension `id` to the toolbar, or unpin it; kept in the `PINNED_EXTENSIONS` setting.

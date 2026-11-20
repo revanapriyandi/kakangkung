@@ -2,6 +2,8 @@
 /target/
 /dist/
 **/target/
+engines/ladybird/out/
+engines/ladybird/.ladybird/
 
 # Local notes and captures that are not part of the project
 /MECHANICS.md

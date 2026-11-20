@@ -143,15 +143,21 @@ pub(crate) fn settings_doc(s: &Json, permissions: Option<&[Json]>) -> PageDoc {
             Row::new("Animations and smooth scrolling", "Set under Appearance > Motion", Control::Link { id: "open:settings/appearance".into() }),
             Row::new("Page zoom", "Set under Appearance; Ctrl + / Ctrl − change one tab", Control::None),
         ]]),
-        section("system", "System", "system hardware acceleration gpu proxy network", vec![vec![
+        section("system", "System", "system hardware acceleration gpu proxy network ladybird webview2 page engine", vec![vec![
             v.toggle("system.hardware_acceleration", "Use graphics acceleration when available", "Takes effect after you restart Kakangkung"),
             v.toggle("system.auto_update", "Update Kakangkung automatically", "New versions are downloaded in the background, checked, and installed when you close Kakangkung"),
+            v.select(
+                "browser.page_engine",
+                "Page engine",
+                "Ladybird (LibWeb) only — Kakangkung no longer uses WebView2 or Chromium. Build the host on Boat (docs/LADYBIRD.md).",
+                &[("ladybird", "Ladybird")],
+            ),
             Row::new("Open your computer's proxy settings", "Kakangkung uses the Windows network settings", buttons(&[("proxy", "Open", ButtonStyle::Normal)])),
         ]]),
         section("reset", "Reset settings", "reset restore defaults original", vec![vec![
             Row::new("Restore settings to their original defaults", "Your account, history, bookmarks and downloads stay", buttons(&[("reset-all", "Reset settings", ButtonStyle::Danger)])),
         ]]),
-        section("about", "About Kakangkung", "about version update updates webview2", vec![vec![
+        section("about", "About Kakangkung", "about version update updates webview2 ladybird", vec![vec![
             Row::new("Kakangkung", &format!("Version {} · Chromium {}", text("version"), text("webview2")), Control::Avatar { initial: "K".into() }),
             update_row(&s["update"], v.on("system.auto_update")),
             Row::new("Source code, help and releases", "github.com/revanapriyandi/kakangkung", Control::Link { id: "visit:https://github.com/revanapriyandi/kakangkung".into() }),
