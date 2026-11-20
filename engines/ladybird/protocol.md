@@ -207,8 +207,12 @@ cast picker or stub protocol. Revisit when Ladybird adds the Web APIs.
 ask/block maps to global defaults. Camera remains deferred. **Process-per-site isolation** is
 LibWeb’s own WebContent swap on cross-site navigation; Task Manager shows those sites (B4 / KB-22b).
 
-## Print preview (KB-20)
+## Print preview (KB-20 / B3)
 
 Ctrl+P / ⋮ Print on a Ladybird tab captures a real page screenshot (`screenshot` cmd),
-opens it as a preview tab, then confirms before `print` (`window.print()`). Paginated
-print-layout preview is not productized yet.
+opens it as a preview tab, then confirms before `print` (`window.print()`).
+
+**Paginated print / `print_to_pdf` is blocked upstream:** LibWebView does not expose a
+paginated layout or PDF export API to the host. Kakangkung will **not** invent a fake
+multi-page preview. Revisit when Ladybird adds `print_to_pdf` (or equivalent). See
+[docs/LIBWEB_BLOCKERS.md](../../docs/LIBWEB_BLOCKERS.md).
