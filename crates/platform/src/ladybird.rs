@@ -374,6 +374,95 @@ window.ipc=window.ipc||{{postMessage:function(m){{try{{console.log('kk-pw:'+m)}}
         self.eval(id, &bootstrap).map(|_| ())
     }
 
+    /// KB-19: push Settings site.* ask/block defaults into LibWeb PermissionManager.
+    pub fn permissions_defaults(&self, geolocation_block: bool, microphone_block: bool, notifications_block: bool) -> Result<(), String> {
+        let geo = if geolocation_block { "block" } else { "ask" };
+        let mic = if microphone_block { "block" } else { "ask" };
+        let notif = if notifications_block { "block" } else { "ask" };
+        self.send_line(&format!(
+            r#"{{"cmd":"permissions_defaults","geolocation":"{geo}","microphone":"{mic}","notifications":"{notif}"}}"#
+        ))?;
+        let deadline = Instant::now() + HOST_WAIT;
+        while Instant::now() < deadline {
+            let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
+            let line = self.read_line_timeout(remain)?;
+            if Self::apply_side_effect(&line) {
+                continue;
+            }
+            if line.contains("\"event\":\"permissions_defaults\"") {
+                return if line.contains("\"ok\":true") {
+                    Ok(())
+                } else {
+                    Err(format!("permissions_defaults failed: {line}"))
+                };
+            }
+        }
+        Err("Ladybird host: no permissions_defaults event".into())
+    }
+
+    /// KB-19: list non-default site permission decisions as JSON array text.
+    pub fn permissions_list(&self) -> Result<String, String> {
+        self.send_line(r#"{"cmd":"permissions_list"}"#)?;
+        let deadline = Instant::now() + HOST_WAIT;
+        while Instant::now() < deadline {
+            let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
+            let line = self.read_line_timeout(remain)?;
+            if Self::apply_side_effect(&line) {
+                continue;
+            }
+            if line.contains("\"event\":\"permissions_list\"") {
+                if !line.contains("\"ok\":true") {
+                    return Err(format!("permissions_list failed: {line}"));
+                }
+                // Extract the permissions array payload.
+                if let Some(start) = line.find("\"permissions\":") {
+                    let rest = &line[start + "\"permissions\":".len()..];
+                    let rest = rest.trim_start();
+                    if rest.starts_with('[') {
+                        let mut depth = 0i32;
+                        for (i, c) in rest.char_indices() {
+                            match c {
+                                '[' => depth += 1,
+                                ']' => {
+                                    depth -= 1;
+                                    if depth == 0 {
+                                        return Ok(rest[..=i].to_string());
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                return Ok("[]".into());
+            }
+        }
+        Err("Ladybird host: no permissions_list event".into())
+    }
+
+    /// KB-19: reset one permission kind (`geolocation` / `microphone` / `notifications`) or all when `kind` is empty.
+    pub fn permissions_reset(&self, origin: &str, kind: &str) -> Result<(), String> {
+        let origin = origin.replace('\\', "\\\\").replace('"', "\\\"");
+        let kind = kind.replace('\\', "\\\\").replace('"', "\\\"");
+        self.send_line(&format!(r#"{{"cmd":"permissions_reset","origin":"{origin}","kind":"{kind}"}}"#))?;
+        let deadline = Instant::now() + HOST_WAIT;
+        while Instant::now() < deadline {
+            let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
+            let line = self.read_line_timeout(remain)?;
+            if Self::apply_side_effect(&line) {
+                continue;
+            }
+            if line.contains("\"event\":\"permissions_reset\"") {
+                return if line.contains("\"ok\":true") {
+                    Ok(())
+                } else {
+                    Err(format!("permissions_reset failed: {line}"))
+                };
+            }
+        }
+        Err("Ladybird host: no permissions_reset event".into())
+    }
+
     /// KB-12: find-in-page. Empty query or `end` clears highlights.
     /// Returns (active_match 1-based, match_count).
     pub fn find(

@@ -366,6 +366,38 @@ int main(int argc, char** argv)
             }
             continue;
         }
+        if (has_cmd(line, "permissions_defaults")) {
+            bool block_geo = line.find("\"geolocation\":\"block\"") != std::string::npos
+                || line.find("\"location\":\"block\"") != std::string::npos;
+            bool block_mic = line.find("\"microphone\":\"block\"") != std::string::npos;
+            bool block_notif = line.find("\"notifications\":\"block\"") != std::string::npos;
+            bool ok = kk_lb_permissions_set_defaults(block_geo ? 1 : 0, block_mic ? 1 : 0, block_notif ? 1 : 0) != 0;
+            emit(std::string("{\"event\":\"permissions_defaults\",\"ok\":") + (ok ? "true" : "false")
+                + (ok ? "" : ",\"reason\":\"permission manager unavailable\"") + "}");
+            continue;
+        }
+        if (has_cmd(line, "permissions_list")) {
+            char* list = nullptr;
+            bool ok = kk_lb_permissions_list_json(&list) != 0;
+            if (ok && list) {
+                emit(std::string("{\"event\":\"permissions_list\",\"ok\":true,\"permissions\":") + list + "}");
+                kk_lb_string_free(list);
+            } else {
+                emit("{\"event\":\"permissions_list\",\"ok\":false,\"permissions\":[],\"reason\":\"permission manager unavailable\"}");
+                kk_lb_string_free(list);
+            }
+            continue;
+        }
+        if (has_cmd(line, "permissions_reset")) {
+            std::string origin;
+            std::string kind;
+            field_str(line, "origin", origin);
+            field_str(line, "kind", kind);
+            bool ok = kk_lb_permissions_reset(origin.c_str(), kind.c_str()) != 0;
+            emit(std::string("{\"event\":\"permissions_reset\",\"ok\":") + (ok ? "true" : "false")
+                + (ok ? "" : ",\"reason\":\"reset failed\"") + "}");
+            continue;
+        }
         if (has_cmd(line, "find")) {
             int id = 0;
             if (field_int(line, "id", id)) {

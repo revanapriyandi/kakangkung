@@ -548,6 +548,19 @@ impl Browser {
         }
     }
 
+    /// KB-19: push Settings site.* ask/block into LibWeb PermissionManager defaults.
+    pub(crate) fn sync_ladybird_permissions(&self) {
+        let Some(host) = self.ladybird.as_ref() else { return };
+        let blocked = self.settings.protection.blocked;
+        // COREWEBVIEW2 kinds: mic=1, location=3, notifications=4 (camera has no LibWeb global default).
+        let geo = blocked & (1 << 3) != 0;
+        let mic = blocked & (1 << 1) != 0;
+        let notif = blocked & (1 << 4) != 0;
+        if let Err(e) = host.permissions_defaults(geo, mic, notif) {
+            eprintln!("ladybird permissions: {e}");
+        }
+    }
+
     /// Apply changed appearance/privacy settings to every open webview.
     pub(crate) fn apply_settings(&mut self, settings: Settings) {
         self.page_menu_on.set((settings.reader, settings.translate, settings.incognito || self.incognito));
@@ -576,6 +589,7 @@ impl Browser {
         let groups_on = self.settings.groups;
         let adblock_changed =
             self.settings.protection.adblock != old.protection.adblock || self.settings.adblock_allowlist != old.adblock_allowlist;
+        let perms_changed = self.settings.protection.blocked != old.protection.blocked;
         for wv in self.tabs.iter().filter_map(|t| t.webview.as_ref()) {
             if zoom != old.zoom {
                 set_default_zoom(wv, zoom);
@@ -606,6 +620,9 @@ impl Browser {
         }
         if adblock_changed {
             self.sync_ladybird_adblock();
+        }
+        if perms_changed {
+            self.sync_ladybird_permissions();
         }
         for i in 0..self.tabs.len() {
             self.apply(i, tabs::Event::ProtectionChanged);

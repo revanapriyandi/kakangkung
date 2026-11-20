@@ -146,6 +146,16 @@ KK_LB_API int kk_lb_adblock_enabled(void);
 KK_LB_API int kk_lb_clear_data(int cookies, int cache, int64_t since_ms);
 
 /**
+ * KB-19: PermissionManager global defaults (1 = deny / Don't allow, 0 = ask).
+ * Covers geolocation, microphone, notifications (LibWeb's persisted permission set).
+ */
+KK_LB_API int kk_lb_permissions_set_defaults(int block_geolocation, int block_microphone, int block_notifications);
+/** JSON array of {kind,origin,allowed}; caller frees with kk_lb_string_free. */
+KK_LB_API int kk_lb_permissions_list_json(char** out_utf8);
+/** Reset one kind for an origin, or all kinds when kind_utf8 is empty. */
+KK_LB_API int kk_lb_permissions_reset(char const* origin_utf8, char const* kind_utf8);
+
+/**
  * KB-12: find-in-page via LibWeb. end!=0 (or empty query) ends the search.
  * forward=0 selects the previous match when the same query is already active.
  * Writes 1-based active_match and match_count when available.

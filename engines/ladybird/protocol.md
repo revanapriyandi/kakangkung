@@ -42,6 +42,9 @@ Environment: `KAKANGKUNG_LADYBIRD_HOST` may point Kakangkung at a non-default ho
 {"cmd":"clear_data","cookies":true,"cache":true,"since":0}
 {"cmd":"find","id":1,"query":"hello","forward":true,"matchCase":false}
 {"cmd":"find","id":1,"query":"","end":true}
+{"cmd":"permissions_defaults","geolocation":"block","microphone":"ask","notifications":"block"}
+{"cmd":"permissions_list"}
+{"cmd":"permissions_reset","origin":"https://maps.example","kind":"geolocation"}
 {"cmd":"destroy","id":1}
 {"cmd":"quit"}
 ```
@@ -72,6 +75,9 @@ Environment: `KAKANGKUNG_LADYBIRD_HOST` may point Kakangkung at a non-default ho
 {"event":"adblock","ok":true,"enabled":true}
 {"event":"clear_data","ok":true,"cookies":true,"cache":true}
 {"event":"find","id":1,"ok":true,"activeMatch":1,"matchCount":3}
+{"event":"permissions_defaults","ok":true}
+{"event":"permissions_list","ok":true,"permissions":[{"kind":"geolocation","origin":"https://maps.example","allowed":false}]}
+{"event":"permissions_reset","ok":true}
 {"event":"page_ipc","id":1,"message":"kk:pw:focus:{…}"}
 ```
 
@@ -157,3 +163,9 @@ Saver discard already live in the Rust chrome; process-per-site isolation is not
 Finished `.pdf` downloads open as `file://` tabs in the Ladybird host (LibWeb navigates /
 renders when linked). Folder/Drive sync for bookmarks/history/tabs/settings is engine-
 agnostic and already ships. Chromecast-style casting is not in tree (deferred, not stubbed).
+
+## Permissions (KB-19)
+
+`permissions_defaults` / `permissions_list` / `permissions_reset` wrap LibWeb
+`PermissionManager` for geolocation, microphone, and notifications. Settings site.*
+ask/block maps to global defaults. Camera and process-per-site isolation remain deferred.
