@@ -198,7 +198,11 @@ receiver/session APIs. Names containing "Presentation" in-tree
 refer to **GPU/compositor frame presentation**, not media casting.
 
 Until LibWeb lands a real Presentation / Cast surface, Kakangkung will not ship a fake
-cast picker or stub protocol. Revisit when Ladybird adds the Web APIs.
+cast picker or stub protocol. **Product rule (B1):** no ⋮ menu “Cast…”, no
+`cast` / `presentation` host command, and no settings toggle that pretends casting
+works. Documented in Settings as *not offered* and in
+[docs/LIBWEB_BLOCKERS.md](../../docs/LIBWEB_BLOCKERS.md). Revisit when Ladybird
+adds the Web APIs.
 
 ## Permissions (KB-19)
 
