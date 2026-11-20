@@ -43,23 +43,36 @@ if(HAVE_LADYBIRD)
         ${LADYBIRD_BUILD_DIR}/AK
         ${LADYBIRD_BUILD_DIR}/Libraries
     )
-    # Discover Ladybird static/shared libs from the build tree.
-    file(GLOB_RECURSE _LB_WEBVIEWS
-        "${LADYBIRD_BUILD_DIR}/**/libwebview*.a"
-        "${LADYBIRD_BUILD_DIR}/**/libWebView*.a"
-        "${LADYBIRD_BUILD_DIR}/**/libladybird_webview*.a"
+    # Discover Ladybird / Lagom LibWebView from the build tree (shared or static).
+    file(GLOB _LB_WEBVIEWS
+        "${LADYBIRD_BUILD_DIR}/lib/liblagom-webview.so"
+        "${LADYBIRD_BUILD_DIR}/lib/liblagom-webview.so.*"
+        "${LADYBIRD_BUILD_DIR}/lib/libwebview*.a"
+        "${LADYBIRD_BUILD_DIR}/lib/libWebView*.a"
+        "${LADYBIRD_BUILD_DIR}/lib/libladybird_webview*.a"
     )
+    file(GLOB _LB_LAGOM_LIBS "${LADYBIRD_BUILD_DIR}/lib/liblagom-*.so")
     if(DEFINED LADYBIRD_LIBRARIES AND LADYBIRD_LIBRARIES)
         target_link_libraries(kakangkung-ladybird-host PRIVATE ${LADYBIRD_LIBRARIES})
-    elseif(_LB_WEBVIEWS)
-        message(STATUS "Linking discovered LibWebView: ${_LB_WEBVIEWS}")
-        target_link_libraries(kakangkung-ladybird-host PRIVATE ${_LB_WEBVIEWS})
+    elseif(_LB_WEBVIEWS OR _LB_LAGOM_LIBS)
+        message(STATUS "Linking Ladybird Lagom libs from ${LADYBIRD_BUILD_DIR}/lib")
+        target_link_directories(kakangkung-ladybird-host PRIVATE "${LADYBIRD_BUILD_DIR}/lib")
+        # Prefer the full Lagom shared set so HeadlessWebView symbols resolve.
+        if(_LB_LAGOM_LIBS)
+            target_link_libraries(kakangkung-ladybird-host PRIVATE ${_LB_LAGOM_LIBS})
+        else()
+            target_link_libraries(kakangkung-ladybird-host PRIVATE ${_LB_WEBVIEWS})
+        endif()
+        set_target_properties(kakangkung-ladybird-host PROPERTIES
+            BUILD_RPATH "${LADYBIRD_BUILD_DIR}/lib"
+            INSTALL_RPATH "${LADYBIRD_BUILD_DIR}/lib"
+        )
     else()
-        message(WARNING "HAVE_LADYBIRD=ON but no LibWebView archive found yet under ${LADYBIRD_BUILD_DIR}; set LADYBIRD_LIBRARIES after Ladybird finishes building.")
+        message(WARNING "HAVE_LADYBIRD=ON but no LibWebView / liblagom-webview found under ${LADYBIRD_BUILD_DIR}/lib; set LADYBIRD_LIBRARIES after Ladybird finishes building.")
     endif()
     if(UNIX AND NOT APPLE)
         find_package(X11 REQUIRED)
-        target_link_libraries(kakangkung-ladybird-host PRIVATE X11::X11)
+        target_link_libraries(kakangkung-ladybird-host PRIVATE X11::X11 pthread dl m)
     endif()
 endif()
 
