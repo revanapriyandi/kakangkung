@@ -16,6 +16,7 @@
 #include <AK/ByteString.h>
 #include <AK/JsonArray.h>
 #include <AK/JsonObject.h>
+#include <AK/JsonValue.h>
 #include <AK/String.h>
 #include <LibCore/EventLoop.h>
 #include <LibCore/File.h>
@@ -190,71 +191,71 @@ private:
         };
     }
 
-    static char const* console_level_name(JS::ConsoleLogLevel level)
+    static StringView console_level_name(JS::ConsoleLogLevel level)
     {
         using JS::ConsoleLogLevel;
         switch (level) {
         case ConsoleLogLevel::Assert:
-            return "assert";
+            return "assert"sv;
         case ConsoleLogLevel::Count:
-            return "count";
+            return "count"sv;
         case ConsoleLogLevel::CountReset:
-            return "countReset";
+            return "countReset"sv;
         case ConsoleLogLevel::Debug:
-            return "debug";
+            return "debug"sv;
         case ConsoleLogLevel::Dir:
-            return "dir";
+            return "dir"sv;
         case ConsoleLogLevel::DirXML:
-            return "dirxml";
+            return "dirxml"sv;
         case ConsoleLogLevel::Error:
-            return "error";
+            return "error"sv;
         case ConsoleLogLevel::Group:
-            return "group";
+            return "group"sv;
         case ConsoleLogLevel::GroupCollapsed:
-            return "groupCollapsed";
+            return "groupCollapsed"sv;
         case ConsoleLogLevel::Info:
-            return "info";
+            return "info"sv;
         case ConsoleLogLevel::Log:
-            return "log";
+            return "log"sv;
         case ConsoleLogLevel::TimeEnd:
-            return "timeEnd";
+            return "timeEnd"sv;
         case ConsoleLogLevel::TimeLog:
-            return "timeLog";
+            return "timeLog"sv;
         case ConsoleLogLevel::Table:
-            return "table";
+            return "table"sv;
         case ConsoleLogLevel::Trace:
-            return "trace";
+            return "trace"sv;
         case ConsoleLogLevel::Warn:
-            return "warn";
+            return "warn"sv;
         }
-        return "log";
+        return "log"sv;
     }
 
     void append_console(WebView::ConsoleOutput const& output)
     {
         JsonObject entry;
-        entry.set("ts"sv, output.timestamp.milliseconds_since_epoch());
+        entry.set("ts"sv, JsonValue { output.timestamp.milliseconds_since_epoch() });
         output.output.visit(
             [&](WebView::ConsoleLog const& log) {
-                entry.set("kind"sv, "log");
-                entry.set("level"sv, console_level_name(log.level));
+                entry.set("kind"sv, JsonValue { "log"sv });
+                entry.set("level"sv, JsonValue { console_level_name(log.level) });
                 JsonArray args;
                 for (auto const& arg : log.arguments)
                     args.must_append(arg);
-                entry.set("args"sv, move(args));
+                entry.set("args"sv, JsonValue { move(args) });
             },
             [&](WebView::ConsoleError const& err) {
-                entry.set("kind"sv, "error");
-                entry.set("name"sv, err.name);
-                entry.set("message"sv, err.message);
-                entry.set("inside_promise"sv, err.inside_promise);
+                entry.set("kind"sv, JsonValue { "error"sv });
+                entry.set("name"sv, JsonValue { err.name });
+                entry.set("message"sv, JsonValue { err.message });
+                entry.set("inside_promise"sv, JsonValue { err.inside_promise });
             },
             [&](WebView::ConsoleTrace const& trace) {
-                entry.set("kind"sv, "trace");
-                entry.set("label"sv, trace.label);
+                entry.set("kind"sv, JsonValue { "trace"sv });
+                entry.set("label"sv, JsonValue { trace.label });
             },
             [&](WebView::ConsoleGroupEnd const&) {
-                entry.set("kind"sv, "groupEnd");
+                entry.set("kind"sv, JsonValue { "groupEnd"sv });
             });
         auto serialized = entry.serialized().to_byte_string();
         std::lock_guard lock(m_console_mutex);
