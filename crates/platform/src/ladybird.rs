@@ -286,6 +286,33 @@ impl Host {
         self.send_line(&format!(r#"{{"cmd":"destroy","id":{id}}}"#))
     }
 
+    /// Start a real LibWeb FileDownloader transfer to `path`.
+    pub fn download_start(&self, url: &str, path: &str) -> Result<(), String> {
+        let url = url.replace('\\', "\\\\").replace('"', "\\\"");
+        let path = path.replace('\\', "\\\\").replace('"', "\\\"");
+        self.send_line(&format!(r#"{{"cmd":"download","url":"{url}","path":"{path}"}}"#))?;
+        let deadline = Instant::now() + HOST_WAIT;
+        while Instant::now() < deadline {
+            let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
+            let line = self.read_line_timeout(remain)?;
+            if line.contains("\"event\":\"download_started\"") {
+                return if line.contains("\"ok\":true") {
+                    Ok(())
+                } else {
+                    Err(format!("download start failed: {line}"))
+                };
+            }
+        }
+        Err("Ladybird host: no download_started event".into())
+    }
+
+    pub fn download_action(&self, download_id: u64, action: &str) -> Result<(), String> {
+        let action = action.replace('\\', "\\\\").replace('"', "\\\"");
+        self.send_line(&format!(
+            r#"{{"cmd":"download_action","downloadId":{download_id},"action":"{action}"}}"#
+        ))
+    }
+
     pub fn quit(&self) -> Result<(), String> {
         self.send_line(r#"{"cmd":"quit"}"#)
     }

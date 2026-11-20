@@ -202,6 +202,10 @@ int main(int argc, char** argv)
 
     Host host;
     host.session = kk_lb_session_create(profile.c_str());
+    kk_lb_set_download_emit([](char const* json_line) {
+        if (json_line)
+            emit(json_line);
+    });
     emit(std::string("{\"event\":\"ready\",\"engine\":\"") + kk_lb_engine_id() + "\"}");
 
     std::string line;
@@ -442,6 +446,30 @@ int main(int argc, char** argv)
                 if (auto it = host.views.find(id); it != host.views.end())
                     kk_lb_view_drain_ext(it->second.view);
             }
+            continue;
+        }
+        if (has_cmd(line, "download")) {
+            kk_lb_downloads_ensure_observer();
+            std::string url;
+            std::string path;
+            field_str(line, "url", url);
+            field_str(line, "path", path);
+            bool ok = !url.empty() && !path.empty() && kk_lb_download_start(url.c_str(), path.c_str()) != 0;
+            emit(std::string("{\"event\":\"download_started\",\"ok\":") + (ok ? "true" : "false")
+                + ",\"url\":\"" + json_escape(url) + "\",\"path\":\"" + json_escape(path) + "\"}");
+            continue;
+        }
+        if (has_cmd(line, "download_action")) {
+            int id = 0;
+            std::string action;
+            field_int(line, "downloadId", id);
+            if (id == 0)
+                field_int(line, "id", id);
+            field_str(line, "action", action);
+            bool ok = id > 0 && !action.empty()
+                && kk_lb_download_action(static_cast<uint64_t>(id), action.c_str()) != 0;
+            emit(std::string("{\"event\":\"download_action\",\"downloadId\":") + std::to_string(id)
+                + ",\"action\":\"" + json_escape(action) + "\",\"ok\":" + (ok ? "true" : "false") + "}");
             continue;
         }
         kk_lb_session_pump(host.session);

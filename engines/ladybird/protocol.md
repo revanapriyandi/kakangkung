@@ -34,6 +34,8 @@ Environment: `KAKANGKUNG_LADYBIRD_HOST` may point Kakangkung at a non-default ho
 {"cmd":"capabilities","id":1}
 {"cmd":"ext_reply","id":1,"extension":"my-ext","requestId":"1","response":{"ok":true}}
 {"cmd":"ext_drain","id":1}
+{"cmd":"download","url":"https://example.com/file.bin","path":"/tmp/file.bin"}
+{"cmd":"download_action","downloadId":1,"action":"pause"}
 {"cmd":"destroy","id":1}
 {"cmd":"quit"}
 ```
@@ -57,6 +59,9 @@ Environment: `KAKANGKUNG_LADYBIRD_HOST` may point Kakangkung at a non-default ho
 {"event":"capabilities","id":1,"ok":true,"caps":{"engine":"ladybird","wasm":true,"webgpu":true,"webgpu_adapter_api":true}}
 {"event":"ext_message","id":1,"extension":"my-ext","requestId":"1","message":{"hello":true}}
 {"event":"ext_reply","id":1,"ok":true}
+{"event":"download_started","ok":true,"url":"https://example.com/file.bin","path":"/tmp/file.bin"}
+{"event":"download","downloadId":1,"url":"https://example.com/file.bin","path":"/tmp/file.bin","received":0,"total":-1,"state":"in_progress","can_resume":false}
+{"event":"download_removed","downloadId":1}
 ```
 
 `engine` is `"ladybird"` when LibWeb is linked, `"stub"` for the offline host.
@@ -91,3 +96,9 @@ replies with `ext_reply`.
 
 Clients that `wait` on `load` with `done:true` can rely on **back** / **forward** / **reload**
 always emitting that event (even when history is empty — a no-op ack) so waiters never hang.
+
+## Downloads (KB-6)
+
+Real LibWeb `FileDownloader` (not WebView2). Host registers a `FileDownloaderObserver` and
+emits `download` / `download_removed` as transfers progress. Start with `download` (url +
+absolute path); control with `download_action` (`pause` / `resume` / `cancel`).

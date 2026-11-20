@@ -200,6 +200,13 @@ void kk_lb_view_drain_ext(kk_lb_view* view)
         reinterpret_cast<View*>(view)->drain_ext_queue();
 }
 
+#if !defined(HAVE_LADYBIRD)
+void kk_lb_set_download_emit(void (*)(char const*)) { }
+void kk_lb_downloads_ensure_observer(void) { }
+int kk_lb_download_start(char const*, char const*) { return 0; }
+int kk_lb_download_action(uint64_t, char const*) { return 0; }
+#endif
+
 void kk_lb_string_free(char* s)
 {
     std::free(s);

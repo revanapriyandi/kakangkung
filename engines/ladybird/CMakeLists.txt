@@ -15,7 +15,7 @@ set(HOST_SOURCES
     src/extensions.cpp
 )
 if(HAVE_LADYBIRD)
-    list(APPEND HOST_SOURCES src/view_ladybird.cpp)
+    list(APPEND HOST_SOURCES src/view_ladybird.cpp src/downloads_ladybird.cpp)
     if(UNIX AND NOT APPLE)
         list(APPEND HOST_SOURCES src/x11_surface.cpp)
     endif()

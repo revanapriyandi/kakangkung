@@ -116,6 +116,12 @@ KK_LB_API int kk_lb_view_ext_reply(kk_lb_view* view, char const* extension_id_ut
 /** Drain pending chrome.runtime.sendMessage entries from the page into on_ext_message. */
 KK_LB_API void kk_lb_view_drain_ext(kk_lb_view* view);
 
+/** KB-6: LibWeb FileDownloader → protocol lines (one JSON object per call). */
+KK_LB_API void kk_lb_set_download_emit(void (*fn)(char const* json_line));
+KK_LB_API void kk_lb_downloads_ensure_observer(void);
+KK_LB_API int kk_lb_download_start(char const* url_utf8, char const* path_utf8);
+KK_LB_API int kk_lb_download_action(uint64_t id, char const* action_utf8 /* pause|resume|cancel */);
+
 KK_LB_API void kk_lb_string_free(char* s);
 
 /** Pump Ladybird / stub events; return non-zero if the session should quit. */

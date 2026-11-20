@@ -461,6 +461,7 @@ static ErrorOr<void> ensure_application()
         .strings = Span<StringView> { string_storage },
     };
     g_app = TRY(KakangkungApplication::create(arguments));
+    kk_lb_downloads_ensure_observer();
     return {};
 }
 
