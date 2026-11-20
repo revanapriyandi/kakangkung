@@ -72,6 +72,8 @@ pub(crate) struct Tab {
     /// Ladybird host history chrome (from `history` events after navigate/back/forward).
     pub(crate) ladybird_can_back: bool,
     pub(crate) ladybird_can_forward: bool,
+    /// Last page zoom factor applied via the Ladybird host (1.0 = 100%).
+    pub(crate) ladybird_zoom: f64,
 }
 
 impl Tab {
@@ -93,6 +95,7 @@ impl Tab {
             before: vec![],
             ladybird_can_back: false,
             ladybird_can_forward: false,
+            ladybird_zoom: 1.0,
         }
     }
 
@@ -146,6 +149,10 @@ pub(crate) struct Browser {
     /// Which pop-up is showing: "suggest", "menu" or "siteinfo".
     pub(crate) overlay_kind: String,
     pub(crate) overlay_open: bool,
+    /// Last find-in-page query (Ladybird Ctrl+F bar).
+    pub(crate) find_query: String,
+    /// Ladybird view id waiting for Print preview confirmation.
+    pub(crate) print_preview_view: Option<i32>,
     pub(crate) bookmarked: bool,
     /// Search URL template and engine name (Google unless changed in settings).
     pub(crate) search: (String, String),
@@ -339,6 +346,8 @@ impl Browser {
             menu_at: (0.0, 0.0),
             overlay_kind: String::new(),
             overlay_open: false,
+            find_query: String::new(),
+            print_preview_view: None,
             bookmarked: false,
             search: ui::search_template(""),
             engine_setting: String::new(),
@@ -532,6 +541,29 @@ impl Browser {
         }
     }
 
+    /// Push privacy.adblock + allowlist into the Ladybird LibWeb ContentFilter/ContentBlocker.
+    pub(crate) fn sync_ladybird_adblock(&self) {
+        platform::set_adblock_enabled(self.settings.protection.adblock);
+        platform::configure_adblock_sites(&self.settings.adblock_allowlist);
+        let Some(host) = self.ladybird.as_ref() else { return };
+        if let Err(e) = host.adblock_configure(self.settings.protection.adblock, &self.settings.adblock_allowlist) {
+            eprintln!("ladybird adblock: {e}");
+        }
+    }
+
+    /// KB-19: push Settings site.* ask/block into LibWeb PermissionManager defaults.
+    pub(crate) fn sync_ladybird_permissions(&self) {
+        let Some(host) = self.ladybird.as_ref() else { return };
+        let blocked = self.settings.protection.blocked;
+        // COREWEBVIEW2 kinds: mic=1, location=3, notifications=4 (camera has no LibWeb global default).
+        let geo = blocked & (1 << 3) != 0;
+        let mic = blocked & (1 << 1) != 0;
+        let notif = blocked & (1 << 4) != 0;
+        if let Err(e) = host.permissions_defaults(geo, mic, notif) {
+            eprintln!("ladybird permissions: {e}");
+        }
+    }
+
     /// Apply changed appearance/privacy settings to every open webview.
     pub(crate) fn apply_settings(&mut self, settings: Settings) {
         self.page_menu_on.set((settings.reader, settings.translate, settings.incognito || self.incognito));
@@ -555,23 +587,45 @@ impl Browser {
             }
         }
         let old = std::mem::replace(&mut self.settings, settings);
-        let new = &self.settings;
+        let zoom = self.settings.zoom;
+        let focus = self.settings.focus_highlight;
+        let groups_on = self.settings.groups;
+        let adblock_changed =
+            self.settings.protection.adblock != old.protection.adblock || self.settings.adblock_allowlist != old.adblock_allowlist;
+        let perms_changed = self.settings.protection.blocked != old.protection.blocked;
         for wv in self.tabs.iter().filter_map(|t| t.webview.as_ref()) {
-            if new.zoom != old.zoom {
-                set_default_zoom(wv, new.zoom);
+            if zoom != old.zoom {
+                set_default_zoom(wv, zoom);
             }
-            if new.focus_highlight != old.focus_highlight {
-                let _ = wv.evaluate_script(&focus_script(new.focus_highlight));
+            if focus != old.focus_highlight {
+                let _ = wv.evaluate_script(&focus_script(focus));
+            }
+        }
+        if zoom != old.zoom {
+            for i in 0..self.tabs.len() {
+                let Some(vid) = self.tabs[i].ladybird_view else { continue };
+                let result = self.ladybird.as_ref().map(|host| host.zoom_absolute(vid, zoom));
+                match result {
+                    Some(Ok(applied)) => self.tabs[i].ladybird_zoom = applied,
+                    Some(Err(e)) => eprintln!("ladybird settings zoom failed: {e}"),
+                    None => {}
+                }
             }
         }
         // Features switched off in Settings leave nothing behind.
-        if !new.groups {
+        if !groups_on {
             self.tabs.iter_mut().for_each(|t| t.view.group = 0);
             self.groups.clear();
         }
         if !self.settings.split_view && self.split.is_some() {
             let a = self.active;
             self.tab_action(&format!("unsplit:{a}"));
+        }
+        if adblock_changed {
+            self.sync_ladybird_adblock();
+        }
+        if perms_changed {
+            self.sync_ladybird_permissions();
         }
         for i in 0..self.tabs.len() {
             self.apply(i, tabs::Event::ProtectionChanged);
@@ -640,6 +694,10 @@ impl Browser {
         if self.settings.https_first && !numeric && ui::Security::of(&url) == ui::Security::Insecure {
             url = url.replacen("http://", "https://", 1);
         }
+        if self.settings.protection.adblock && platform::blocks_document_navigation(&url) {
+            eprintln!("adblock: blocked document navigation to {url}");
+            return;
+        }
         if let Some(i) = self.index(self.active) {
             let (was, now) = (crate::native::page_of(&self.tabs[i].view.url), crate::native::page_of(&url));
             if was.is_some() || now.is_some() {
@@ -686,9 +744,18 @@ impl Browser {
         let n = self.tabs.len();
         match a {
             Action::MenuCommand(command @ ("zoomin" | "zoomout" | "zoomreset")) => {
+                let factor = match command { "zoomin" => Some(1.1), "zoomout" => Some(1.0 / 1.1), _ => None };
                 if let Some(wv) = self.active_webview() {
-                    let factor = match command { "zoomin" => Some(1.1), "zoomout" => Some(1.0 / 1.1), _ => None };
                     let _ = platform::zoom(wv, factor);
+                } else if let Some(i) = self.index(self.active) {
+                    if let Some(vid) = self.tabs[i].ladybird_view {
+                        let result = self.ladybird.as_ref().map(|host| host.zoom(vid, factor));
+                        match result {
+                            Some(Ok(z)) => self.tabs[i].ladybird_zoom = z,
+                            Some(Err(e)) => eprintln!("ladybird zoom failed: {e}"),
+                            None => {}
+                        }
+                    }
                 }
             }
             Action::MenuCommand(command) => return self.on_menu(command),

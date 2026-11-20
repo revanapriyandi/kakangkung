@@ -10,6 +10,9 @@ use crate::browser::Browser;
 use crate::i18n::tr;
 use crate::msg::Msg;
 
+/// Page-side password manager (top frame). Ladybird injects this after load with an `ipc` bridge.
+pub(crate) const PASSWORDS_JS: &str = include_str!("../../../../assets/passwords.js");
+
 /// The pop-up of saved logins is at least this wide (DIPs).
 const FILL_MIN_W: f64 = 280.0;
 /// The save dialog's width (DIPs).
@@ -147,11 +150,43 @@ impl Browser {
         if tab != self.active || !self.passwords.focus.as_ref().is_some_and(|(t, o, _)| *t == tab && o == origin) {
             return;
         }
-        let Some(wv) = self.index(tab).and_then(|i| self.tabs[i].webview.as_ref()) else { return };
         // `location.origin` cannot be faked by the page: a page that navigated away meanwhile
         // gets nothing.
-        let js = format!("location.origin === {} && window.__kkPwFill && window.__kkPwFill({}, {})", json!(origin), json!(user), json!(pass));
-        let _ = wv.evaluate_script(&js);
+        let js = format!(
+            "location.origin === {} && window.__kkPwFill && window.__kkPwFill({}, {})",
+            json!(origin),
+            json!(user),
+            json!(pass)
+        );
+        if let Some(wv) = self.index(tab).and_then(|i| self.tabs[i].webview.as_ref()) {
+            let _ = wv.evaluate_script(&js);
+            return;
+        }
+        if let Some(i) = self.index(tab) {
+            if let Some(vid) = self.tabs[i].ladybird_view {
+                if let Some(host) = self.ladybird.as_ref() {
+                    if let Err(e) = host.eval(vid, &js) {
+                        eprintln!("ladybird password fill: {e}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// After a Ladybird load finishes, inject the password manager when save-passwords is on.
+    pub(crate) fn inject_ladybird_passwords(&self, tab: u64) {
+        if !self.settings.protection.save_passwords {
+            return;
+        }
+        let Some(i) = self.index(tab) else { return };
+        if self.tabs[i].view.private {
+            return;
+        }
+        let Some(vid) = self.tabs[i].ladybird_view else { return };
+        let Some(host) = self.ladybird.as_ref() else { return };
+        if let Err(e) = host.inject_passwords(vid, PASSWORDS_JS) {
+            eprintln!("ladybird passwords inject: {e}");
+        }
     }
 
     /// "Save password for example.com?": Save / Never; closing it is "not now" (the key in the

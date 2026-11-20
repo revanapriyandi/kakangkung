@@ -224,4 +224,61 @@ void View::go_forward()
     emit_load(true);
 }
 
+bool View::screenshot_png(std::string const&)
+{
+    return false;
+}
+
+bool View::print_page()
+{
+    return false;
+}
+
+bool View::set_zoom(double const*, double const*, double& out_factor)
+{
+    out_factor = m_zoom;
+    return false;
+}
+
+bool View::a11y_json(std::string&)
+{
+    return false;
+}
+
+bool View::dom_json(std::string&)
+{
+    return false;
+}
+
+bool View::console_json(std::string&, bool)
+{
+    return false;
+}
+
+bool View::eval_js(std::string const&, std::string&)
+{
+    return false;
+}
+
+bool View::capabilities_json(std::string&)
+{
+    return false;
+}
+
+bool View::ext_reply(std::string const&, std::string const&, std::string const&)
+{
+    return false;
+}
+
+void View::drain_ext_queue()
+{
+}
+
+bool View::find_in_page(std::string const&, bool, bool, bool, int& active_match, int& match_count)
+{
+    active_match = 0;
+    match_count = 0;
+    return false;
+}
+
 } // namespace kakangkung::ladybird

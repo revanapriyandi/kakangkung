@@ -143,7 +143,11 @@ impl Browser {
     /// chosen command.
     pub(crate) fn show_menu(&mut self, right: f64, top: f64) -> Option<String> {
         self.menu_at = (right, top);
-        let zoom = self.active_webview().and_then(|wv| platform::zoom(wv, Some(1.0)).ok()).unwrap_or(1.0);
+        let zoom = self
+            .active_webview()
+            .and_then(|wv| platform::zoom(wv, Some(1.0)).ok())
+            .or_else(|| self.index(self.active).map(|i| self.tabs[i].ladybird_zoom))
+            .unwrap_or(1.0);
         let split = if self.split.is_some_and(|(l, r)| self.active == l || self.active == r) {
             json!({ "id": "unsplit", "label": "Close split view", "key": "" })
         } else {
@@ -275,9 +279,18 @@ impl Browser {
     /// Returns false when the window should close.
     pub(crate) fn on_menu(&mut self, id: &str) -> bool {
         let internal = |page: &str| format!("{}{page}", ui::INTERNAL);
-        let wv_zoom = |b: &Self, f: Option<f64>| {
+        let wv_zoom = |b: &mut Self, f: Option<f64>| {
             if let Some(wv) = b.active_webview() {
                 let _ = platform::zoom(wv, f);
+                return;
+            }
+            let Some(i) = b.index(b.active) else { return };
+            let Some(vid) = b.tabs[i].ladybird_view else { return };
+            let result = b.ladybird.as_ref().map(|host| host.zoom(vid, f));
+            match result {
+                Some(Ok(z)) => b.tabs[i].ladybird_zoom = z,
+                Some(Err(e)) => eprintln!("ladybird zoom failed: {e}"),
+                None => {}
             }
         };
         if id.starts_with("webapp-") { self.web_app_action(id); return true; }
@@ -417,6 +430,7 @@ impl Browser {
                 let value = sites.join("\n");
                 self.settings.adblock_allowlist = value.clone();
                 platform::configure_adblock_sites(&value);
+                self.sync_ladybird_adblock();
                 self.db(move |s| s.set_setting("privacy.adblock_allowlist", &value));
                 if let Some(wv) = self.active_webview() { let _ = wv.reload(); }
             }
@@ -435,10 +449,15 @@ impl Browser {
             "passwords" => self.open_after_active(&format!("{}passwords", ui::INTERNAL)),
             "clear" => self.open_after_active(&format!("{}settings#privacy", ui::INTERNAL)),
             "find" => {
-                if self.native.tab == self.active { self.page.focus_search(); }
-                if let Some(wv) = self.active_webview() {
-                    if let Err(e) = platform::open_find(wv) {
-                        eprintln!("find: {e}");
+                if self.native.tab == self.active {
+                    self.page.focus_search();
+                } else if let Some(i) = self.index(self.active) {
+                    if self.tabs[i].ladybird_view.is_some() {
+                        self.show_find_bar();
+                    } else if let Some(wv) = self.active_webview() {
+                        if let Err(e) = platform::open_find(wv) {
+                            eprintln!("find: {e}");
+                        }
                     }
                 }
             }
@@ -450,13 +469,13 @@ impl Browser {
                 if let Some(wv) = self.active_webview() {
                     let _ = wv.print();
                 } else if let Some(i) = self.index(self.active) {
-                    if let (Some(host), Some(vid)) = (self.ladybird.as_ref(), self.tabs[i].ladybird_view) {
-                        if let Err(e) = host.print_page(vid) {
-                            eprintln!("print: {e}");
-                        }
+                    if self.tabs[i].ladybird_view.is_some() {
+                        self.show_print_preview();
                     }
                 }
             }
+            "print-go" => self.confirm_print_preview(true),
+            "print-cancel" => self.confirm_print_preview(false),
             "screenshot" => {
                 let base = self
                     .ctx

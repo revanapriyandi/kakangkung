@@ -139,7 +139,11 @@ impl Browser {
                 next = Some(next.map_or(due, |n| n.min(due)));
             }
             if now >= since + after {
-                self.apply(i, TabEvent::SuspendDue);
+                // Ladybird has no TrySuspend: Memory Saver discards the host view (DropWebview)
+                // and keeps URL for recreate — claiming Suspended while the view lived was a no-op.
+                let ladybird_tab = self.tabs[i].ladybird_view.is_some()
+                    || (self.ladybird.is_some() && self.tabs[i].webview.is_none());
+                self.apply(i, if ladybird_tab { TabEvent::DiscardDue } else { TabEvent::SuspendDue });
                 // An immediate platform error leaves the tab idle. Retry later.
                 if self.tabs[i].state == Lifecycle::Idle {
                     self.tabs[i].hidden_since = Some(now);
@@ -302,7 +306,20 @@ impl Browser {
             let page_url = self.tabs[i].view.url.clone();
             let vid = host.create_view(&page_url, p.x, p.y, s.width, s.height)?;
             timing("tab ladybird: created");
+            let default_zoom = self.settings.zoom;
+            let zoom_applied = if (default_zoom - 1.0).abs() > f64::EPSILON {
+                match host.zoom_absolute(vid, default_zoom) {
+                    Ok(z) => z,
+                    Err(e) => {
+                        eprintln!("ladybird default zoom failed: {e}");
+                        default_zoom
+                    }
+                }
+            } else {
+                1.0
+            };
             self.tabs[i].ladybird_view = Some(vid);
+            self.tabs[i].ladybird_zoom = zoom_applied;
             self.tabs[i].view.discarded = false;
             self.tabs[i].view.loading = false;
             // Host already waited for load; tell the UI thread (self-test, omnibox, etc.).
@@ -323,6 +340,17 @@ impl Browser {
             return Ok(());
         }
         if let Some(vid) = self.tabs[i].ladybird_view {
+            // Memory Saver on Ladybird is discard (DropWebview), not fake Suspend.
+            // TrySuspend should not arrive after memory_tick maps to DiscardDue; if it does,
+            // destroy the view so we never claim Suspended while LibWeb still lives.
+            if cmd == Command::TrySuspend {
+                if let Some(host) = self.ladybird.as_ref() {
+                    let _ = host.destroy_view(vid);
+                }
+                self.tabs[i].ladybird_view = None;
+                self.tabs[i].view.discarded = true;
+                return Ok(());
+            }
             let host = self.ladybird.as_ref().ok_or("no Ladybird host")?;
             match cmd {
                 Command::Show => {
@@ -337,8 +365,7 @@ impl Browser {
                     Ok(())
                 }
                 Command::Hide => host.set_visible(vid, false),
-                // Memory Saver / WebView2-only commands are no-ops on Ladybird for now.
-                Command::TrySuspend | Command::Resume | Command::SetLevelLow | Command::SetLevelNormal => Ok(()),
+                Command::Resume | Command::SetLevelLow | Command::SetLevelNormal => Ok(()),
                 _ => Err(format!("Ladybird: unsupported command {cmd:?}")),
             }
         } else {

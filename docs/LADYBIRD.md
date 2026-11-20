@@ -82,9 +82,26 @@ Or set `KAKANGKUNG_LADYBIRD_HOST` to the host path.
 | C++ stub HWND paint | Done (`engines/ladybird` stub) |
 | Load events → UI / Self-test Ladybird path | Done |
 | Extension pop-ups / `window.open` as Ladybird tabs | Done (no WebView2 surface) |
-| LibWeb-linked `ViewImplementation` | Scaffold `view_ladybird.cpp` — finish on Boat |
-| Memory Saver TrySuspend / SmartScreen | WebView2-era — replace with Ladybird equivalents |
-| Boat LibWeb full build | Needs `boat login` + Ladybird tree on `bx_cnfw3mch` |
+| LibWeb `HeadlessWebView` + native blit | `view_ladybird.cpp` (HAVE_LADYBIRD=1) — build on Boat `bx_cnfw3mch` |
+| Downloads / PastDownload from LibWeb | KB-6 — FileDownloader events → live list + SQLite |
+| Page zoom over host protocol | KB-8 — `zoom` cmd + CSS zoom via LibWeb |
+| Adblock request intercept | KB-7 — ContentFilter/Blocker + EasyList document gate |
+| Memory Saver (discard, not fake Suspend) | KB-9 — Idle timeout → DiscardDue / DropWebview |
+| Password manager inject / fill | KB-10 — `eval` + `page_ipc` (`kk:pw:`) |
+| Clear cookies / site data / cache | KB-11 — `clear_data` → LibWeb `clear_browsing_data` |
+| Find / translate / reading mode | KB-12 — LibWeb find + `eval` (print preview deferred) |
+| Task manager process tree | KB-13 — Ladybird host PID + children (session restore already real) |
+| PDF in tab after download | KB-18 — open finished `.pdf` via `file://` in Ladybird |
+| Site permission defaults / list / reset | KB-19 — LibWeb PermissionManager (geo/mic/notifications) |
+| Print preview | KB-20 — screenshot snapshot tab + Print confirm (paginated layout deferred) |
+| Folder sync passwords | KB-21 — vault merges via sync folder |
+| Process-per-site visibility | KB-22 — LibWeb ProcessManager snapshots in Task Manager |
+| Presentation / Chromecast casting | **KB-23 blocked** — LibWeb has no `PresentationRequest` / `RemotePlayback` / Cast API (CompositorPresentation* is GPU frames, not casting). No stub. |
+| Crash recovery / cold start | **KB-25** — `web_content_crashed` → reload; `session.running` marker forces restore after unclean exit |
+| Extension service workers | **KB-24** — `chrome.storage.local` + messaging demux; full MV3 SW blocked (no extension worker host) |
+| Paginated print / PDF | **Blocked** — no LibWeb `print_to_pdf`; KB-20 keeps screenshot preview |
+| Chrome-parity pillars | See store `docs/chrome-parity-roadmap.md` (KB-2…KB-25) |
+| Stack merge procedure | Store `docs/merge-stack-14-38.md` — merge bottom-up only when a human says merge |
 
 ## Related
 

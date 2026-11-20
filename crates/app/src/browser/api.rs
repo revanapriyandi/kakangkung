@@ -228,10 +228,52 @@ impl Browser {
             }
             "memory" => {
                 let webviews: Vec<&wry::WebView> = self.tabs.iter().filter_map(|tab| tab.webview.as_ref()).chain(self.ext_bubble.as_ref()).collect();
-                let procs: Vec<Json> = platform::processes(&webviews)
+                let host_pid = self.ladybird.as_ref().map(|h| h.pid());
+                let mut procs: Vec<Json> = platform::processes(&webviews, host_pid)
                     .into_iter()
                     .map(|p| json!({ "pid": p.pid, "kind": p.kind, "ws": p.private_ws, "commit": p.commit }))
                     .collect();
+                // KB-22: merge real LibWeb ProcessManager rows (WebContent per site, helpers).
+                if let Some(host) = self.ladybird.as_ref() {
+                    if let Ok(raw) = host.processes_json() {
+                        if let Ok(Json::Array(rows)) = serde_json::from_str::<Json>(&raw) {
+                            let mut seen: std::collections::HashSet<u64> =
+                                procs.iter().filter_map(|p| p["pid"].as_u64()).collect();
+                            for row in rows {
+                                let pid = row["pid"].as_u64().unwrap_or(0);
+                                if pid == 0 || !seen.insert(pid) {
+                                    continue;
+                                }
+                                let kind = row["kind"].as_str().unwrap_or("WebContent");
+                                let ws = row["ws"].as_u64().unwrap_or(0);
+                                let site = row["site"].as_str().unwrap_or("");
+                                let title = row["title"].as_str().unwrap_or("");
+                                let label = if !site.is_empty() {
+                                    format!("{kind} · {site}")
+                                } else if !title.is_empty() {
+                                    format!("{kind} · {title}")
+                                } else {
+                                    kind.to_string()
+                                };
+                                // Prefer LibWeb's memory figure; fall back to OS private WS.
+                                let (ws, commit) = if ws > 0 {
+                                    (ws, 0u64)
+                                } else {
+                                    let (private, commit, _) = platform::process_counters(pid as u32);
+                                    (private, commit)
+                                };
+                                procs.push(json!({
+                                    "pid": pid,
+                                    "kind": label,
+                                    "ws": ws,
+                                    "commit": commit,
+                                    "site": site,
+                                    "title": title,
+                                }));
+                            }
+                        }
+                    }
+                }
                 // Native pages run no page process: not counted.
                 let count = |s: Lifecycle| self.tabs.iter().filter(|t| t.state == s && crate::native::page_of(&t.view.url).is_none()).count();
                 let mode = match self.memory_mode {
@@ -362,25 +404,57 @@ impl Browser {
                 Some(_) => respond.send(json!({ "error": "that folder has no manifest.json" })),
                 None => respond.send(json!({ "cancelled": true })),
             },
-            "permissions" => match self.extension_host() {
-                Some(wv) => platform::site_permissions(wv, move |r| {
-                    respond.send(match r {
-                        Ok(list) => json!(list
-                            .iter()
-                            .map(|p| json!({ "kind": p.kind, "name": permission_name(p.kind), "origin": p.origin, "allowed": p.allowed }))
-                            .collect::<Vec<_>>()),
-                        Err(e) => json!({ "error": e }),
-                    })
-                }),
-                None => respond.send(json!([])),
-            },
+            "permissions" => {
+                if let Some(host) = self.ladybird.as_ref() {
+                    match host.permissions_list() {
+                        Ok(raw) => {
+                            let list: Vec<Json> = serde_json::from_str(&raw).unwrap_or_default();
+                            let mapped: Vec<Json> = list
+                                .into_iter()
+                                .map(|p| {
+                                    let kind_key = p["kind"].as_str().unwrap_or("");
+                                    let kind_id = ladybird_permission_kind_id(kind_key);
+                                    json!({
+                                        "kind": kind_id,
+                                        "name": ladybird_permission_name(kind_key),
+                                        "origin": p["origin"],
+                                        "allowed": p["allowed"],
+                                    })
+                                })
+                                .collect();
+                            respond.send(json!(mapped));
+                        }
+                        Err(e) => respond.send(json!({ "error": e })),
+                    }
+                } else if let Some(wv) = self.extension_host() {
+                    platform::site_permissions(wv, move |r| {
+                        respond.send(match r {
+                            Ok(list) => json!(list
+                                .iter()
+                                .map(|p| json!({ "kind": p.kind, "name": permission_name(p.kind), "origin": p.origin, "allowed": p.allowed }))
+                                .collect::<Vec<_>>()),
+                            Err(e) => json!({ "error": e }),
+                        })
+                    });
+                } else {
+                    respond.send(json!([]));
+                }
+            }
             "permissions/reset" => {
                 let (kind, origin) = body.split_once('\t').unwrap_or(("", ""));
-                match (kind.parse::<i32>(), self.extension_host()) {
-                    (Ok(kind), Some(wv)) => platform::reset_site_permission(wv, kind, origin, move |r| {
-                        respond.send(ok(r))
-                    }),
-                    _ => respond.send(json!({ "error": "no such permission" })),
+                if let Some(host) = self.ladybird.as_ref() {
+                    let key = ladybird_permission_key(kind);
+                    match host.permissions_reset(origin, key) {
+                        Ok(()) => respond.send(json!({})),
+                        Err(e) => respond.send(json!({ "error": e })),
+                    }
+                } else {
+                    match (kind.parse::<i32>(), self.extension_host()) {
+                        (Ok(kind), Some(wv)) => platform::reset_site_permission(wv, kind, origin, move |r| {
+                            respond.send(ok(r))
+                        }),
+                        _ => respond.send(json!({ "error": "no such permission" })),
+                    }
                 }
             }
             "privacy/clear" if body.trim() == "passwords" => {
@@ -499,7 +573,11 @@ impl Browser {
                 let all = body.trim() == "all";
                 let s = &self.settings;
                 if all && (s.clear_cookies || s.clear_cache) {
-                    if let Some(wv) = self.extension_host() {
+                    if let Some(host) = self.ladybird.as_ref() {
+                        if let Err(e) = host.clear_data(s.clear_cookies, s.clear_cache, since.unwrap_or(0)) {
+                            eprintln!("clear browsing data: {e}");
+                        }
+                    } else if let Some(wv) = self.extension_host() {
                         platform::clear_browsing_data(wv, s.clear_cookies, s.clear_cache, since.unwrap_or(0), |r| {
                             if let Err(e) = r {
                                 eprintln!("clear browsing data: {e}");
@@ -659,6 +737,34 @@ pub(crate) fn permission_name(kind: i32) -> &'static str {
         11 => "MIDI devices",
         12 => "Window management",
         _ => "Other",
+    }
+}
+
+fn ladybird_permission_name(kind: &str) -> &'static str {
+    match kind {
+        "microphone" => "Microphone",
+        "geolocation" | "location" => "Location",
+        "notifications" => "Notifications",
+        _ => "Other",
+    }
+}
+
+fn ladybird_permission_kind_id(kind: &str) -> i32 {
+    match kind {
+        "microphone" => 1,
+        "geolocation" | "location" => 3,
+        "notifications" => 4,
+        _ => 0,
+    }
+}
+
+/// Map Settings reset id (WV2 kind number or Ladybird key) to a LibWeb permission key.
+fn ladybird_permission_key(kind: &str) -> &str {
+    match kind {
+        "1" | "microphone" => "microphone",
+        "3" | "geolocation" | "location" => "geolocation",
+        "4" | "notifications" => "notifications",
+        other => other,
     }
 }
 

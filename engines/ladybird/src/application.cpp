@@ -4,6 +4,10 @@
 
 #include <algorithm>
 
+#if defined(HAVE_LADYBIRD)
+#    include <LibCore/EventLoop.h>
+#endif
+
 namespace kakangkung::ladybird {
 
 Session::Session(std::string profile_dir)
@@ -28,7 +32,10 @@ void Session::destroy_view(View* view)
 
 int Session::pump()
 {
-    // Stub: nothing to pump. With HAVE_LADYBIRD this runs Core::EventLoop::pump().
+#if defined(HAVE_LADYBIRD)
+    // Drain Ladybird's Core::EventLoop so WebContent IPC and paints advance.
+    Core::EventLoop::current().pump(Core::EventLoop::WaitMode::PollForEvents);
+#endif
     return 0;
 }
 

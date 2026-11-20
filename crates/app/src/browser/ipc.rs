@@ -113,6 +113,9 @@ impl Browser {
                 if let Some(gid) = arg.strip_prefix("grouprename:") {
                     return self.on_ipc(&format!("groupname\t{gid}\t{text}"));
                 }
+                if arg == "find" {
+                    self.find_in_page(&text);
+                }
             }
             "groupcollapse" => {
                 if let Some(g) = self.groups.iter_mut().find(|g| g.id as u64 == id) {
@@ -236,6 +239,11 @@ impl Browser {
                     "submenu" => return self.on_menu(&value) && !self.tabs.is_empty(),
                     "suggest" => self.navigate(&value),
                     "pwfill" => self.pick_login(&value),
+                    "printpreview" => match value.as_str() {
+                        "print-go" => self.confirm_print_preview(true),
+                        "print-cancel" | "close" => self.confirm_print_preview(false),
+                        _ => {}
+                    },
                     "menu" if value.is_empty() => {}
                     "menu" => return self.on_menu(&value) && !self.tabs.is_empty(),
                     _ => {}

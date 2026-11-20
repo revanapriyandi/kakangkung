@@ -54,4 +54,21 @@ fi
 
 cmake --build "$OUT" -j"${CMAKE_BUILD_PARALLEL_LEVEL:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)}"
 echo "Built: $OUT/kakangkung-ladybird-host"
+
+# Ladybird helpers + resources are resolved relative to the host binary prefix
+# (…/libexec/<name>, …/share/Lagom for resource://ladybird/WebCompat.json).
+if [[ "$MODE" == "ladybird" ]]; then
+  if [[ -d "${LADYBIRD_BUILD_DIR}/libexec" ]]; then
+    ln -sfn "${LADYBIRD_BUILD_DIR}/libexec" "${ROOT}/libexec"
+    ln -sfn "${LADYBIRD_BUILD_DIR}/bin" "${ROOT}/bin"
+  fi
+  if [[ -d "${LADYBIRD_BUILD_DIR}/share/Lagom" ]]; then
+    mkdir -p "${ROOT}/share"
+    ln -sfn "${LADYBIRD_BUILD_DIR}/share/Lagom" "${ROOT}/share/Lagom"
+  elif [[ -d "${LADYBIRD_SOURCE_DIR}/Base/res" ]]; then
+    mkdir -p "${ROOT}/share"
+    ln -sfn "${LADYBIRD_SOURCE_DIR}/Base/res" "${ROOT}/share/Lagom"
+  fi
+fi
+
 "$OUT/kakangkung-ladybird-host" --version || true
