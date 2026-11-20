@@ -36,6 +36,9 @@ public:
     /// Real LibWeb ops (return false when host is not linked / unavailable).
     bool screenshot_png(std::string const& path);
     bool print_page();
+    /// Page zoom. `relative` null → reset to 1.0; else multiply and clamp 0.25…5.0.
+    /// When `absolute` is set, that value wins (also clamped). Writes resulting factor.
+    bool set_zoom(double const* relative, double const* absolute, double& out_factor);
     bool a11y_json(std::string& out_json);
     bool dom_json(std::string& out_json);
     bool console_json(std::string& out_json, bool clear);
@@ -51,6 +54,7 @@ private:
 #if defined(HAVE_LADYBIRD)
     struct LibWeb;
     std::unique_ptr<LibWeb> m_libweb;
+    double m_zoom { 1.0 };
 #else
     void emit_load(bool done);
     void emit_title(std::string const& title);
@@ -64,6 +68,7 @@ private:
     std::vector<std::string> m_forward;
     int m_x {}, m_y {}, m_w { 800 }, m_h { 600 };
     bool m_visible { true };
+    double m_zoom { 1.0 };
 #    if defined(_WIN32)
     void* m_hwnd { nullptr };
 #    endif

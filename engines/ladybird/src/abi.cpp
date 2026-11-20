@@ -111,6 +111,13 @@ int kk_lb_view_print(kk_lb_view* view)
     return view && reinterpret_cast<View*>(view)->print_page() ? 1 : 0;
 }
 
+int kk_lb_view_zoom(kk_lb_view* view, double const* relative_factor, double const* absolute_factor, double* out_factor)
+{
+    if (!view || !out_factor)
+        return 0;
+    return reinterpret_cast<View*>(view)->set_zoom(relative_factor, absolute_factor, *out_factor) ? 1 : 0;
+}
+
 int kk_lb_view_a11y_json(kk_lb_view* view, char** out_utf8)
 {
     if (!view || !out_utf8)

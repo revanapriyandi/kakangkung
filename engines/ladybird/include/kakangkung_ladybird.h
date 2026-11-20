@@ -76,6 +76,13 @@ KK_LB_API int kk_lb_view_screenshot(kk_lb_view* view, char const* path_utf8);
 KK_LB_API int kk_lb_view_print(kk_lb_view* view);
 
 /**
+ * Page zoom (KB-8). relative_factor null → reset to 1.0; else multiply (clamped 0.25…5).
+ * absolute_factor non-null sets that factor instead. Writes resulting factor to out_factor.
+ * Returns 1 when applied in LibWeb.
+ */
+KK_LB_API int kk_lb_view_zoom(kk_lb_view* view, double const* relative_factor, double const* absolute_factor, double* out_factor);
+
+/**
  * Write a JSON accessibility tree snapshot into out_utf8 (caller frees with kk_lb_string_free).
  * Returns 1 on success.
  */

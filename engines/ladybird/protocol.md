@@ -27,6 +27,8 @@ Environment: `KAKANGKUNG_LADYBIRD_HOST` may point Kakangkung at a non-default ho
 {"cmd":"forward","id":1}
 {"cmd":"screenshot","id":1,"path":"C:\\\\temp\\\\page.png"}
 {"cmd":"print","id":1}
+{"cmd":"zoom","id":1,"factor":1.1}
+{"cmd":"zoom","id":1,"absolute":1.25}
 {"cmd":"a11y","id":1}
 {"cmd":"dom","id":1}
 {"cmd":"console","id":1,"clear":false}
@@ -52,6 +54,7 @@ Environment: `KAKANGKUNG_LADYBIRD_HOST` may point Kakangkung at a non-default ho
 {"event":"load","id":1,"done":true}
 {"event":"screenshot","id":1,"path":"C:\\\\temp\\\\page.png","ok":true}
 {"event":"print","id":1,"ok":true}
+{"event":"zoom","id":1,"ok":true,"factor":1.1}
 {"event":"a11y","id":1,"tree":{"role":"document","name":"…","children":[]}}
 {"event":"dom","id":1,"ok":true,"tree":{"type":"element","name":"HTML","children":[]}}
 {"event":"console","id":1,"ok":true,"messages":[{"kind":"log","level":"log","args":["hi"]}]}
@@ -69,6 +72,7 @@ Environment: `KAKANGKUNG_LADYBIRD_HOST` may point Kakangkung at a non-default ho
 With `HAVE_LADYBIRD=1`:
 - **screenshot** → wait for presented CPU frame, then `take_frame_snapshot` / `displayed_frame` + `PNGWriter`
 - **print** → `run_javascript("window.print()")`
+- **zoom** → page CSS zoom on `document.documentElement` (`factor` multiplies, omit resets to 1.0, `absolute` sets)
 - **a11y** → `inspect_accessibility_tree` / `on_received_accessibility_tree`
 - **dom** → `inspect_dom_tree` / `on_received_dom_tree`
 - **console** → buffered `on_console_message` (optional `clear`)

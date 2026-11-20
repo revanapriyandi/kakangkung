@@ -234,6 +234,12 @@ bool View::print_page()
     return false;
 }
 
+bool View::set_zoom(double const*, double const*, double& out_factor)
+{
+    out_factor = m_zoom;
+    return false;
+}
+
 bool View::a11y_json(std::string&)
 {
     return false;

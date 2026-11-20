@@ -143,7 +143,11 @@ impl Browser {
     /// chosen command.
     pub(crate) fn show_menu(&mut self, right: f64, top: f64) -> Option<String> {
         self.menu_at = (right, top);
-        let zoom = self.active_webview().and_then(|wv| platform::zoom(wv, Some(1.0)).ok()).unwrap_or(1.0);
+        let zoom = self
+            .active_webview()
+            .and_then(|wv| platform::zoom(wv, Some(1.0)).ok())
+            .or_else(|| self.index(self.active).map(|i| self.tabs[i].ladybird_zoom))
+            .unwrap_or(1.0);
         let split = if self.split.is_some_and(|(l, r)| self.active == l || self.active == r) {
             json!({ "id": "unsplit", "label": "Close split view", "key": "" })
         } else {
@@ -275,9 +279,18 @@ impl Browser {
     /// Returns false when the window should close.
     pub(crate) fn on_menu(&mut self, id: &str) -> bool {
         let internal = |page: &str| format!("{}{page}", ui::INTERNAL);
-        let wv_zoom = |b: &Self, f: Option<f64>| {
+        let wv_zoom = |b: &mut Self, f: Option<f64>| {
             if let Some(wv) = b.active_webview() {
                 let _ = platform::zoom(wv, f);
+                return;
+            }
+            let Some(i) = b.index(b.active) else { return };
+            let Some(vid) = b.tabs[i].ladybird_view else { return };
+            let result = b.ladybird.as_ref().map(|host| host.zoom(vid, f));
+            match result {
+                Some(Ok(z)) => b.tabs[i].ladybird_zoom = z,
+                Some(Err(e)) => eprintln!("ladybird zoom failed: {e}"),
+                None => {}
             }
         };
         if id.starts_with("webapp-") { self.web_app_action(id); return true; }

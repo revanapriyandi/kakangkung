@@ -303,6 +303,21 @@ impl Browser {
             let vid = host.create_view(&page_url, p.x, p.y, s.width, s.height)?;
             timing("tab ladybird: created");
             self.tabs[i].ladybird_view = Some(vid);
+            let default_zoom = self.settings.zoom;
+            let zoom_result = if (default_zoom - 1.0).abs() > f64::EPSILON {
+                Some(host.zoom_absolute(vid, default_zoom))
+            } else {
+                None
+            };
+            drop(host);
+            self.tabs[i].ladybird_zoom = match zoom_result {
+                Some(Ok(z)) => z,
+                Some(Err(e)) => {
+                    eprintln!("ladybird default zoom failed: {e}");
+                    default_zoom
+                }
+                None => 1.0,
+            };
             self.tabs[i].view.discarded = false;
             self.tabs[i].view.loading = false;
             // Host already waited for load; tell the UI thread (self-test, omnibox, etc.).

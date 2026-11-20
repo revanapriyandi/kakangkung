@@ -36,6 +36,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -648,6 +649,30 @@ bool View::print_page()
         return false;
     // LibWeb has no separate host print IPC yet; window.print() is the real document print path.
     m_libweb->surface->run_javascript("window.print()"_string);
+    return true;
+}
+
+bool View::set_zoom(double const* relative, double const* absolute, double& out_factor)
+{
+    if (!m_libweb || !m_libweb->surface)
+        return false;
+    if (absolute) {
+        m_zoom = *absolute;
+    } else if (relative) {
+        m_zoom *= *relative;
+    } else {
+        m_zoom = 1.0;
+    }
+    if (m_zoom < 0.25)
+        m_zoom = 0.25;
+    if (m_zoom > 5.0)
+        m_zoom = 5.0;
+    out_factor = m_zoom;
+    // CSS zoom is the page-level scale LibWeb applies from documentElement (same path as print JS).
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "document.documentElement.style.zoom=String(%.6g)", m_zoom);
+    auto script = MUST(String::from_utf8(StringView { buf, std::strlen(buf) }));
+    m_libweb->surface->run_javascript(script);
     return true;
 }
 

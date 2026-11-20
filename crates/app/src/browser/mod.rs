@@ -72,6 +72,8 @@ pub(crate) struct Tab {
     /// Ladybird host history chrome (from `history` events after navigate/back/forward).
     pub(crate) ladybird_can_back: bool,
     pub(crate) ladybird_can_forward: bool,
+    /// Last page zoom factor applied via the Ladybird host (1.0 = 100%).
+    pub(crate) ladybird_zoom: f64,
 }
 
 impl Tab {
@@ -93,6 +95,7 @@ impl Tab {
             before: vec![],
             ladybird_can_back: false,
             ladybird_can_forward: false,
+            ladybird_zoom: 1.0,
         }
     }
 
@@ -564,6 +567,18 @@ impl Browser {
                 let _ = wv.evaluate_script(&focus_script(new.focus_highlight));
             }
         }
+        if new.zoom != old.zoom {
+            let z = new.zoom;
+            for i in 0..self.tabs.len() {
+                let Some(vid) = self.tabs[i].ladybird_view else { continue };
+                let result = self.ladybird.as_ref().map(|host| host.zoom_absolute(vid, z));
+                match result {
+                    Some(Ok(applied)) => self.tabs[i].ladybird_zoom = applied,
+                    Some(Err(e)) => eprintln!("ladybird settings zoom failed: {e}"),
+                    None => {}
+                }
+            }
+        }
         // Features switched off in Settings leave nothing behind.
         if !new.groups {
             self.tabs.iter_mut().for_each(|t| t.view.group = 0);
@@ -686,9 +701,18 @@ impl Browser {
         let n = self.tabs.len();
         match a {
             Action::MenuCommand(command @ ("zoomin" | "zoomout" | "zoomreset")) => {
+                let factor = match command { "zoomin" => Some(1.1), "zoomout" => Some(1.0 / 1.1), _ => None };
                 if let Some(wv) = self.active_webview() {
-                    let factor = match command { "zoomin" => Some(1.1), "zoomout" => Some(1.0 / 1.1), _ => None };
                     let _ = platform::zoom(wv, factor);
+                } else if let Some(i) = self.index(self.active) {
+                    if let Some(vid) = self.tabs[i].ladybird_view {
+                        let result = self.ladybird.as_ref().map(|host| host.zoom(vid, factor));
+                        match result {
+                            Some(Ok(z)) => self.tabs[i].ladybird_zoom = z,
+                            Some(Err(e)) => eprintln!("ladybird zoom failed: {e}"),
+                            None => {}
+                        }
+                    }
                 }
             }
             Action::MenuCommand(command) => return self.on_menu(command),

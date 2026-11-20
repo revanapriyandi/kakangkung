@@ -77,6 +77,17 @@ bool field_int(std::string const& line, char const* key, int& out)
     return true;
 }
 
+bool field_double(std::string const& line, char const* key, double& out)
+{
+    auto needle = std::string("\"") + key + "\":";
+    auto pos = line.find(needle);
+    if (pos == std::string::npos)
+        return false;
+    pos += needle.size();
+    out = std::atof(line.c_str() + pos);
+    return true;
+}
+
 bool field_str(std::string const& line, char const* key, std::string& out)
 {
     auto needle = std::string("\"") + key + "\":\"";
@@ -333,6 +344,28 @@ int main(int argc, char** argv)
                 emit(std::string("{\"event\":\"print\",\"id\":") + std::to_string(id)
                     + ",\"ok\":" + (ok ? "true" : "false")
                     + (ok ? "" : ",\"reason\":\"print unavailable\"") + "}");
+            }
+            continue;
+        }
+        if (has_cmd(line, "zoom")) {
+            int id = 0;
+            if (field_int(line, "id", id)) {
+                double relative = 0.0;
+                double absolute = 0.0;
+                bool has_relative = field_double(line, "factor", relative);
+                bool has_absolute = field_double(line, "absolute", absolute);
+                double out = 1.0;
+                bool ok = false;
+                if (auto it = host.views.find(id); it != host.views.end()) {
+                    ok = kk_lb_view_zoom(it->second.view, has_relative ? &relative : nullptr,
+                            has_absolute ? &absolute : nullptr, &out)
+                        != 0;
+                }
+                char factor_buf[64];
+                std::snprintf(factor_buf, sizeof(factor_buf), "%.6g", out);
+                emit(std::string("{\"event\":\"zoom\",\"id\":") + std::to_string(id)
+                    + ",\"ok\":" + (ok ? "true" : "false") + ",\"factor\":" + factor_buf
+                    + (ok ? "" : ",\"reason\":\"zoom unavailable\"") + "}");
             }
             continue;
         }

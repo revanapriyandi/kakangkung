@@ -314,6 +314,55 @@ impl Host {
         Err("Ladybird host: no print event".into())
     }
 
+    /// Page zoom. `None` resets to 100%; `Some(f)` multiplies the current factor (clamped 0.25…5).
+    /// Matches `platform::zoom` semantics for menu Ctrl+/- / reset.
+    pub fn zoom(&self, id: i32, factor: Option<f64>) -> Result<f64, String> {
+        let cmd = match factor {
+            Some(f) => format!(r#"{{"cmd":"zoom","id":{id},"factor":{f}}}"#),
+            None => format!(r#"{{"cmd":"zoom","id":{id}}}"#),
+        };
+        self.send_line(&cmd)?;
+        let deadline = Instant::now() + HOST_WAIT;
+        while Instant::now() < deadline {
+            let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
+            let line = self.read_line_timeout(remain)?;
+            if Self::apply_side_effect(&line) {
+                continue;
+            }
+            if line.contains("\"event\":\"zoom\"")
+                && (line.contains(&format!("\"id\":{id}")) || line.contains(&format!("\"id\": {id}")))
+            {
+                if !line.contains("\"ok\":true") {
+                    return Err(format!("zoom failed: {line}"));
+                }
+                return Ok(json_f64_field(&line, "factor").unwrap_or(1.0));
+            }
+        }
+        Err("Ladybird host: no zoom event".into())
+    }
+
+    /// Set absolute page zoom (Settings default / tab create).
+    pub fn zoom_absolute(&self, id: i32, absolute: f64) -> Result<f64, String> {
+        self.send_line(&format!(r#"{{"cmd":"zoom","id":{id},"absolute":{absolute}}}"#))?;
+        let deadline = Instant::now() + HOST_WAIT;
+        while Instant::now() < deadline {
+            let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
+            let line = self.read_line_timeout(remain)?;
+            if Self::apply_side_effect(&line) {
+                continue;
+            }
+            if line.contains("\"event\":\"zoom\"")
+                && (line.contains(&format!("\"id\":{id}")) || line.contains(&format!("\"id\": {id}")))
+            {
+                if !line.contains("\"ok\":true") {
+                    return Err(format!("zoom failed: {line}"));
+                }
+                return Ok(json_f64_field(&line, "factor").unwrap_or(absolute));
+            }
+        }
+        Err("Ladybird host: no zoom event".into())
+    }
+
     pub fn a11y_tree(&self, id: i32) -> Result<String, String> {
         self.send_line(&format!(r#"{{"cmd":"a11y","id":{id}}}"#))?;
         let deadline = Instant::now() + HOST_WAIT;
@@ -415,6 +464,16 @@ fn json_i64_field(line: &str, key: &str) -> Option<i64> {
     let digits: String = chars.take_while(|c| c.is_ascii_digit()).collect();
     let n: i64 = digits.parse().ok()?;
     Some(if neg { -n } else { n })
+}
+
+fn json_f64_field(line: &str, key: &str) -> Option<f64> {
+    let needle = format!("\"{key}\":");
+    let rest = line.split(&needle).nth(1)?;
+    let num: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-' || *c == 'e' || *c == 'E' || *c == '+')
+        .collect();
+    num.parse().ok()
 }
 
 fn parse_download_event(line: &str) -> Option<DownloadInfo> {
