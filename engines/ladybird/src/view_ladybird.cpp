@@ -10,15 +10,23 @@
 #include "application.h"
 
 #include <AK/ByteString.h>
+#include <AK/JsonObject.h>
+#include <AK/String.h>
 #include <LibCore/EventLoop.h>
+#include <LibCore/File.h>
 #include <LibGfx/Bitmap.h>
+#include <LibGfx/ImageFormats/PNGWriter.h>
+#include <LibGfx/ShareableBitmap.h>
 #include <LibGfx/SystemTheme.h>
 #include <LibURL/URL.h>
+#include <LibWebCommon/WebView/Debugger.h>
 #include <LibWebView/Application.h>
 #include <LibWebView/HeadlessWebView.h>
 #include <LibWebView/PageBackingStores.h>
 #include <LibWebView/URL.h>
 
+#include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <utility>
 
@@ -363,6 +371,137 @@ void View::go_forward()
 {
     if (m_libweb && m_libweb->surface)
         m_libweb->surface->traverse_the_history_by_delta(1);
+}
+
+namespace {
+
+bool pump_until(bool const& done, std::chrono::milliseconds budget)
+{
+    auto const deadline = std::chrono::steady_clock::now() + budget;
+    while (!done) {
+        Core::EventLoop::current().pump(Core::EventLoop::WaitMode::PollForEvents);
+        if (std::chrono::steady_clock::now() >= deadline)
+            return false;
+    }
+    return true;
+}
+
+std::string debugger_value_to_string(WebView::DebuggerValue const& value)
+{
+    using WebView::DebuggerValueType;
+    switch (value.type) {
+    case DebuggerValueType::Undefined:
+        return "undefined";
+    case DebuggerValueType::Null:
+        return "null";
+    case DebuggerValueType::Boolean:
+        return value.boolean_value ? "true" : "false";
+    case DebuggerValueType::Number: {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%g", value.number_value);
+        return buf;
+    }
+    case DebuggerValueType::String:
+    case DebuggerValueType::BigInt:
+        return std::string { value.text.to_byte_string().characters() };
+    case DebuggerValueType::Object: {
+        auto klass = value.object_class.to_byte_string();
+        return std::string("[object ") + klass.characters() + "]";
+    }
+    case DebuggerValueType::Uninitialized:
+        return "uninitialized";
+    }
+    return {};
+}
+
+} // namespace
+
+bool View::screenshot_png(std::string const& path)
+{
+    if (!m_libweb || !m_libweb->surface || path.empty())
+        return false;
+
+    bool done = false;
+    bool ok = false;
+    m_libweb->surface->take_frame_snapshot([&](Optional<Gfx::ShareableBitmap> snapshot) {
+        auto finish = [&] { done = true; };
+        if (!snapshot.has_value() || !snapshot->bitmap()) {
+            finish();
+            return;
+        }
+        auto encoded = Gfx::PNGWriter::encode(*snapshot->bitmap());
+        if (encoded.is_error()) {
+            finish();
+            return;
+        }
+        auto file_or_error = Core::File::open(StringView { path.data(), path.size() }, Core::File::OpenMode::Write);
+        if (file_or_error.is_error()) {
+            finish();
+            return;
+        }
+        if (file_or_error.value()->write_until_depleted(encoded.value()).is_error()) {
+            finish();
+            return;
+        }
+        ok = true;
+        finish();
+    });
+
+    if (!pump_until(done, std::chrono::seconds(10)))
+        return false;
+    return ok;
+}
+
+bool View::print_page()
+{
+    if (!m_libweb || !m_libweb->surface)
+        return false;
+    // LibWeb has no separate host print IPC yet; window.print() is the real document print path.
+    m_libweb->surface->run_javascript("window.print()"_string);
+    return true;
+}
+
+bool View::a11y_json(std::string& out_json)
+{
+    if (!m_libweb || !m_libweb->surface)
+        return false;
+
+    bool done = false;
+    bool ok = false;
+    m_libweb->surface->on_received_accessibility_tree = [&](JsonObject tree) {
+        out_json = std::string { tree.serialized().to_byte_string().characters() };
+        ok = true;
+        done = true;
+        m_libweb->surface->on_received_accessibility_tree = nullptr;
+    };
+    m_libweb->surface->inspect_accessibility_tree();
+    if (!pump_until(done, std::chrono::seconds(10))) {
+        m_libweb->surface->on_received_accessibility_tree = nullptr;
+        return false;
+    }
+    return ok;
+}
+
+bool View::eval_js(std::string const& js, std::string& out_result)
+{
+    if (!m_libweb || !m_libweb->surface || js.empty())
+        return false;
+
+    bool done = false;
+    bool ok = false;
+    m_libweb->surface->on_received_js_console_result = [&](WebView::DebuggerValue result) {
+        out_result = debugger_value_to_string(result);
+        ok = true;
+        done = true;
+        m_libweb->surface->on_received_js_console_result = nullptr;
+    };
+    auto script = MUST(String::from_utf8(StringView { js.data(), js.size() }));
+    m_libweb->surface->js_console_input(script);
+    if (!pump_until(done, std::chrono::seconds(10))) {
+        m_libweb->surface->on_received_js_console_result = nullptr;
+        return false;
+    }
+    return ok;
 }
 
 } // namespace kakangkung::ladybird

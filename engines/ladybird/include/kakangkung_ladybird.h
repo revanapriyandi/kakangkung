@@ -59,6 +59,33 @@ KK_LB_API int kk_lb_view_can_go_forward(kk_lb_view* view);
 KK_LB_API void kk_lb_view_go_back(kk_lb_view* view);
 KK_LB_API void kk_lb_view_go_forward(kk_lb_view* view);
 
+/**
+ * Capture the current LibWeb frame to a PNG path. Returns 1 on success.
+ * With HAVE_LADYBIRD this uses take_frame_snapshot; without it, returns 0.
+ */
+KK_LB_API int kk_lb_view_screenshot(kk_lb_view* view, char const* path_utf8);
+
+/**
+ * Request print of the current document (window.print / LibWeb print path).
+ * Returns 1 when the request was handed to LibWeb.
+ */
+KK_LB_API int kk_lb_view_print(kk_lb_view* view);
+
+/**
+ * Write a JSON accessibility tree snapshot into out_utf8 (caller frees with kk_lb_string_free).
+ * Returns 1 on success.
+ */
+KK_LB_API int kk_lb_view_a11y_json(kk_lb_view* view, char** out_utf8);
+
+/**
+ * Run JavaScript in the page. With HAVE_LADYBIRD uses run_javascript.
+ * out_utf8 receives a JSON string result when available (caller frees).
+ * Returns 1 when the script was submitted to LibWeb.
+ */
+KK_LB_API int kk_lb_view_eval(kk_lb_view* view, char const* js_utf8, char** out_utf8);
+
+KK_LB_API void kk_lb_string_free(char* s);
+
 /** Pump Ladybird / stub events; return non-zero if the session should quit. */
 KK_LB_API int kk_lb_session_pump(kk_lb_session* session);
 

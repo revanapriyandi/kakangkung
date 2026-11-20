@@ -9,12 +9,24 @@ export DEBIAN_FRONTEND=noninteractive
 sudo apt-get update -y --allow-releaseinfo-change
 sudo apt-get install -y --no-install-recommends \
   build-essential cmake ninja-build ccache nasm pkg-config curl git ca-certificates \
-  python3 python-is-python3 clang clang++ lld autoconf automake libtool \
+  python3 python-is-python3 \
+  autoconf autoconf-archive automake libtool \
   zip unzip tar \
   libgl1-mesa-dev libpulse-dev libssl-dev libfontconfig1-dev libx11-dev libx11-xcb-dev \
+  libdrm-dev libdrm2 \
   qt6-base-dev qt6-tools-dev qt6-multimedia-dev \
   || sudo apt-get install -y --no-install-recommends \
-    build-essential cmake ninja-build nasm pkg-config curl git ca-certificates libx11-dev
+    build-essential cmake ninja-build nasm pkg-config curl git ca-certificates \
+    autoconf autoconf-archive automake libtool libx11-dev
+# Ladybird/vcpkg needs clang ≥19 or gcc ≥14 (Ubuntu 24.04 image ships clang 18).
+if ! command -v clang-19 >/dev/null 2>&1; then
+  wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- 19 || true
+  sudo apt-get install -y --no-install-recommends clang-19 clang++-19 lld-19 || true
+fi
+sudo apt-get install -y --no-install-recommends g++-14 gcc-14 || true
+export CC="${CC:-clang-19}" CXX="${CXX:-clang++-19}"
+command -v "$CC" >/dev/null || { export CC=gcc-14 CXX=g++-14; }
+echo "Compiler: CC=$CC CXX=$CXX"
 
 if ! command -v rustc >/dev/null; then
   curl -fsSL https://sh.rustup.rs | sh -s -- -y

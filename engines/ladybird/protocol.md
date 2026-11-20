@@ -44,16 +44,20 @@ Environment: `KAKANGKUNG_LADYBIRD_HOST` may point Kakangkung at a non-default ho
 {"event":"load","id":1,"done":false}
 {"event":"load","id":1,"done":true}
 {"event":"screenshot","id":1,"path":"C:\\\\temp\\\\page.png","ok":true}
-{"event":"print","id":1,"ok":false,"reason":"stub"}
-{"event":"a11y","id":1,"tree":[{"role":"document","name":"…","children":[]}]}
-{"event":"eval","id":1,"ok":false,"result":"…"}
+{"event":"print","id":1,"ok":true}
+{"event":"a11y","id":1,"tree":{"role":"document","name":"…","children":[]}}
+{"event":"eval","id":1,"ok":true,"result":"Ladybird"}
 ```
 
 `engine` is `"ladybird"` when LibWeb is linked, `"stub"` for the offline host.
 
-The Rust stub host (`crates/ladybird-host`) JSON-escapes string fields in events. Clients that
-`wait` on `load` with `done:true` can rely on **back** / **forward** / **reload** always emitting
-that event (even when history is empty — a no-op ack) so waiters never hang.
+With `HAVE_LADYBIRD=1`:
+- **screenshot** → `ViewImplementation::take_frame_snapshot` + `PNGWriter`
+- **print** → `run_javascript("window.print()")`
+- **a11y** → `inspect_accessibility_tree` / `on_received_accessibility_tree`
+- **eval** → `js_console_input` / `on_received_js_console_result`
 
-C++ host string fields are still lightly escaped until LibWeb production wiring; prefer the Rust
-stub for agent/MCP work until then.
+Without LibWeb linked, those commands return `ok:false` (no fake trees / stub screenshots).
+
+Clients that `wait` on `load` with `done:true` can rely on **back** / **forward** / **reload**
+always emitting that event (even when history is empty — a no-op ack) so waiters never hang.

@@ -224,4 +224,24 @@ void View::go_forward()
     emit_load(true);
 }
 
+bool View::screenshot_png(std::string const&)
+{
+    return false;
+}
+
+bool View::print_page()
+{
+    return false;
+}
+
+bool View::a11y_json(std::string&)
+{
+    return false;
+}
+
+bool View::eval_js(std::string const&, std::string&)
+{
+    return false;
+}
+
 } // namespace kakangkung::ladybird
