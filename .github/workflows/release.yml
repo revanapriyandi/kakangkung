@@ -119,9 +119,67 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # B5: Linux Ladybird host package (not the Win32 app chrome — that stays Windows-only).
+  # Full LibWeb/Lagom attach via Boat package-runtime.sh → attach as release asset separately
+  # or set LADYBIRD_RUNTIME_URL once a Linux runtime tarball is published.
+  linux-host:
+    name: Linux ladybird-host (x64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Version
+        run: |
+          cargo=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "${{ github.ref_type }}" = tag ]; then
+            v="${GITHUB_REF_NAME#v}"
+            if [ "$v" != "$cargo" ]; then
+              echo "Tag v$v does not match Cargo.toml ($cargo)" >&2
+              exit 1
+            fi
+          elif [ -n "${{ inputs.version }}" ]; then
+            v="${{ inputs.version }}"
+          else
+            v="$cargo"
+          fi
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+          echo "Building kakangkung-ladybird-host $v (Linux x64)"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-ladybird-host
+
+      - name: Build ladybird-host
+        run: cargo build --release --locked -p ladybird-host
+
+      - name: Package
+        run: |
+          mkdir -p dist stage
+          cp target/release/kakangkung-ladybird-host stage/
+          cp LICENSE README.md THIRD_PARTY_NOTICES.md stage/ 2>/dev/null || true
+          printf '%s\n' \
+            'Kakangkung Ladybird host (Linux x64)' \
+            "Version: $VERSION" \
+            '' \
+            'This is the page-engine host binary, not the full Win32 Kakangkung UI.' \
+            'Pair with a Lagom runtime from Boat (engines/ladybird/package-runtime.sh)' \
+            'or set KAKANGKUNG_LADYBIRD_HOST to this binary.' \
+            '' \
+            'macOS: full app + host packaging is not in this workflow yet (native chrome' \
+            'is Win32/Direct2D; macOS port tracked as B5 blocker).' \
+            > stage/README-LINUX-HOST.txt
+          tar -C stage -czf "dist/kakangkung-ladybird-host-${VERSION}-linux-x64.tgz" .
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: kakangkung-linux-host
+          path: dist/*
+          if-no-files-found: error
+
   publish:
     name: Publish
-    needs: build
+    needs: [build, linux-host]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v8
