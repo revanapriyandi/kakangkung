@@ -9,6 +9,9 @@
 #include "view.h"
 #include "application.h"
 #include "extensions.h"
+#if !defined(_WIN32)
+#    include "x11_surface.h"
+#endif
 
 #include <AK/ByteString.h>
 #include <AK/JsonObject.h>
@@ -37,9 +40,6 @@
 #        define NOMINMAX
 #    endif
 #    include <windows.h>
-#else
-#    include <X11/Xlib.h>
-#    include <X11/Xutil.h>
 #endif
 
 namespace kakangkung::ladybird {
@@ -74,8 +74,7 @@ public:
         if (m_hwnd)
             MoveWindow(m_hwnd, m_x, m_y, m_w, m_h, TRUE);
 #else
-        if (m_display && m_window)
-            XMoveResizeWindow(m_display, m_window, m_x, m_y, static_cast<unsigned>(m_w), static_cast<unsigned>(m_h));
+        kk_x11_surface_set_bounds(m_x11, m_x, m_y, m_w, m_h);
 #endif
         reset_viewport_size({ m_w, m_h });
     }
@@ -86,13 +85,7 @@ public:
         if (m_hwnd)
             ShowWindow(m_hwnd, on ? SW_SHOW : SW_HIDE);
 #else
-        if (m_display && m_window) {
-            if (on)
-                XMapWindow(m_display, m_window);
-            else
-                XUnmapWindow(m_display, m_window);
-            XFlush(m_display);
-        }
+        kk_x11_surface_set_visible(m_x11, on ? 1 : 0);
 #endif
         set_system_visibility_state(on ? Web::HTML::VisibilityState::Visible : Web::HTML::VisibilityState::Hidden);
     }
@@ -105,14 +98,8 @@ public:
             m_hwnd = nullptr;
         }
 #else
-        if (m_display && m_window) {
-            XDestroyWindow(m_display, m_window);
-            m_window = 0;
-        }
-        if (m_display) {
-            XCloseDisplay(m_display);
-            m_display = nullptr;
-        }
+        kk_x11_surface_destroy(m_x11);
+        m_x11 = nullptr;
 #endif
     }
 
@@ -198,17 +185,7 @@ private:
         m_hwnd = CreateWindowExW(0, L"KakangkungLibWebSurface", L"LibWeb", style, m_x, m_y, m_w, m_h,
             parent, nullptr, GetModuleHandleW(nullptr), nullptr);
 #else
-        m_display = XOpenDisplay(nullptr);
-        if (!m_display)
-            return;
-        int screen = DefaultScreen(m_display);
-        Window root = RootWindow(m_display, screen);
-        m_window = XCreateSimpleWindow(m_display, root, m_x, m_y, static_cast<unsigned>(m_w), static_cast<unsigned>(m_h), 0,
-            BlackPixel(m_display, screen), WhitePixel(m_display, screen));
-        XStoreName(m_display, m_window, "Kakangkung · LibWeb");
-        XSelectInput(m_display, m_window, ExposureMask | StructureNotifyMask);
-        XMapWindow(m_display, m_window);
-        XFlush(m_display);
+        m_x11 = kk_x11_surface_create(m_x, m_y, m_w, m_h);
 #endif
     }
 
@@ -261,26 +238,7 @@ private:
         StretchDIBits(hdc, 0, 0, m_w, m_h, 0, 0, bw, bh, pixels.data(), &info, DIB_RGB_COLORS, SRCCOPY);
         ReleaseDC(m_hwnd, hdc);
 #else
-        if (!m_display || !m_window)
-            return;
-        XImage image {};
-        image.width = bw;
-        image.height = bh;
-        image.format = ZPixmap;
-        image.data = reinterpret_cast<char*>(pixels.data());
-        image.byte_order = LSBFirst;
-        image.bitmap_unit = 32;
-        image.bitmap_bit_order = LSBFirst;
-        image.bitmap_pad = 32;
-        image.depth = 24;
-        image.bytes_per_line = bw * 4;
-        image.bits_per_pixel = 32;
-        image.red_mask = 0xff0000;
-        image.green_mask = 0x00ff00;
-        image.blue_mask = 0x0000ff;
-        GC gc = DefaultGC(m_display, DefaultScreen(m_display));
-        XPutImage(m_display, m_window, gc, &image, 0, 0, 0, 0, static_cast<unsigned>(bw), static_cast<unsigned>(bh));
-        XFlush(m_display);
+        kk_x11_surface_blit(m_x11, bw, bh, pixels.data());
 #endif
     }
 
@@ -292,8 +250,7 @@ private:
 #if defined(_WIN32)
     HWND m_hwnd { nullptr };
 #else
-    Display* m_display { nullptr };
-    Window m_window { 0 };
+    KkX11Surface* m_x11 { nullptr };
 #endif
 };
 
