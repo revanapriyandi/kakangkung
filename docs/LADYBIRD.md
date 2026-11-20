@@ -91,7 +91,8 @@ Or set `KAKANGKUNG_LADYBIRD_HOST` to the host path.
 | Clear cookies / site data / cache | KB-11 — `clear_data` → LibWeb `clear_browsing_data` |
 | Find / translate / reading mode | KB-12 — LibWeb find + `eval` (print preview deferred) |
 | Task manager process tree | KB-13 — Ladybird host PID + children (session restore already real) |
-| Chrome-parity pillars | See store `docs/chrome-parity-roadmap.md` (KB-2…KB-13) |
+| PDF in tab after download | KB-18 — open finished `.pdf` via `file://` in Ladybird (casting deferred; sync already real) |
+| Chrome-parity pillars | See store `docs/chrome-parity-roadmap.md` (KB-2…KB-20) |
 
 ## Related
 

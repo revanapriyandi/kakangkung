@@ -151,3 +151,9 @@ Fill uses `eval` of `window.__kkPwFill(user, pass)` gated on `location.origin`.
 One `kakangkung-ladybird-host` process owns many views. Task Manager seeds that host PID
 (and ToolHelp children) as kind `Ladybird`. Crash recovery / session restore and Memory
 Saver discard already live in the Rust chrome; process-per-site isolation is not productized.
+
+## PDF / sync / casting (KB-18)
+
+Finished `.pdf` downloads open as `file://` tabs in the Ladybird host (LibWeb navigates /
+renders when linked). Folder/Drive sync for bookmarks/history/tabs/settings is engine-
+agnostic and already ships. Chromecast-style casting is not in tree (deferred, not stubbed).
