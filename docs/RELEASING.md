@@ -1,8 +1,11 @@
 # Releasing
 
 Releases are built and published by GitHub Actions
-(`.github/workflows/release.yml`) for every platform Kakangkung supports: Windows x64 and Windows
-ARM64.
+(`.github/workflows/release.yml`) for platforms Kakangkung supports today:
+
+- **Windows x64 / ARM64** — full app (installer + portable zip)
+- **Linux x64** — `kakangkung-ladybird-host` tarball (page engine only; Win32 UI is Windows-only)
+- **macOS** — **not yet** (no native chrome port; tracked as B5 blocker — no fake `.app`)
 
 ## Steps
 
@@ -36,7 +39,11 @@ as the run's artifacts (`kakangkung-release-dry-run`).
 | `Kakangkung-Setup-<version>-arm64.exe` | Installer, Windows ARM64 |
 | `Kakangkung-<version>-x64.zip` | Portable, Windows x64 |
 | `Kakangkung-<version>-arm64.zip` | Portable, Windows ARM64 |
+| `kakangkung-ladybird-host-<version>-linux-x64.tgz` | Linux Ladybird host (B5; not the full UI) |
 | `SHA256SUMS.txt` | Checksums of all of the above (the updater verifies against it) |
+
+Attach a Boat-built Lagom runtime (`engines/ladybird/package-runtime.sh`) as an extra
+release asset when publishing a full Linux LibWeb stack. macOS remains unpublished.
 
 Both installers and portable ZIPs include `kakangkung-ladybird-host.exe` next to
 `kakangkung.exe` (**KB-38**), `THIRD_PARTY_NOTICES.md`, and the full MPL-2.0 and
