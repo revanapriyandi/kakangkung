@@ -54,4 +54,11 @@ fi
 
 cmake --build "$OUT" -j"${CMAKE_BUILD_PARALLEL_LEVEL:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)}"
 echo "Built: $OUT/kakangkung-ladybird-host"
+
+# Ladybird helpers are resolved relative to the host binary (…/libexec/<name>).
+if [[ "$MODE" == "ladybird" && -d "${LADYBIRD_BUILD_DIR}/libexec" ]]; then
+  ln -sfn "${LADYBIRD_BUILD_DIR}/libexec" "${ROOT}/libexec"
+  ln -sfn "${LADYBIRD_BUILD_DIR}/bin" "${ROOT}/bin"
+fi
+
 "$OUT/kakangkung-ladybird-host" --version || true

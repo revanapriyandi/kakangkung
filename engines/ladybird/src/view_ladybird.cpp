@@ -426,35 +426,32 @@ bool View::screenshot_png(std::string const& path)
     if (!m_libweb || !m_libweb->surface || path.empty())
         return false;
 
+    auto write_bitmap = [&](Gfx::Bitmap const& bitmap) -> bool {
+        auto encoded = Gfx::PNGWriter::encode(bitmap);
+        if (encoded.is_error())
+            return false;
+        auto file_or_error = Core::File::open(StringView { path.data(), path.size() }, Core::File::OpenMode::Write);
+        if (file_or_error.is_error())
+            return false;
+        return !file_or_error.value()->write_until_depleted(encoded.value()).is_error();
+    };
+
+    // Prefer a compositor snapshot; fall back to the CPU-presented frame we already blit.
     bool done = false;
     bool ok = false;
     m_libweb->surface->take_frame_snapshot([&](Optional<Gfx::ShareableBitmap> snapshot) {
-        auto finish = [&] { done = true; };
-        if (!snapshot.has_value() || !snapshot->bitmap()) {
-            finish();
-            return;
-        }
-        auto encoded = Gfx::PNGWriter::encode(*snapshot->bitmap());
-        if (encoded.is_error()) {
-            finish();
-            return;
-        }
-        auto file_or_error = Core::File::open(StringView { path.data(), path.size() }, Core::File::OpenMode::Write);
-        if (file_or_error.is_error()) {
-            finish();
-            return;
-        }
-        if (file_or_error.value()->write_until_depleted(encoded.value()).is_error()) {
-            finish();
-            return;
-        }
-        ok = true;
-        finish();
+        if (snapshot.has_value() && snapshot->bitmap())
+            ok = write_bitmap(*snapshot->bitmap());
+        done = true;
     });
+    if (pump_until(done, std::chrono::seconds(5)) && ok)
+        return true;
 
-    if (!pump_until(done, std::chrono::seconds(10)))
-        return false;
-    return ok;
+    if (auto frame = m_libweb->surface->backing_stores().displayed_frame(); frame.has_value()) {
+        if (auto bitmap = frame->shared_image_buffer ? frame->shared_image_buffer->bitmap_if_present() : nullptr)
+            return write_bitmap(*bitmap);
+    }
+    return false;
 }
 
 bool View::print_page()
