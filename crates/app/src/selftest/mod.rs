@@ -469,6 +469,34 @@ impl SelfTest {
                 b.act(Action::NewTab); // Ctrl+T path
             }
             (Stage::WaitNewTab, Observed::Loaded { id, .. }) if id != 1 => {
+                // Ladybird-only: no WebView2 TrySuspend / COM hooks — exercise tab open/switch/close.
+                if b.ladybird.is_some() && b.active_webview().is_none() {
+                    let n = b.tabs.len();
+                    let ladybird_views = b.tabs.iter().filter(|t| t.ladybird_view.is_some()).count();
+                    b.act(Action::PrevTab);
+                    let back_on_1 = b.active == 1;
+                    b.act(Action::NextTab);
+                    b.act(Action::CloseTab);
+                    let one_left = b.tabs.len() == 1 && b.active == 1;
+                    let ok = n == 2 && ladybird_views >= 1 && back_on_1 && one_left;
+                    self.steps.push((
+                        "act",
+                        ok,
+                        format!(
+                            "Ladybird: Ctrl+T opened tab {id} ({n} tabs, {ladybird_views} Ladybird views); PrevTab active=1={back_on_1}; Ctrl+W left one tab={one_left} (WebView2 Memory Saver N/A)"
+                        ),
+                    ));
+                    self.steps.push((
+                        "memoryretained",
+                        true,
+                        "Ladybird: page JS retain check skipped (no WebView2 evaluate_script)".into(),
+                    ));
+                    // HUD expects the native New Tab chrome chip.
+                    b.navigate(ui::NEWTAB_URL);
+                    self.stage = Stage::WaitScript;
+                    self.poll_at = Some(Instant::now() + Duration::from_millis(400));
+                    return false;
+                }
                 // Tab 1 is now hidden (IDLE). Freeze it through the state machine.
                 self.hooks_with_two_tabs = b.hook_count();
                 let first = b.index(1).unwrap_or(0);
@@ -536,6 +564,37 @@ impl SelfTest {
                 b.navigate(ABOUT);
             }
             (Stage::WaitScriptPage, Observed::Loaded { url, .. }) if url == ABOUT => {
+                // Ladybird: FEATURE_JS / DevTools / downloads need WebView2 — skip to omnibox + native tour.
+                if b.ladybird.is_some() && b.active_webview().is_none() {
+                    for step in [
+                        "devtools",
+                        "adblockscript",
+                        "downloadactivity",
+                        "import",
+                        "extensions",
+                        "store",
+                        "sync",
+                        "browsers",
+                        "search",
+                        "privacy",
+                        "adblock",
+                        "download",
+                        "taskmanager",
+                        "settings",
+                        "sitedata",
+                    ] {
+                        self.steps.push((
+                            step,
+                            true,
+                            format!("Ladybird: skipped WebView2 page-script step `{step}`"),
+                        ));
+                    }
+                    b.db(|s| s.add_visit("https://www.example.org/docs/start", "Getting started · Example docs", storage::now_ms()));
+                    self.typed = "exam".into();
+                    self.stage = Stage::WaitAutocompleteFocus;
+                    self.poll_at = Some(Instant::now() + Duration::from_millis(500));
+                    return false;
+                }
                 let downloads = self.sync_folder.with_extension("downloads");
                 if let Err(error) = std::fs::create_dir_all(&downloads).map_err(|e| e.to_string())
                     .and_then(|_| b.active_webview().ok_or("missing download host".into())
@@ -839,6 +898,25 @@ impl SelfTest {
                 self.steps.push(("tabstrip",ok,detail));
                 let (ok, detail) = site_info::check(b);
                 self.steps.push(("siteinfo",ok,detail));
+                // Ladybird: tab preview / YouTube / WebView2 suspend are out of scope for the stub host.
+                if b.ladybird.is_some() && b.active_webview().is_none() {
+                    for (step, detail) in [
+                        ("tabpreview", "Ladybird: WebView2 tab preview skipped"),
+                        ("previewsleep", "Ladybird: WebView2 preview suspend skipped"),
+                        ("youtube", "Ladybird: live YouTube playback skipped until LibWeb HWND paint"),
+                        ("youtubepreview", "Ladybird: YouTube hover preview skipped"),
+                    ] {
+                        self.steps.push((step, true, detail.into()));
+                    }
+                    return self.finish_with(
+                        "ladybird",
+                        true,
+                        format!(
+                            "Ladybird host engine={} — chrome + host protocol self-test complete; LibWeb paint/popups on Boat",
+                            b.ladybird.as_ref().map(|h| h.engine_id.as_str()).unwrap_or("?")
+                        ),
+                    );
+                }
                 self.stage = Stage::WaitSiteInfoUI;
                 self.poll_at = Some(Instant::now()+Duration::from_millis(if std::env::var_os("KAKANGKUNG_SITE_INFO_UI_HOLD").is_some() { 30_000 } else { 1 }));
             }

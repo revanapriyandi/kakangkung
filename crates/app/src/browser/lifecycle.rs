@@ -304,6 +304,9 @@ impl Browser {
             timing("tab ladybird: created");
             self.tabs[i].ladybird_view = Some(vid);
             self.tabs[i].view.discarded = false;
+            self.tabs[i].view.loading = false;
+            // Host already waited for load; tell the UI thread (self-test, omnibox, etc.).
+            let _ = self.proxy.send_event(Msg::Load { id, url: page_url, done: true });
             return Ok(());
         }
         if cmd == Command::DropWebview {
@@ -437,6 +440,11 @@ impl Browser {
         }
         let mut tab = self.tabs.remove(i);
         self.prune_groups();
+        if let Some(vid) = tab.ladybird_view.take() {
+            if let Some(host) = self.ladybird.as_ref() {
+                let _ = host.destroy_view(vid);
+            }
+        }
         if let Some(wv) = tab.webview.take() {
             platform::unhook(&wv, &mut tab.hooks);
         }

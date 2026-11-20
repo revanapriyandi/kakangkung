@@ -635,9 +635,13 @@ impl Browser {
                 return;
             }
             self.tabs[i].view.url = url.clone();
+            let tab_id = self.tabs[i].view.id;
             if let (Some(host), Some(vid)) = (self.ladybird.as_ref(), self.tabs[i].ladybird_view) {
-                if let Err(e) = host.navigate(vid, &url) {
-                    eprintln!("ladybird navigate({url}) failed: {e}");
+                match host.navigate(vid, &url) {
+                    Ok(()) => {
+                        let _ = self.proxy.send_event(Msg::Load { id: tab_id, url: url.clone(), done: true });
+                    }
+                    Err(e) => eprintln!("ladybird navigate({url}) failed: {e}"),
                 }
             } else if let Some(wv) = &self.tabs[i].webview {
                 if let Err(e) = wv.load_url(&url) {
@@ -696,8 +700,16 @@ impl Browser {
                 }
             }
             Action::Reload => {
-                if let Some(wv) = self.active_webview() {
-                    let _ = wv.reload();
+                if let Some(i) = self.index(self.active) {
+                    if let (Some(host), Some(vid)) = (self.ladybird.as_ref(), self.tabs[i].ladybird_view) {
+                        let url = self.tabs[i].view.url.clone();
+                        let id = self.tabs[i].view.id;
+                        if host.navigate(vid, &url).is_ok() {
+                            let _ = self.proxy.send_event(Msg::Load { id, url, done: true });
+                        }
+                    } else if let Some(wv) = self.active_webview() {
+                        let _ = wv.reload();
+                    }
                 }
             }
             Action::Back => {

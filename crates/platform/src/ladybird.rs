@@ -77,28 +77,52 @@ impl Host {
         Ok(line)
     }
 
+    /// Read host events until `load` with `done:true` for `want_id` (or any id when `want_id` is None).
+    fn wait_load_done(&self, want_id: Option<i32>) -> Result<(), String> {
+        for _ in 0..32 {
+            let line = self.read_line()?;
+            if !line.contains("\"event\":\"load\"") || !line.contains("\"done\":true") {
+                continue;
+            }
+            if let Some(id) = want_id {
+                if line.contains(&format!("\"id\":{id}")) || line.contains(&format!("\"id\": {id}")) {
+                    return Ok(());
+                }
+            } else {
+                return Ok(());
+            }
+        }
+        Err("Ladybird host: no load done event".into())
+    }
+
     pub fn create_view(&self, url: &str, x: i32, y: i32, w: i32, h: i32) -> Result<i32, String> {
         let escaped = url.replace('\\', "\\\\").replace('"', "\\\"");
         self.send_line(&format!(
             r#"{{"cmd":"create","url":"{escaped}","x":{x},"y":{y},"w":{w},"h":{h}}}"#
         ))?;
-        for _ in 0..16 {
+        let mut id = 0i32;
+        for _ in 0..32 {
             let line = self.read_line()?;
-            if let Some(rest) = line.split("\"id\":").nth(1) {
-                if line.contains("\"event\":\"created\"") {
-                    let id: i32 = rest.trim().trim_matches(|c: char| !c.is_ascii_digit()).parse().unwrap_or(0);
-                    if id > 0 {
-                        return Ok(id);
-                    }
+            if line.contains("\"event\":\"created\"") {
+                if let Some(rest) = line.split("\"id\":").nth(1) {
+                    id = rest.trim().trim_matches(|c: char| !c.is_ascii_digit()).parse().unwrap_or(0);
                 }
             }
+            if id > 0 && line.contains("\"event\":\"load\"") && line.contains("\"done\":true") {
+                return Ok(id);
+            }
+        }
+        if id > 0 {
+            // created without a trailing load line — still usable
+            return Ok(id);
         }
         Err("Ladybird host: no created event".into())
     }
 
     pub fn navigate(&self, id: i32, url: &str) -> Result<(), String> {
         let escaped = url.replace('\\', "\\\\").replace('"', "\\\"");
-        self.send_line(&format!(r#"{{"cmd":"navigate","id":{id},"url":"{escaped}"}}"#))
+        self.send_line(&format!(r#"{{"cmd":"navigate","id":{id},"url":"{escaped}"}}"#))?;
+        self.wait_load_done(Some(id))
     }
 
     pub fn set_bounds(&self, id: i32, x: i32, y: i32, w: i32, h: i32) -> Result<(), String> {
