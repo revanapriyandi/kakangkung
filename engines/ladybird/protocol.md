@@ -158,11 +158,12 @@ One `kakangkung-ladybird-host` process owns many views. Task Manager seeds that 
 (and ToolHelp children) as kind `Ladybird`. Crash recovery / session restore and Memory
 Saver discard already live in the Rust chrome; process-per-site isolation is not productized.
 
-## PDF / sync / casting (KB-18)
+## PDF / sync / casting (KB-18 / KB-21)
 
 Finished `.pdf` downloads open as `file://` tabs in the Ladybird host (LibWeb navigates /
-renders when linked). Folder/Drive sync for bookmarks/history/tabs/settings is engine-
-agnostic and already ships. Chromecast-style casting is not in tree (deferred, not stubbed).
+renders when linked). Folder/Drive sync covers bookmarks/history/tabs/settings/extensions
+and (KB-21) passwords when that sync type is on. Chromecast-style casting is not in tree
+(deferred, not stubbed — no LibWeb Presentation / Cast API wired).
 
 ## Permissions (KB-19)
 

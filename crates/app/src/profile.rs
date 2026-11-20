@@ -131,13 +131,19 @@ pub(crate) fn run_sync(s: &Store, tabs: Vec<storage::sync::SyncTab>, p: &EventLo
     if !enabled {
         return Err(if account(s).is_none() { "Sign in to Kakangkung to turn on sync." } else { "Sync is off. Turn it on first." }.into());
     }
+    let types = storage::sync::Types::parse(s.setting("sync.types").as_deref());
+    let passwords = if types.passwords {
+        s.export_passwords().unwrap_or_default()
+    } else {
+        vec![]
+    };
     let out = storage::sync::Outgoing {
         tabs,
         settings: synced_keys().filter_map(|k| s.setting(k).map(|v| (k.to_string(), v))).collect(),
         settings_updated: s.setting("settings.updated").and_then(|v| v.parse().ok()).unwrap_or(0),
         extensions: s.setting("extensions.names").and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default(),
+        passwords,
     };
-    let types = storage::sync::Types::parse(s.setting("sync.types").as_deref());
     let incoming = storage::sync::sync(s, &folder, &device, &device_name(), out, types)?;
     if crate::google::is_google(s) {
         crate::google::kick();

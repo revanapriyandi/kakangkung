@@ -9,7 +9,14 @@ use super::build::{buttons, empty, initial, nav, section};
 use super::when::{clock, local, short_date};
 
 /// What can be synced: (key, label).
-pub(crate) const TYPES: &[(&str, &str)] = &[("bookmarks", "Bookmarks"), ("history", "History"), ("tabs", "Open tabs"), ("settings", "Settings"), ("extensions", "Extensions")];
+pub(crate) const TYPES: &[(&str, &str)] = &[
+    ("bookmarks", "Bookmarks"),
+    ("history", "History"),
+    ("tabs", "Open tabs"),
+    ("settings", "Settings"),
+    ("extensions", "Extensions"),
+    ("passwords", "Passwords"),
+];
 
 fn account_nav() -> Vec<platform::page::NavItem> {
     nav(&[("open:signin", "Account", "\u{E77B}"), ("open:sync", "Sync and devices", "\u{E895}"), ("open:settings/you", "Settings", "\u{E713}")])
@@ -40,9 +47,9 @@ pub(crate) fn signin_doc(a: &Json, inputs: &HashMap<String, String>) -> PageDoc 
     if signed_in {
         let name = a["name"].as_str().unwrap_or("");
         let via = if a["google"].as_bool().unwrap_or(false) {
-            "Bookmarks, history, open tabs and settings travel through your Google Drive, in a hidden app folder only Kakangkung can see (none of your own files)."
+            "Bookmarks, history, open tabs, settings and passwords travel through your Google Drive, in a hidden app folder only Kakangkung can see (none of your own files)."
         } else {
-            "Bookmarks, history, open tabs and settings travel through your sync folder; no server and no password are involved."
+            "Bookmarks, history, open tabs, settings and passwords travel through your sync folder; anyone with that folder can read synced passwords."
         };
         sections.push(section("account", "Your account", vec![
             Row::new(name, a["email"].as_str().unwrap_or(""), Control::AvatarImage { initial: initial(name), path: a["picture"].as_str().unwrap_or("").into() }),
