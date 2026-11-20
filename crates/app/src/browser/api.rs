@@ -228,7 +228,8 @@ impl Browser {
             }
             "memory" => {
                 let webviews: Vec<&wry::WebView> = self.tabs.iter().filter_map(|tab| tab.webview.as_ref()).chain(self.ext_bubble.as_ref()).collect();
-                let procs: Vec<Json> = platform::processes(&webviews)
+                let host_pid = self.ladybird.as_ref().map(|h| h.pid());
+                let procs: Vec<Json> = platform::processes(&webviews, host_pid)
                     .into_iter()
                     .map(|p| json!({ "pid": p.pid, "kind": p.kind, "ws": p.private_ws, "commit": p.commit }))
                     .collect();

@@ -90,6 +90,7 @@ Or set `KAKANGKUNG_LADYBIRD_HOST` to the host path.
 | Password manager inject / fill | KB-10 — `eval` + `page_ipc` (`kk:pw:`) |
 | Clear cookies / site data / cache | KB-11 — `clear_data` → LibWeb `clear_browsing_data` |
 | Find / translate / reading mode | KB-12 — LibWeb find + `eval` (print preview deferred) |
+| Task manager process tree | KB-13 — Ladybird host PID + children (session restore already real) |
 | Chrome-parity pillars | See store `docs/chrome-parity-roadmap.md` (KB-2…KB-13) |
 
 ## Related

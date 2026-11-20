@@ -72,6 +72,11 @@ pub struct Host {
 }
 
 impl Host {
+    /// OS process id of the Ladybird host (for task manager / memory diagnostics).
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
     /// Spawn the host for `profile_dir`. `parent_hwnd` is the HWND to parent page surfaces into (0 = none).
     pub fn spawn(host: &Path, profile_dir: &Path, parent_hwnd: usize) -> Result<Self, String> {
         let mut child = Command::new(host)

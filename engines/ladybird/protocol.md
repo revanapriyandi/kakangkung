@@ -145,3 +145,9 @@ Fill uses `eval` of `window.__kkPwFill(user, pass)` gated on `location.origin`.
 `find` uses LibWeb `ViewImplementation::find_in_page` (real highlights + match counts).
 `end:true` or an empty query clears the search. Translate and Reading mode use host
 `eval` (`assets/reader.js` / Google Translate navigation). Print preview is deferred.
+
+## Process model (KB-13)
+
+One `kakangkung-ladybird-host` process owns many views. Task Manager seeds that host PID
+(and ToolHelp children) as kind `Ladybird`. Crash recovery / session restore and Memory
+Saver discard already live in the Rust chrome; process-per-site isolation is not productized.
