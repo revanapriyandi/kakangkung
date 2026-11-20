@@ -26,6 +26,9 @@ if ($p.ExitCode) { Get-Content $log -Tail 40; throw "setup exited with $($p.Exit
 
 Check (Test-Path $exe) "program installed in $app"
 Check ((Get-Item $exe).Length -gt 1MB) 'program file is the real build'
+$hostExe = Join-Path $app 'kakangkung-ladybird-host.exe'
+Check (Test-Path $hostExe) 'Ladybird host installed beside kakangkung.exe (KB-38)'
+Check ((Get-Item $hostExe).Length -gt 50KB) 'Ladybird host is a real binary'
 foreach ($notice in @('THIRD_PARTY_NOTICES.md', 'LICENSE-MPL-2.0.txt', 'LICENSE-CC-BY-SA-3.0.txt')) {
     Check (Test-Path (Join-Path $app $notice)) "third-party notice installed: $notice"
 }

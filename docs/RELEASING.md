@@ -38,8 +38,29 @@ as the run's artifacts (`kakangkung-release-dry-run`).
 | `Kakangkung-<version>-arm64.zip` | Portable, Windows ARM64 |
 | `SHA256SUMS.txt` | Checksums of all of the above (the updater verifies against it) |
 
-Both installers and portable ZIPs include `THIRD_PARTY_NOTICES.md` and the full
-MPL-2.0 and CC BY-SA 3.0 license texts for the bundled ad-blocking components.
+Both installers and portable ZIPs include `kakangkung-ladybird-host.exe` next to
+`kakangkung.exe` (**KB-38**), `THIRD_PARTY_NOTICES.md`, and the full MPL-2.0 and
+CC BY-SA 3.0 license texts for the bundled ad-blocking components.
+
+### KB-38 — Ladybird / Lagom in the package
+
+v0.4.4 installers were ~4.7–4.9 MB because they shipped **only** `kakangkung.exe`.
+Without the host, tabs spun forever under the purple‑K splash.
+
+| Layout | Typical size | Contents |
+|--------|-------------:|----------|
+| Pre–KB-38 (v0.4.4) | ~5 MB | `kakangkung.exe` only |
+| Host bundled | ~6–15 MB | + `kakangkung-ladybird-host.exe` (required) |
+| + full Lagom runtime | **100s MB** | + `ladybird-runtime\` (DLLs / `.so` + `share\Lagom`) |
+
+`release.yml` always builds `-p ladybird-host` and runs `installer/bundle-ladybird.ps1`.
+Optional secret **`LADYBIRD_RUNTIME_URL`**: zip/tarball of a `ladybird-runtime` tree
+(real LibWeb/Lagom). Build that tree on Boat with
+`engines/ladybird/package-runtime.sh` (Linux ELF today). Windows Lagom DLLs land the
+same way once a Windows Ladybird build exists — until then the packaged host unblocks
+load-complete; full paint still needs the runtime archive.
+
+Smoke test refuses an installer that omits `kakangkung-ladybird-host.exe`.
 
 ### Code signing
 

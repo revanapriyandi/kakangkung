@@ -115,8 +115,12 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "{#BinDir}\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
+; KB-38: page engine host must sit next to kakangkung.exe (find_ladybird_host).
+Source: "{#BinDir}\kakangkung-ladybird-host.exe"; DestDir: "{app}"; Flags: ignoreversion
+; Optional real LibWeb/Lagom tree from LADYBIRD_RUNTIME_DIR (DLLs + share\Lagom).
+Source: "{#BinDir}\ladybird-runtime\*"; DestDir: "{app}\ladybird-runtime"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
-Source: "..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; DestName: "THIRD_PARTY_NOTICES.md"; Flags: ignoreversion
 Source: "..\assets\filterlists\LICENSE-MPL-2.0.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\assets\filterlists\LICENSE-CC-BY-SA-3.0.txt"; DestDir: "{app}"; Flags: ignoreversion
 
