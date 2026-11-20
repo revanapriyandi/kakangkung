@@ -8,8 +8,8 @@ use std::sync::Once;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, DrawTextW, EndPaint, FillRect, GetStockObject, InvalidateRect, SetBkMode, SetTextColor, DKGRAY_BRUSH,
-    DT_LEFT, DT_NOPREFIX, DT_TOP, DT_WORDBREAK, HBRUSH, PAINTSTRUCT, TRANSPARENT,
+    BeginPaint, EndPaint, ExtTextOutW, FillRect, GetStockObject, InvalidateRect, SetBkMode, SetTextColor, SetTextAlign,
+    DKGRAY_BRUSH, ETO_OPTIONS, HBRUSH, PAINTSTRUCT, TA_LEFT, TA_TOP, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -33,11 +33,24 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             FillRect(hdc, &rc, brush);
             SetBkMode(hdc, TRANSPARENT);
             SetTextColor(hdc, COLORREF(0x00F1ECE7));
+            SetTextAlign(hdc, TA_LEFT | TA_TOP);
             let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
             if ptr != 0 {
                 let text = &*(ptr as *const Vec<u16>);
-                let mut r = rc;
-                DrawTextW(hdc, text.as_slice(), &mut r, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
+                let mut y = rc.top + 16;
+                let mut start = 0usize;
+                while start < text.len() {
+                    let end = text[start..]
+                        .iter()
+                        .position(|&c| c == 0 || c == b'\n' as u16 || c == b'\r' as u16)
+                        .map(|i| start + i)
+                        .unwrap_or(text.len());
+                    if end > start {
+                        let _ = ExtTextOutW(hdc, rc.left + 16, y, ETO_OPTIONS(0), None, &text[start..end], None);
+                    }
+                    y += 18;
+                    start = if end < text.len() && text[end] == 0 { text.len() } else { end + 1 };
+                }
             }
             let _ = EndPaint(hwnd, &ps);
             LRESULT(0)
