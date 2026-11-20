@@ -29,6 +29,7 @@ Environment: `KAKANGKUNG_LADYBIRD_HOST` may point Kakangkung at a non-default ho
 {"cmd":"print","id":1}
 {"cmd":"a11y","id":1}
 {"cmd":"eval","id":1,"js":"document.title"}
+{"cmd":"capabilities","id":1}
 {"cmd":"destroy","id":1}
 {"cmd":"quit"}
 ```
@@ -47,6 +48,7 @@ Environment: `KAKANGKUNG_LADYBIRD_HOST` may point Kakangkung at a non-default ho
 {"event":"print","id":1,"ok":true}
 {"event":"a11y","id":1,"tree":{"role":"document","name":"…","children":[]}}
 {"event":"eval","id":1,"ok":true,"result":"Ladybird"}
+{"event":"capabilities","id":1,"ok":true,"caps":{"engine":"ladybird","wasm":true,"webgpu":true}}
 ```
 
 `engine` is `"ladybird"` when LibWeb is linked, `"stub"` for the offline host.
@@ -56,6 +58,7 @@ With `HAVE_LADYBIRD=1`:
 - **print** → `run_javascript("window.print()")`
 - **a11y** → `inspect_accessibility_tree` / `on_received_accessibility_tree`
 - **eval** → `js_console_input` / `on_received_js_console_result`
+- **capabilities** → live LibWeb feature probe (CSS/JS/WASM/WebGL/WebGPU/media codecs)
 
 Without LibWeb linked, those commands return `ok:false` (no fake trees / stub screenshots).
 

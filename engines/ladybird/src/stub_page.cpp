@@ -244,4 +244,9 @@ bool View::eval_js(std::string const&, std::string&)
     return false;
 }
 
+bool View::capabilities_json(std::string&)
+{
+    return false;
+}
+
 } // namespace kakangkung::ladybird

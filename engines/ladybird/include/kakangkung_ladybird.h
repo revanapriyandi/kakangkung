@@ -84,6 +84,12 @@ KK_LB_API int kk_lb_view_a11y_json(kk_lb_view* view, char** out_utf8);
  */
 KK_LB_API int kk_lb_view_eval(kk_lb_view* view, char const* js_utf8, char** out_utf8);
 
+/**
+ * Probe LibWeb feature support in the page (CSS/JS/WASM/WebGL/WebGPU/media).
+ * Writes a JSON object into out_utf8 (caller frees). Returns 1 on success.
+ */
+KK_LB_API int kk_lb_view_capabilities(kk_lb_view* view, char** out_utf8);
+
 KK_LB_API void kk_lb_string_free(char* s);
 
 /** Pump Ladybird / stub events; return non-zero if the session should quit. */

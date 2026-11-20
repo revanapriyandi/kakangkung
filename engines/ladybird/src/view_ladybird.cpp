@@ -267,12 +267,21 @@ static ErrorOr<void> ensure_application()
 {
     if (WebView::Application::is_initialized())
         return {};
+    // Chrome-parity engine knobs (KB-5): experimental IDL (WebGPU etc.), media autoplay,
+    // and CPU painting so HeadlessWebView frames reach our HWND/X11 blit path.
     static char arg0[] = "kakangkung-ladybird-host";
-    static char* argv[] = { arg0, nullptr };
-    static auto const arg0_view = StringView { arg0, sizeof("kakangkung-ladybird-host") - 1 };
-    static StringView string_storage[] = { arg0_view };
+    static char arg_exp[] = "--expose-experimental-interfaces";
+    static char arg_auto[] = "--enable-autoplay";
+    static char arg_cpu[] = "--force-cpu-painting";
+    static char* argv[] = { arg0, arg_exp, arg_auto, arg_cpu, nullptr };
+    static StringView string_storage[] = {
+        StringView { arg0, sizeof(arg0) - 1 },
+        StringView { arg_exp, sizeof(arg_exp) - 1 },
+        StringView { arg_auto, sizeof(arg_auto) - 1 },
+        StringView { arg_cpu, sizeof(arg_cpu) - 1 },
+    };
     Main::Arguments arguments {
-        .argc = 1,
+        .argc = 4,
         .argv = argv,
         .strings = Span<StringView> { string_storage },
     };
@@ -502,6 +511,70 @@ bool View::eval_js(std::string const& js, std::string& out_result)
         return false;
     }
     return ok;
+}
+
+bool View::capabilities_json(std::string& out_json)
+{
+    // Live LibWeb feature probe — not a static stub table.
+    static char const* probe = R"JS((() => {
+  const can = (fn) => { try { return !!fn(); } catch (e) { return false; } };
+  const css = (q) => can(() => CSS.supports(q));
+  return JSON.stringify({
+    engine: "ladybird",
+    html: typeof document !== "undefined",
+    css_grid: css("display:grid"),
+    css_flex: css("display:flex"),
+    css_container: css("container-type:inline-size"),
+    es_modules: can(() => typeof HTMLScriptElement !== "undefined"),
+    wasm: typeof WebAssembly !== "undefined",
+    webgl: can(() => {
+      const c = document.createElement("canvas");
+      return !!(c.getContext("webgl") || c.getContext("experimental-webgl"));
+    }),
+    webgl2: can(() => !!document.createElement("canvas").getContext("webgl2")),
+    webgpu: typeof navigator !== "undefined" && "gpu" in navigator,
+    webrtc: typeof RTCPeerConnection !== "undefined",
+    service_worker: typeof navigator !== "undefined" && "serviceWorker" in navigator,
+    media_source: typeof MediaSource !== "undefined",
+    audio: typeof Audio !== "undefined",
+    video: typeof HTMLVideoElement !== "undefined",
+    codecs: {
+      av1: can(() => MediaSource && MediaSource.isTypeSupported('video/mp4; codecs="av01.0.01M.08"')),
+      vp9: can(() => MediaSource && MediaSource.isTypeSupported('video/webm; codecs="vp9"')),
+      opus: can(() => MediaSource && MediaSource.isTypeSupported('audio/webm; codecs="opus"')),
+      mp3: can(() => {
+        const a = document.createElement("audio");
+        return a.canPlayType('audio/mpeg') !== "";
+      })
+    }
+  });
+})())JS";
+    std::string result;
+    if (!eval_js(probe, result))
+        return false;
+    // Console may wrap string results in quotes — strip one layer if present.
+    if (result.size() >= 2 && result.front() == '"' && result.back() == '"') {
+        out_json = result.substr(1, result.size() - 2);
+        // Unescape minimal JSON string escapes produced by DebuggerValue stringification.
+        std::string unescaped;
+        for (size_t i = 0; i < out_json.size(); ++i) {
+            if (out_json[i] == '\\' && i + 1 < out_json.size()) {
+                char n = out_json[++i];
+                if (n == '"' || n == '\\' || n == '/')
+                    unescaped += n;
+                else if (n == 'n')
+                    unescaped += '\n';
+                else
+                    unescaped += n;
+            } else {
+                unescaped += out_json[i];
+            }
+        }
+        out_json = std::move(unescaped);
+    } else {
+        out_json = std::move(result);
+    }
+    return !out_json.empty() && out_json.front() == '{';
 }
 
 } // namespace kakangkung::ladybird

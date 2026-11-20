@@ -44,8 +44,8 @@ if ! python3 -c 'import pathlib,sys; p=pathlib.Path.home()/"Qt"; sys.exit(0 if a
     AQT="${HOME}/aqt-venv/bin/aqt"
   fi
   if [[ -n "$AQT" ]]; then
-    "$AQT" install-qt linux desktop 6.10.0 linux_gcc_64 -O "${HOME}/Qt" -m qtpositioning qtwayland \
-      || "$AQT" install-qt linux desktop 6.10.0 gcc_64 -O "${HOME}/Qt" -m qtpositioning || true
+    # Arch name is linux_gcc_64; module is qtpositioning (not qtwayland — that name is gone in 6.10).
+    "$AQT" install-qt linux desktop 6.10.0 linux_gcc_64 -O "${HOME}/Qt" -m qtpositioning || true
   fi
 fi
 if QT_CFG=$(echo "${HOME}"/Qt/6.1*/gcc_64/lib/cmake/Qt6/Qt6Config.cmake); then

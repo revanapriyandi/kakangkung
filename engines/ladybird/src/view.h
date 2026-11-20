@@ -38,6 +38,7 @@ public:
     bool print_page();
     bool a11y_json(std::string& out_json);
     bool eval_js(std::string const& js, std::string& out_result);
+    bool capabilities_json(std::string& out_json);
 
 private:
     Session& m_session;

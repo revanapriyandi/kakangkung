@@ -305,6 +305,24 @@ int main(int argc, char** argv)
             }
             continue;
         }
+        if (has_cmd(line, "capabilities")) {
+            int id = 0;
+            if (field_int(line, "id", id)) {
+                char* caps = nullptr;
+                bool ok = false;
+                if (auto it = host.views.find(id); it != host.views.end())
+                    ok = kk_lb_view_capabilities(it->second.view, &caps) != 0;
+                if (ok && caps) {
+                    emit(std::string("{\"event\":\"capabilities\",\"id\":") + std::to_string(id)
+                        + ",\"ok\":true,\"caps\":" + caps + "}");
+                    kk_lb_string_free(caps);
+                } else {
+                    emit(std::string("{\"event\":\"capabilities\",\"id\":") + std::to_string(id)
+                        + ",\"ok\":false,\"caps\":null,\"reason\":\"capabilities unavailable\"}");
+                }
+            }
+            continue;
+        }
         kk_lb_session_pump(host.session);
     }
 
