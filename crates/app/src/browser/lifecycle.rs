@@ -264,6 +264,25 @@ impl Browser {
         for cmd in cmds {
             if let Err(e) = self.exec(i, cmd) {
                 eprintln!("tab {}: {cmd:?} failed: {e}", self.tabs[i].view.id);
+                // Without a Ladybird host, CreateWebview fails and used to leave the tab
+                // spinning forever (loading=true) under the purple-K launch splash.
+                if cmd == Command::CreateWebview {
+                    let id = self.tabs[i].view.id;
+                    let url = self.tabs[i].view.url.clone();
+                    self.tabs[i].view.loading = false;
+                    if self.tabs[i].view.title.is_empty()
+                        || self.tabs[i].view.title == ui::page_name(&url)
+                    {
+                        self.tabs[i].view.title = "Page unavailable".into();
+                    }
+                    self.page.set_visible(false);
+                    let _ = self.proxy.send_event(Msg::Load {
+                        id,
+                        url,
+                        done: true,
+                    });
+                    self.render();
+                }
                 return;
             }
             self.tabs[i].state = tabs::after_command(cmd);

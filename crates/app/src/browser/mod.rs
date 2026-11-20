@@ -712,19 +712,34 @@ impl Browser {
             self.tabs[i].view.url = url.clone();
             let tab_id = self.tabs[i].view.id;
             if let (Some(host), Some(vid)) = (self.ladybird.as_ref(), self.tabs[i].ladybird_view) {
+                self.tabs[i].view.loading = true;
                 match host.navigate(vid, &url) {
                     Ok(nav) => {
                         self.tabs[i].apply_ladybird_nav(&nav);
                         let url = self.tabs[i].view.url.clone();
                         let _ = self.proxy.send_event(Msg::Load { id: tab_id, url, done: true });
                     }
-                    Err(e) => eprintln!("ladybird navigate({url}) failed: {e}"),
+                    Err(e) => {
+                        eprintln!("ladybird navigate({url}) failed: {e}");
+                        self.tabs[i].view.loading = false;
+                    }
                 }
             } else if let Some(wv) = &self.tabs[i].webview {
                 if let Err(e) = wv.load_url(&url) {
                     eprintln!("load_url({url}) failed: {e}");
                 }
                 let _ = wv.focus();
+            } else {
+                // No host view and no WebView2 — omnibox commit must not leave the spinner on.
+                eprintln!(
+                    "navigate({url}): no Ladybird view (is kakangkung-ladybird-host installed?)"
+                );
+                self.tabs[i].view.loading = false;
+                let _ = self.proxy.send_event(Msg::Load {
+                    id: tab_id,
+                    url: url.clone(),
+                    done: true,
+                });
             }
         }
         self.render();
