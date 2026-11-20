@@ -698,6 +698,16 @@ impl Browser {
             eprintln!("adblock: blocked document navigation to {url}");
             return;
         }
+        // B6: Ladybird Safe Browsing foundation (bundled dangerous-host list; not SmartScreen).
+        if self.settings.protection.safe_browsing && platform::safe_browsing_blocks(&url) {
+            eprintln!("safe browsing: blocked navigation to {url}");
+            if let Some(i) = self.index(self.active) {
+                self.tabs[i].view.loading = false;
+                self.tabs[i].view.title = "Dangerous site blocked".into();
+            }
+            self.render();
+            return;
+        }
         if let Some(i) = self.index(self.active) {
             let (was, now) = (crate::native::page_of(&self.tabs[i].view.url), crate::native::page_of(&url));
             if was.is_some() || now.is_some() {

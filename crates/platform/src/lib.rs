@@ -32,6 +32,8 @@ mod secret;
 mod shell;
 mod time;
 mod ladybird;
+mod safebrowsing;
+pub use safebrowsing::{blocks_url as safe_browsing_blocks, host_of as safe_browsing_host};
 mod webview;
 mod window;
 pub use ladybird::{

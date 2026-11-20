@@ -1,0 +1,8 @@
+# Kakangkung Ladybird dangerous-host list (B6 foundation).
+# One hostname per line (no scheme). Comments start with #.
+# Includes Google Safe Browsing *test* hosts so the path is exercisable without
+# claiming Google's full cloud reputation database (that needs an API key + update pipeline).
+testsafebrowsing.appspot.com
+malware.testing.google.test
+phishing.testing.google.test
+unwanted.testing.google.test

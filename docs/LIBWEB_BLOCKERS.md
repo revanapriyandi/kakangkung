@@ -11,6 +11,6 @@ pretend PDF print pipelines.
 | **KB-20+ / B3** | Paginated print / `print_to_pdf` | No `print_to_pdf` on LibWebView | Screenshot preview + `window.print()` confirm |
 | **B4** | Process-per-site isolation | LibWeb already swaps WebContent cross-site | Task Manager surfaces ProcessManager sites |
 | **B5** | Linux / macOS product packages | App chrome is Win32/Direct2D today | Linux: host+Lagom runtime package; macOS: not yet |
-| **B6** | Safe Browsing + cloud sync | SmartScreen was WebView2-only | Ladybird URL threat checks + folder/Drive sync foundation |
+| **B6** | Safe Browsing + cloud sync | SmartScreen was WebView2-only | Ladybird: bundled dangerous-host gate (`assets/safebrowsing/`) + folder/Drive sync (`docs/CLOUD_SYNC.md`) |
 
 **Boat:** sandbox `bx_cnfw3mch` verifies real `engine=ladybird` + Lagom. Revisit each row when upstream lands the Web API.
