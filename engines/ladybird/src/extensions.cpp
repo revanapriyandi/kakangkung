@@ -362,6 +362,16 @@ std::string chrome_runtime_bootstrap(std::string const& extension_id, std::strin
        << "    if (!cb) return;\n"
        << "    pending.delete(String(requestId));\n"
        << "    try { cb(response); } catch (e) {}\n"
+       << "  },\n"
+       // B2 / KB-24: no MV3 background service-worker host — refuse SW APIs honestly.
+       << "  getBackgroundPage() {\n"
+       << "    return Promise.reject(new Error('Kakangkung: MV3 extension service workers are not hosted yet (LibWeb has no extension SW process)'));\n"
+       << "  },\n"
+       << "  getContexts() {\n"
+       << "    return Promise.reject(new Error('Kakangkung: extension service-worker contexts are unavailable'));\n"
+       << "  },\n"
+       << "  connect() {\n"
+       << "    throw new Error('Kakangkung: chrome.runtime.connect requires an extension service worker (not hosted)');\n"
        << "  }\n"
        << "};\n"
        // KB-24: real chrome.storage.local via host-backed JSON (not in-page localStorage).

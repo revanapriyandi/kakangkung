@@ -126,7 +126,9 @@ replies with `ext_reply`.
 persists JSON under `<profile>/extensions/<id>/local-storage.json` and resolves
 the page callback via `chrome.runtime.__resolve`. **Extension service workers
 remain blocked** — there is no MV3 background SW process in this host (page
-`navigator.serviceWorker` is unrelated).
+`navigator.serviceWorker` is unrelated). Content-script `chrome.runtime.getBackgroundPage`,
+`getContexts`, and `connect` **reject/throw** with an explicit “SW not hosted” error
+rather than silently no-oping (B2 / KB-24c).
 
 **KB-24b messaging demux:** Kakangkung drains `ext_message` events, answers with
 `ext_reply` (currently `null` — no background listener without SW), and issues
