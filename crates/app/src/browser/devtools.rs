@@ -4,8 +4,6 @@ use tao::platform::windows::WindowExtWindows;
 use wry::{Rect, dpi::{PhysicalPosition, PhysicalSize}};
 use super::Browser;
 
-use ui;
-
 /// DevTools opens on Elements, without Microsoft's Welcome tab ("Welcome to Microsoft Edge
 /// DevTools") or its after-update page. Seeded into the WebView2 profile's preferences before
 /// its browser process starts; a file that cannot be read is left alone.

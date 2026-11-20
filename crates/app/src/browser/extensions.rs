@@ -136,18 +136,24 @@ impl Browser {
         };
         let proxy = self.proxy.clone();
         let folder = swap.folder.clone();
-        let finish = move |result: Result<platform::Extension, String>| {
-            std::thread::spawn(move || {
-                let result = match result {
-                    Ok(extension) if extension.id == ext => { swap.finish(); Ok(()) },
-                    Ok(_) => swap.rollback().and(Err("The runtime returned an unexpected extension ID.".into())),
-                    Err(error) => match swap.rollback() {
-                        Ok(()) => Err(error),
-                        Err(restore) => Err(format!("{error}; restoring the previous extension: {restore}")),
-                    },
-                };
-                let _ = proxy.send_event(Msg::StoreInstalled { tab, ext, result });
-            });
+        let finish = {
+            let ext = ext.clone();
+            move |result: Result<platform::Extension, String>| {
+                std::thread::spawn(move || {
+                    let result = match result {
+                        Ok(extension) if extension.id == ext => {
+                            swap.finish();
+                            Ok(())
+                        }
+                        Ok(_) => swap.rollback().and(Err("The runtime returned an unexpected extension ID.".into())),
+                        Err(error) => match swap.rollback() {
+                            Ok(()) => Err(error),
+                            Err(restore) => Err(format!("{error}; restoring the previous extension: {restore}")),
+                        },
+                    };
+                    let _ = proxy.send_event(Msg::StoreInstalled { tab, ext, result });
+                });
+            }
         };
         match self.extension_host() {
             Some(wv) => {
@@ -155,9 +161,8 @@ impl Browser {
             }
             // Ladybird-only: install is filesystem + local registry (no WebView2 profile).
             None => {
-                let id = ext.clone();
-                let name = webstore::display_name(&folder).unwrap_or_else(|| id.clone());
-                finish(Ok(platform::Extension { id, name, enabled: true }));
+                let name = webstore::display_name(&folder).unwrap_or_else(|| ext.clone());
+                finish(Ok(platform::Extension { id: ext, name, enabled: true }));
             }
         }
     }

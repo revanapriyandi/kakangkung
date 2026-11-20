@@ -446,11 +446,6 @@ impl TabKit {
 }
 
 impl Browser {
-    /// `window.open` / host-requested pop-up without WebView2: open as a normal Ladybird tab.
-    pub(crate) fn open_ladybird_popup(&mut self, url: &str) {
-        self.open_tab(url, self.index(self.active).map(|i| i + 1));
-    }
-
     pub(crate) fn hook_tab(&self, id: u64, wv: &WebView) -> platform::Hooks {
         let (p1, p2, p3, p4) = (self.proxy.clone(), self.proxy.clone(), self.proxy.clone(), self.proxy.clone());
         let mut hooks = platform::hook(

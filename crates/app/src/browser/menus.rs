@@ -3,6 +3,7 @@
 use std::time::Instant;
 
 use platform::menu::MenuItem;
+use tao::platform::windows::WindowExtWindows;
 
 use crate::i18n::tr;
 use platform::popup::PopupRow;
