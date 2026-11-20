@@ -148,7 +148,7 @@ pub(crate) fn run_sync(s: &Store, tabs: Vec<storage::sync::SyncTab>, p: &EventLo
         }
         s.set_setting("settings.updated", &when.to_string())?;
         let prefs = Prefs::read(s);
-        let _ = p.send_event(Msg::SettingsChanged(prefs.settings));
+        let _ = p.send_event(Msg::SettingsChanged(Box::new(prefs.settings)));
         let _ = p.send_event(Msg::Engine(prefs.engine));
         let _ = p.send_event(Msg::MemoryMode(prefs.memory));
     }

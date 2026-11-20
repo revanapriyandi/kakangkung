@@ -138,6 +138,8 @@ pub(crate) struct Browser {
     pub(crate) previews: tab_preview::Previews,
     pub(crate) compact_idle: bool,
     /// Tab background while a page loads, matching the Windows theme (no white flash).
+    /// Kept for Ladybird page surfaces (was WebView2 `with_background_color`).
+    #[allow(dead_code)]
     pub(crate) page_bg: (u8, u8, u8, u8),
     pub(crate) settings: Settings,
     /// The window is shown once the toolbar has painted (no blank flash at start).
@@ -168,6 +170,8 @@ pub(crate) struct Browser {
     /// A second storage thread (its own database connection) for work that takes seconds:
     /// reading another browser's data, a sync round. What pages ask for never waits behind it.
     pub(crate) background: mpsc::Sender<Job>,
+    /// CSRF token for built-in `/api` pages once Ladybird serves them.
+    #[allow(dead_code)]
     pub(crate) token: String,
     pub(crate) paths: Paths,
     pub(crate) synced: bool,

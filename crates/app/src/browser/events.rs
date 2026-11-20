@@ -74,7 +74,7 @@ impl Browser {
                     self.render();
                 }
             }
-            Msg::SettingsChanged(settings) => self.apply_settings(settings),
+            Msg::SettingsChanged(settings) => self.apply_settings(*settings),
             Msg::Account(name) => {
                 self.account_name = name;
                 self.account_picture.clear();

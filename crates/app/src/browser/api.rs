@@ -229,7 +229,7 @@ impl Browser {
                 self.db_reply(respond, move |s| match s.set_setting(&key, &value) {
                     Ok(()) => {
                         touch_settings(s);
-                        let _ = p.send_event(Msg::SettingsChanged(Settings::read(|k| s.setting(k))));
+                        let _ = p.send_event(Msg::SettingsChanged(Box::new(Settings::read(|k| s.setting(k)))));
                         json!({})
                     }
                     Err(e) => json!({ "error": e }),
@@ -244,7 +244,7 @@ impl Browser {
                 self.db_reply(respond, move |s| match s.set_setting(&key, &value) {
                     Ok(()) => {
                         touch_settings(s);
-                        let _ = p.send_event(Msg::SettingsChanged(Settings::read(|k| s.setting(k))));
+                        let _ = p.send_event(Msg::SettingsChanged(Box::new(Settings::read(|k| s.setting(k)))));
                         json!({})
                     }
                     Err(e) => json!({ "error": e }),
@@ -256,7 +256,7 @@ impl Browser {
                     Ok(()) => {
                         touch_settings(s);
                         let prefs = Prefs::read(s);
-                        let _ = p.send_event(Msg::SettingsChanged(prefs.settings));
+                        let _ = p.send_event(Msg::SettingsChanged(Box::new(prefs.settings)));
                         let _ = p.send_event(Msg::Engine(prefs.engine));
                         let _ = p.send_event(Msg::MemoryMode(prefs.memory));
                         json!({})

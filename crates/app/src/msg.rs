@@ -8,6 +8,8 @@ use serde_json::Value as Json;
 use crate::pages::Reply;
 use crate::prefs::Settings;
 
+/// Page-side constructors (WebView2 IPC) are dormant until the Ladybird host emits the same events.
+#[allow(dead_code)]
 pub(crate) enum Msg {
     Ipc(String),
     /// A download started or moved on (for the Downloads page).
@@ -58,7 +60,7 @@ pub(crate) enum Msg {
     /// Bookmarks arrived from another device.
     BookmarksChanged,
     /// Appearance or privacy settings changed.
-    SettingsChanged(Settings),
+    SettingsChanged(Box<Settings>),
     /// Memory saver mode changed in settings.
     MemoryMode(memory::Mode),
     /// Query suggestions from the search engine for address-bar request `seq`.
