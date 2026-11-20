@@ -100,6 +100,33 @@ fn has_cmd(line: &str, cmd: &str) -> bool {
     line.contains(&format!("\"cmd\":\"{cmd}\""))
 }
 
+/// Build a child HWND without blocking the stdin loop indefinitely.
+///
+/// Cross-process `CreateWindowEx(WS_CHILD, parent)` waits for the parent's message pump. If that
+/// pump is itself blocked on our stdout/stdin, we deadlock. Run the create on a helper thread and
+/// abandon it after a short budget — protocol already acked `load`.
+#[cfg(windows)]
+fn create_surface_timed(parent: usize, x: i32, y: i32, w: i32, h: i32, url: &str) -> Option<hwnd::Surface> {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    let url = url.to_string();
+    let (tx, rx) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("ladybird-stub-hwnd".into())
+        .spawn(move || {
+            let _ = tx.send(hwnd::Surface::create(parent, x, y, w, h, &url));
+        })
+        .ok()?;
+    match rx.recv_timeout(Duration::from_millis(250)) {
+        Ok(surface) => surface,
+        Err(_) => {
+            // Helper may still finish later and leak a thread/HWND; prefer a live host over a hang.
+            eprintln!("ladybird-host: HWND create timed out (parent=0x{parent:x}); continuing without surface");
+            None
+        }
+    }
+}
+
 fn main() {
     let mut profile = String::new();
     let mut parent: usize = 0;
@@ -143,22 +170,29 @@ fn main() {
             let y = field_int(&line, "y").unwrap_or(0);
             let w = field_int(&line, "w").unwrap_or(800);
             let h = field_int(&line, "h").unwrap_or(600);
-            // Emit `created` before CreateWindowEx: parenting into Kakangkung's HWND can wait on
-            // the parent's message pump, which only runs while Kakangkung reads our stdout.
+            // Protocol first: Kakangkung's create_view waits on `created` + `load`. Never block
+            // those behind CreateWindowEx — cross-process WS_CHILD parenting can stall until the
+            // parent pumps, and while we stall we stop reading stdin so Kakangkung's next
+            // send_line fills the pipe and deadlocks the UI thread (Self-test hung for hours).
             emit(&format!(r#"{{"event":"created","id":{id}}}"#));
-            #[cfg(windows)]
-            let surface = hwnd::Surface::create(parent, x, y, w, h, &url);
-            #[cfg(not(windows))]
-            let _ = (parent, x, y, w, h);
             let v = View {
                 url: url.clone(),
                 back: vec![],
                 forward: vec![],
                 #[cfg(windows)]
-                surface,
+                surface: None,
             };
             v.emit_nav(id);
             views.insert(id, v);
+            #[cfg(windows)]
+            {
+                let surface = create_surface_timed(parent, x, y, w, h, &url);
+                if let Some(v) = views.get_mut(&id) {
+                    v.surface = surface;
+                }
+            }
+            #[cfg(not(windows))]
+            let _ = (parent, x, y, w, h);
             continue;
         }
         if has_cmd(&line, "navigate") {
