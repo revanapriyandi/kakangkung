@@ -57,8 +57,11 @@ void emit_history(HostView* hv)
 void on_load(void* user, int done)
 {
     auto* hv = static_cast<HostView*>(user);
-    if (done)
+    if (done) {
         emit_history(hv);
+        // Content scripts may have queued chrome.runtime.sendMessage during inject.
+        kk_lb_view_drain_ext(hv->view);
+    }
     emit(std::string("{\"event\":\"load\",\"id\":") + std::to_string(hv->id) + ",\"done\":" + (done ? "true" : "false") + "}");
 }
 
@@ -123,6 +126,63 @@ std::string json_escape(std::string const& in)
     return out;
 }
 
+void on_ext_message(void* user, char const* extension_id, char const* request_id, char const* message_json)
+{
+    auto* hv = static_cast<HostView*>(user);
+    emit(std::string("{\"event\":\"ext_message\",\"id\":") + std::to_string(hv->id)
+        + ",\"extension\":\"" + json_escape(extension_id ? extension_id : "") + "\""
+        + ",\"requestId\":\"" + json_escape(request_id ? request_id : "") + "\""
+        + ",\"message\":" + (message_json && message_json[0] ? message_json : "null") + "}");
+}
+
+std::string extract_raw_json_field(std::string const& line, char const* key)
+{
+    auto needle = std::string("\"") + key + "\":";
+    auto pos = line.find(needle);
+    if (pos == std::string::npos)
+        return {};
+    pos += needle.size();
+    while (pos < line.size() && (line[pos] == ' ' || line[pos] == '\t'))
+        ++pos;
+    if (pos >= line.size())
+        return {};
+    if (line[pos] == '"') {
+        size_t i = pos + 1;
+        std::string out = "\"";
+        while (i < line.size()) {
+            if (line[i] == '\\' && i + 1 < line.size()) {
+                out += line[i];
+                out += line[i + 1];
+                i += 2;
+                continue;
+            }
+            out += line[i];
+            if (line[i] == '"')
+                break;
+            ++i;
+        }
+        return out;
+    }
+    if (line[pos] == '{' || line[pos] == '[') {
+        char open = line[pos];
+        char close = open == '{' ? '}' : ']';
+        int depth = 0;
+        size_t i = pos;
+        do {
+            if (line[i] == open)
+                ++depth;
+            else if (line[i] == close)
+                --depth;
+            ++i;
+        } while (i < line.size() && depth > 0);
+        return line.substr(pos, i - pos);
+    }
+    size_t end = pos;
+    while (end < line.size() && line[end] != ',' && line[end] != '}')
+        ++end;
+    return line.substr(pos, end - pos);
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -159,6 +219,7 @@ int main(int argc, char** argv)
             cb.on_title = on_title;
             cb.on_url = on_url;
             cb.on_load = on_load;
+            cb.on_ext_message = on_ext_message;
             int x = 0, y = 0, w = 800, h = 600;
             field_int(line, "x", x);
             field_int(line, "y", y);
@@ -358,6 +419,28 @@ int main(int argc, char** argv)
                     emit(std::string("{\"event\":\"capabilities\",\"id\":") + std::to_string(id)
                         + ",\"ok\":false,\"caps\":null,\"reason\":\"capabilities unavailable\"}");
                 }
+            }
+            continue;
+        }
+        if (has_cmd(line, "ext_reply")) {
+            int id = 0;
+            std::string extension;
+            std::string request_id;
+            if (field_int(line, "id", id) && field_str(line, "extension", extension) && field_str(line, "requestId", request_id)) {
+                auto response = extract_raw_json_field(line, "response");
+                bool ok = false;
+                if (auto it = host.views.find(id); it != host.views.end())
+                    ok = kk_lb_view_ext_reply(it->second.view, extension.c_str(), request_id.c_str(), response.c_str()) != 0;
+                emit(std::string("{\"event\":\"ext_reply\",\"id\":") + std::to_string(id)
+                    + ",\"ok\":" + (ok ? "true" : "false") + "}");
+            }
+            continue;
+        }
+        if (has_cmd(line, "ext_drain")) {
+            int id = 0;
+            if (field_int(line, "id", id)) {
+                if (auto it = host.views.find(id); it != host.views.end())
+                    kk_lb_view_drain_ext(it->second.view);
             }
             continue;
         }

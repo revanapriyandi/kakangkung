@@ -7,9 +7,13 @@ namespace kakangkung::ladybird {
 
 struct ContentScript {
     std::string extension_id;
+    std::string extension_dir;
+    std::string manifest_json; // raw manifest for chrome.runtime.getManifest()
     std::vector<std::string> matches;
-    std::vector<std::string> js_sources; // absolute paths or already-read source
-    std::string run_at;                 // document_start / document_end / document_idle
+    std::vector<std::string> exclude_matches;
+    std::vector<std::string> js_sources;
+    std::vector<std::string> css_sources;
+    std::string run_at; // document_start / document_end / document_idle
 };
 
 /// Load enabled MV3 content_scripts from `<profile>/extensions/*/manifest.json`.
@@ -18,8 +22,28 @@ std::vector<ContentScript> load_content_scripts(std::string const& profile_dir);
 /// True when `url` matches a Chrome match pattern (supports `*://` / `<all_urls>` / host wildcards).
 bool url_matches_pattern(std::string const& url, std::string const& pattern);
 
-/// Bootstrap + matched content scripts to inject after a navigation (real JS sources from disk).
-std::string chrome_runtime_bootstrap(std::string const& extension_id);
-std::vector<std::string> scripts_for_url(std::vector<ContentScript> const& all, std::string const& url);
+/// True when any `matches` hits and no `exclude_matches` hits.
+bool content_script_matches_url(ContentScript const& cs, std::string const& url);
+
+/// Bootstrap chrome.runtime (real getManifest + messaging with request ids).
+std::string chrome_runtime_bootstrap(std::string const& extension_id, std::string const& manifest_json);
+
+/// CSS injector wrapping stylesheet text.
+std::string css_inject_script(std::string const& css_text);
+
+/// Matched content scripts for `url` filtered by `run_at` (empty = all timings).
+std::vector<std::string> scripts_for_url(std::vector<ContentScript> const& all, std::string const& url,
+    std::string const& run_at_filter = {});
+
+/// Parse a `kk-ext:…` console payload. Returns false if not a bridge message.
+bool parse_kk_ext_payload(std::string const& console_text, std::string& extension_id, std::string& type,
+    std::string& request_id, std::string& message_json);
+
+/// JS that resolves a pending sendMessage callback in the page.
+std::string chrome_runtime_reply_script(std::string const& extension_id, std::string const& request_id,
+    std::string const& response_json);
+
+/// JS that delivers a message to onMessage listeners in the page.
+std::string chrome_runtime_deliver_script(std::string const& extension_id, std::string const& message_json);
 
 } // namespace kakangkung::ladybird

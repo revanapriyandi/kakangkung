@@ -183,6 +183,23 @@ int kk_lb_view_capabilities(kk_lb_view* view, char** out_utf8)
     return 1;
 }
 
+int kk_lb_view_ext_reply(kk_lb_view* view, char const* extension_id_utf8, char const* request_id_utf8,
+    char const* response_json)
+{
+    if (!view || !extension_id_utf8 || !request_id_utf8)
+        return 0;
+    return reinterpret_cast<View*>(view)->ext_reply(extension_id_utf8, request_id_utf8,
+               response_json ? response_json : "")
+            ? 1
+            : 0;
+}
+
+void kk_lb_view_drain_ext(kk_lb_view* view)
+{
+    if (view)
+        reinterpret_cast<View*>(view)->drain_ext_queue();
+}
+
 void kk_lb_string_free(char* s)
 {
     std::free(s);

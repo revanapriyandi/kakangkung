@@ -125,6 +125,48 @@ public:
         return out;
     }
 
+    void ingest_ext_queue_json(std::string result)
+    {
+        if (result.size() >= 2 && result.front() == '"' && result.back() == '"') {
+            std::string unescaped;
+            for (size_t i = 1; i + 1 < result.size(); ++i) {
+                if (result[i] == '\\' && i + 1 < result.size()) {
+                    char n = result[++i];
+                    if (n == '"' || n == '\\' || n == '/')
+                        unescaped += n;
+                    else if (n == 'n')
+                        unescaped += '\n';
+                    else
+                        unescaped += n;
+                } else {
+                    unescaped += result[i];
+                }
+            }
+            result = std::move(unescaped);
+        }
+        if (result.size() < 2 || result.front() != '[')
+            return;
+        size_t i = 1;
+        while (i < result.size()) {
+            while (i < result.size() && (result[i] == ' ' || result[i] == ',' || result[i] == '\n'))
+                ++i;
+            if (i >= result.size() || result[i] == ']')
+                break;
+            if (result[i] != '{')
+                break;
+            size_t start = i;
+            int depth = 0;
+            do {
+                if (result[i] == '{')
+                    ++depth;
+                else if (result[i] == '}')
+                    --depth;
+                ++i;
+            } while (i < result.size() && depth > 0);
+            handle_kk_ext(std::string("kk-ext:") + result.substr(start, i - start));
+        }
+    }
+
     ~LibWebSurface() override
     {
 #if defined(_WIN32)
@@ -165,11 +207,13 @@ private:
         };
         on_load_start = [this] {
             m_has_presented_frame = false;
+            inject_content_scripts("document_start");
             if (m_cb.on_load)
                 m_cb.on_load(m_cb.user, 0);
         };
         on_load_finish = [this](auto const&) {
-            inject_content_scripts();
+            inject_content_scripts("document_end");
+            inject_content_scripts("document_idle");
             if (m_cb.on_load)
                 m_cb.on_load(m_cb.user, 1);
         };
@@ -177,18 +221,44 @@ private:
             append_console(output);
             // chrome.runtime.sendMessage bridge: content scripts log kk-ext:{...}
             output.output.visit(
-                [](WebView::ConsoleLog const& log) {
+                [this](WebView::ConsoleLog const& log) {
                     for (auto const& arg : log.arguments) {
-                        if (!arg.is_string())
+                        ByteString text;
+                        if (arg.is_string())
+                            text = arg.as_string().to_byte_string();
+                        else
+                            text = arg.serialized().to_byte_string();
+                        auto view = StringView { text };
+                        auto pos = view.find("kk-ext:"sv);
+                        if (!pos.has_value())
                             continue;
-                        auto const& msg = arg.as_string();
-                        if (!msg.starts_with_bytes("kk-ext:"sv))
-                            continue;
-                        (void)msg;
+                        auto payload = view.substring_view(*pos);
+                        // Trim wrapping quotes from serialized JSON strings.
+                        if (payload.starts_with('"') && payload.ends_with('"') && payload.length() >= 2)
+                            payload = payload.substring_view(1, payload.length() - 2);
+                        handle_kk_ext(std::string { payload.to_byte_string().characters() });
                     }
                 },
                 [](auto const&) {});
         };
+    }
+
+    void handle_kk_ext(std::string const& payload)
+    {
+        std::string extension_id;
+        std::string type;
+        std::string request_id;
+        std::string message_json;
+        if (!parse_kk_ext_payload(payload, extension_id, type, request_id, message_json))
+            return;
+        // Notify Kakangkung first (avoid re-entrancy issues with page script).
+        if (type == "sendMessage" && m_cb.on_ext_message)
+            m_cb.on_ext_message(m_cb.user, extension_id.c_str(), request_id.c_str(), message_json.c_str());
+        // Deliver to same-page onMessage listeners (content ↔ content).
+        auto deliver = chrome_runtime_deliver_script(extension_id, message_json);
+        auto script_or_error = String::from_utf8(StringView { deliver.data(), deliver.size() });
+        if (!script_or_error.is_error())
+            run_javascript(script_or_error.release_value());
     }
 
     static StringView console_level_name(JS::ConsoleLogLevel level)
@@ -264,11 +334,11 @@ private:
         m_console.emplace_back(serialized.characters());
     }
 
-    void inject_content_scripts()
+    void inject_content_scripts(char const* run_at)
     {
         if (m_url.empty() || m_profile_dir.empty())
             return;
-        auto scripts = scripts_for_url(load_content_scripts(m_profile_dir), m_url);
+        auto scripts = scripts_for_url(load_content_scripts(m_profile_dir), m_url, run_at ? run_at : "");
         for (auto const& src : scripts) {
             auto script = MUST(String::from_utf8(StringView { src.data(), src.size() }));
             run_javascript(script);
@@ -652,9 +722,35 @@ bool View::eval_js(std::string const& js, std::string& out_result)
     return ok;
 }
 
+bool View::ext_reply(std::string const& extension_id, std::string const& request_id, std::string const& response_json)
+{
+    if (!m_libweb || !m_libweb->surface || extension_id.empty() || request_id.empty())
+        return false;
+    auto js = chrome_runtime_reply_script(extension_id, request_id, response_json);
+    auto script = MUST(String::from_utf8(StringView { js.data(), js.size() }));
+    m_libweb->surface->run_javascript(script);
+    return true;
+}
+
+void View::drain_ext_queue()
+{
+    if (!m_libweb || !m_libweb->surface)
+        return;
+    std::string result;
+    static char const* drain = R"JS((() => {
+  const q = window.__kk_ext_queue || [];
+  window.__kk_ext_queue = [];
+  return JSON.stringify(q);
+})())JS";
+    if (!eval_js(drain, result))
+        return;
+    m_libweb->surface->ingest_ext_queue_json(std::move(result));
+}
+
 bool View::capabilities_json(std::string& out_json)
 {
-    // Live LibWeb feature probe — not a static stub table.
+    // Live LibWeb feature probe — sync console eval (async Promises are not awaited by js_console_input).
+    // webgpu_adapter_api records whether requestAdapter exists; a live adapter needs async eval.
     static char const* probe = R"JS((() => {
   const can = (fn) => { try { return !!fn(); } catch (e) { return false; } };
   const css = (q) => can(() => CSS.supports(q));
@@ -672,6 +768,7 @@ bool View::capabilities_json(std::string& out_json)
     }),
     webgl2: can(() => !!document.createElement("canvas").getContext("webgl2")),
     webgpu: typeof navigator !== "undefined" && "gpu" in navigator,
+    webgpu_adapter_api: !!(typeof navigator !== "undefined" && navigator.gpu && navigator.gpu.requestAdapter),
     webrtc: typeof RTCPeerConnection !== "undefined",
     service_worker: typeof navigator !== "undefined" && "serviceWorker" in navigator,
     media_source: typeof MediaSource !== "undefined",

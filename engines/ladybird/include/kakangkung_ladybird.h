@@ -28,12 +28,16 @@ typedef struct kk_lb_view kk_lb_view;
 typedef void (*kk_lb_title_fn)(void* user, char const* title_utf8);
 typedef void (*kk_lb_url_fn)(void* user, char const* url_utf8);
 typedef void (*kk_lb_load_fn)(void* user, int done /* 0 loading, 1 finished */);
+/** MV3 chrome.runtime.sendMessage bridge (kk-ext:…). message_json is raw JSON. */
+typedef void (*kk_lb_ext_fn)(void* user, char const* extension_id_utf8, char const* request_id_utf8,
+    char const* message_json);
 
 typedef struct kk_lb_callbacks {
     void* user;
     kk_lb_title_fn on_title;
     kk_lb_url_fn on_url;
     kk_lb_load_fn on_load;
+    kk_lb_ext_fn on_ext_message; /* may be null */
 } kk_lb_callbacks;
 
 /** "ladybird" when LibWeb is linked, "stub" otherwise. */
@@ -101,6 +105,16 @@ KK_LB_API int kk_lb_view_eval(kk_lb_view* view, char const* js_utf8, char** out_
  * Writes a JSON object into out_utf8 (caller frees). Returns 1 on success.
  */
 KK_LB_API int kk_lb_view_capabilities(kk_lb_view* view, char** out_utf8);
+
+/**
+ * Deliver a chrome.runtime.sendMessage response into the page (LibWeb).
+ * response_json may be a JSON value or empty for undefined. Returns 1 on submit.
+ */
+KK_LB_API int kk_lb_view_ext_reply(kk_lb_view* view, char const* extension_id_utf8, char const* request_id_utf8,
+    char const* response_json);
+
+/** Drain pending chrome.runtime.sendMessage entries from the page into on_ext_message. */
+KK_LB_API void kk_lb_view_drain_ext(kk_lb_view* view);
 
 KK_LB_API void kk_lb_string_free(char* s);
 

@@ -259,4 +259,13 @@ bool View::capabilities_json(std::string&)
     return false;
 }
 
+bool View::ext_reply(std::string const&, std::string const&, std::string const&)
+{
+    return false;
+}
+
+void View::drain_ext_queue()
+{
+}
+
 } // namespace kakangkung::ladybird

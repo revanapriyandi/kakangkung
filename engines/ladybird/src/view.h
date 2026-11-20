@@ -41,6 +41,9 @@ public:
     bool console_json(std::string& out_json, bool clear);
     bool eval_js(std::string const& js, std::string& out_result);
     bool capabilities_json(std::string& out_json);
+    bool ext_reply(std::string const& extension_id, std::string const& request_id, std::string const& response_json);
+    /// Drain window.__kk_ext_queue into on_ext_message (console IPC is unreliable on HeadlessWebView).
+    void drain_ext_queue();
 
 private:
     Session& m_session;
