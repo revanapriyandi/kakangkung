@@ -40,6 +40,8 @@ Environment: `KAKANGKUNG_LADYBIRD_HOST` may point Kakangkung at a non-default ho
 {"cmd":"download_action","downloadId":1,"action":"pause"}
 {"cmd":"adblock","enabled":true,"allowlist":"news.example.com\\nother.example.com"}
 {"cmd":"clear_data","cookies":true,"cache":true,"since":0}
+{"cmd":"find","id":1,"query":"hello","forward":true,"matchCase":false}
+{"cmd":"find","id":1,"query":"","end":true}
 {"cmd":"destroy","id":1}
 {"cmd":"quit"}
 ```
@@ -69,6 +71,7 @@ Environment: `KAKANGKUNG_LADYBIRD_HOST` may point Kakangkung at a non-default ho
 {"event":"download_removed","downloadId":1}
 {"event":"adblock","ok":true,"enabled":true}
 {"event":"clear_data","ok":true,"cookies":true,"cache":true}
+{"event":"find","id":1,"ok":true,"activeMatch":1,"matchCount":3}
 {"event":"page_ipc","id":1,"message":"kk:pw:focus:{…}"}
 ```
 
@@ -136,3 +139,9 @@ Fill uses `eval` of `window.__kkPwFill(user, pass)` gated on `location.origin`.
 `clear_data` calls LibWeb `Application::clear_browsing_data`: cookies + site storage
 (`delete_site_data`) and/or HTTP cache (`delete_cached_files`). `since` is Unix ms
 (0 = all time). History stays in Kakangkung SQLite. Fail closed when LibWeb is unavailable.
+
+## Find / translate / reader (KB-12)
+
+`find` uses LibWeb `ViewImplementation::find_in_page` (real highlights + match counts).
+`end:true` or an empty query clears the search. Translate and Reading mode use host
+`eval` (`assets/reader.js` / Google Translate navigation). Print preview is deferred.

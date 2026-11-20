@@ -184,15 +184,70 @@ impl Browser {
         let js = format!(
             "location.href = 'https://translate.google.com/translate?sl=auto&tl=' + encodeURIComponent({lang} || (navigator.language || 'en').split('-')[0]) + '&u=' + encodeURIComponent({url})"
         );
-        if let Some(wv) = self.active_webview() {
+        if let Some(vid) = t.ladybird_view {
+            if let Some(host) = self.ladybird.as_ref() {
+                if let Err(e) = host.eval(vid, &js) {
+                    eprintln!("translate: {e}");
+                }
+            }
+        } else if let Some(wv) = self.active_webview() {
             let _ = wv.evaluate_script(&js);
         }
     }
 
     /// Reading mode: the page's main text in a calm, full-window reader; again to close it.
     pub(crate) fn reading_mode(&self) {
+        if let Some(i) = self.index(self.active) {
+            if let Some(vid) = self.tabs[i].ladybird_view {
+                if let Some(host) = self.ladybird.as_ref() {
+                    if let Err(e) = host.eval(vid, READER_JS) {
+                        eprintln!("reading mode: {e}");
+                    }
+                }
+                return;
+            }
+        }
         if let Some(wv) = self.active_webview() {
             let _ = wv.evaluate_script(READER_JS);
+        }
+    }
+
+    /// Ctrl+F find bar for Ladybird pages (LibWeb find_in_page).
+    pub(crate) fn show_find_bar(&mut self) {
+        let dark = self.dark_ui();
+        self.overlay_open = true;
+        self.overlay_kind = "input".into();
+        let text = self.find_query.clone();
+        self.popup.show_input(
+            "find",
+            12.0,
+            platform::frame::FRAME_H as f32 - 4.0,
+            320.0,
+            &text,
+            "Find in page",
+            dark,
+        );
+    }
+
+    /// Run find for the active Ladybird tab; Enter from the find bar.
+    pub(crate) fn find_in_page(&mut self, query: &str) {
+        self.find_query = query.to_string();
+        let Some(i) = self.index(self.active) else { return };
+        let Some(vid) = self.tabs[i].ladybird_view else { return };
+        let Some(host) = self.ladybird.as_ref() else { return };
+        if query.is_empty() {
+            let _ = host.find(vid, "", false, true, true);
+            return;
+        }
+        match host.find(vid, query, false, true, false) {
+            Ok((active, count)) => {
+                if count == 0 {
+                    eprintln!("find: no matches");
+                } else {
+                    eprintln!("find: {active}/{count}");
+                }
+            }
+            Err(e) => eprintln!("find: {e}"),
         }
     }
 }

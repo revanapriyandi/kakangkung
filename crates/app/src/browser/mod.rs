@@ -149,6 +149,8 @@ pub(crate) struct Browser {
     /// Which pop-up is showing: "suggest", "menu" or "siteinfo".
     pub(crate) overlay_kind: String,
     pub(crate) overlay_open: bool,
+    /// Last find-in-page query (Ladybird Ctrl+F bar).
+    pub(crate) find_query: String,
     pub(crate) bookmarked: bool,
     /// Search URL template and engine name (Google unless changed in settings).
     pub(crate) search: (String, String),
@@ -342,6 +344,7 @@ impl Browser {
             menu_at: (0.0, 0.0),
             overlay_kind: String::new(),
             overlay_open: false,
+            find_query: String::new(),
             bookmarked: false,
             search: ui::search_template(""),
             engine_setting: String::new(),

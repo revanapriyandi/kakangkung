@@ -18,6 +18,8 @@
 #include <AK/JsonObject.h>
 #include <AK/JsonValue.h>
 #include <AK/String.h>
+#include <AK/StringUtils.h>
+#include <AK/Utf16String.h>
 #include <LibCore/EventLoop.h>
 #include <LibCore/File.h>
 #include <LibGfx/Bitmap.h>
@@ -782,6 +784,51 @@ void View::drain_ext_queue()
     if (!eval_js(drain, result))
         return;
     m_libweb->surface->ingest_ext_queue_json(std::move(result));
+}
+
+bool View::find_in_page(std::string const& query, bool match_case, bool forward, bool end, int& active_match,
+    int& match_count)
+{
+    if (!m_libweb || !m_libweb->surface)
+        return false;
+    active_match = 0;
+    match_count = 0;
+
+    if (end || query.empty()) {
+        m_libweb->surface->find_in_page_end();
+        m_find_query.clear();
+        return true;
+    }
+
+    bool done = false;
+    bool ok = false;
+    m_libweb->surface->on_find_in_page = [&](size_t current, Optional<size_t> const& total) {
+        active_match = total.has_value() && *total > 0 ? static_cast<int>(current) + 1 : 0;
+        match_count = total.has_value() ? static_cast<int>(*total) : 0;
+        ok = true;
+        done = true;
+    };
+
+    auto sensitivity = match_case ? CaseSensitivity::CaseSensitive : CaseSensitivity::CaseInsensitive;
+    if (query == m_find_query) {
+        if (forward)
+            m_libweb->surface->find_in_page_next_match();
+        else
+            m_libweb->surface->find_in_page_previous_match();
+    } else {
+        m_find_query = query;
+        auto utf16 = Utf16String::from_utf8(StringView { query.data(), query.size() });
+        m_libweb->surface->find_in_page(utf16, sensitivity, true);
+        if (!forward)
+            m_libweb->surface->find_in_page_previous_match();
+    }
+
+    if (!pump_until(done, std::chrono::seconds(5))) {
+        m_libweb->surface->on_find_in_page = nullptr;
+        return false;
+    }
+    // Keep callback for subsequent next/prev; LibWeb may fire again asynchronously.
+    return ok;
 }
 
 bool View::capabilities_json(std::string& out_json)

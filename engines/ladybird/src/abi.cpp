@@ -217,6 +217,22 @@ int kk_lb_adblock_enabled(void) { return 0; }
 int kk_lb_clear_data(int, int, int64_t) { return 0; }
 #endif
 
+int kk_lb_view_find(kk_lb_view* view, char const* query_utf8, int match_case, int forward, int end,
+    int* active_match, int* match_count)
+{
+    if (!view)
+        return 0;
+    int active = 0;
+    int count = 0;
+    bool ok = reinterpret_cast<View*>(view)->find_in_page(query_utf8 ? query_utf8 : "", match_case != 0,
+        forward != 0, end != 0, active, count);
+    if (active_match)
+        *active_match = active;
+    if (match_count)
+        *match_count = count;
+    return ok ? 1 : 0;
+}
+
 void kk_lb_string_free(char* s)
 {
     std::free(s);

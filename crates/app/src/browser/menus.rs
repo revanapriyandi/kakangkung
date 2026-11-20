@@ -449,10 +449,15 @@ impl Browser {
             "passwords" => self.open_after_active(&format!("{}passwords", ui::INTERNAL)),
             "clear" => self.open_after_active(&format!("{}settings#privacy", ui::INTERNAL)),
             "find" => {
-                if self.native.tab == self.active { self.page.focus_search(); }
-                if let Some(wv) = self.active_webview() {
-                    if let Err(e) = platform::open_find(wv) {
-                        eprintln!("find: {e}");
+                if self.native.tab == self.active {
+                    self.page.focus_search();
+                } else if let Some(i) = self.index(self.active) {
+                    if self.tabs[i].ladybird_view.is_some() {
+                        self.show_find_bar();
+                    } else if let Some(wv) = self.active_webview() {
+                        if let Err(e) = platform::open_find(wv) {
+                            eprintln!("find: {e}");
+                        }
                     }
                 }
             }

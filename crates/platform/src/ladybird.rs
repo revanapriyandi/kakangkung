@@ -369,6 +369,44 @@ window.ipc=window.ipc||{{postMessage:function(m){{try{{console.log('kk-pw:'+m)}}
         self.eval(id, &bootstrap).map(|_| ())
     }
 
+    /// KB-12: find-in-page. Empty query or `end` clears highlights.
+    /// Returns (active_match 1-based, match_count).
+    pub fn find(
+        &self,
+        id: i32,
+        query: &str,
+        match_case: bool,
+        forward: bool,
+        end: bool,
+    ) -> Result<(i32, i32), String> {
+        let escaped = query.replace('\\', "\\\\").replace('"', "\\\"");
+        self.send_line(&format!(
+            r#"{{"cmd":"find","id":{id},"query":"{escaped}","matchCase":{},"forward":{},"end":{}}}"#,
+            if match_case { "true" } else { "false" },
+            if forward { "true" } else { "false" },
+            if end { "true" } else { "false" },
+        ))?;
+        let deadline = Instant::now() + HOST_WAIT;
+        while Instant::now() < deadline {
+            let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
+            let line = self.read_line_timeout(remain)?;
+            if Self::apply_side_effect(&line) {
+                continue;
+            }
+            if line.contains("\"event\":\"find\"")
+                && (line.contains(&format!("\"id\":{id}")) || line.contains(&format!("\"id\": {id}")))
+            {
+                if !line.contains("\"ok\":true") {
+                    return Err(format!("find failed: {line}"));
+                }
+                let active = json_i64_field(&line, "activeMatch").unwrap_or(0) as i32;
+                let count = json_i64_field(&line, "matchCount").unwrap_or(0) as i32;
+                return Ok((active, count));
+            }
+        }
+        Err("Ladybird host: no find event".into())
+    }
+
     /// KB-11: clear LibWeb cookies/site data and/or HTTP cache (`since_ms` 0 = all time).
     pub fn clear_data(&self, cookies: bool, cache: bool, since_ms: i64) -> Result<(), String> {
         self.send_line(&format!(

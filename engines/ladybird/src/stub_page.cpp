@@ -274,4 +274,11 @@ void View::drain_ext_queue()
 {
 }
 
+bool View::find_in_page(std::string const&, bool, bool, bool, int& active_match, int& match_count)
+{
+    active_match = 0;
+    match_count = 0;
+    return false;
+}
+
 } // namespace kakangkung::ladybird

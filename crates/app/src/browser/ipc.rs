@@ -113,6 +113,9 @@ impl Browser {
                 if let Some(gid) = arg.strip_prefix("grouprename:") {
                     return self.on_ipc(&format!("groupname\t{gid}\t{text}"));
                 }
+                if arg == "find" {
+                    self.find_in_page(&text);
+                }
             }
             "groupcollapse" => {
                 if let Some(g) = self.groups.iter_mut().find(|g| g.id as u64 == id) {

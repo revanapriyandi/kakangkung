@@ -145,6 +145,14 @@ KK_LB_API int kk_lb_adblock_enabled(void);
  */
 KK_LB_API int kk_lb_clear_data(int cookies, int cache, int64_t since_ms);
 
+/**
+ * KB-12: find-in-page via LibWeb. end!=0 (or empty query) ends the search.
+ * forward=0 selects the previous match when the same query is already active.
+ * Writes 1-based active_match and match_count when available.
+ */
+KK_LB_API int kk_lb_view_find(kk_lb_view* view, char const* query_utf8, int match_case, int forward, int end,
+    int* active_match, int* match_count);
+
 KK_LB_API void kk_lb_string_free(char* s);
 
 /** Pump Ladybird / stub events; return non-zero if the session should quit. */

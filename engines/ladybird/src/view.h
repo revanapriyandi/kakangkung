@@ -47,6 +47,10 @@ public:
     bool ext_reply(std::string const& extension_id, std::string const& request_id, std::string const& response_json);
     /// Drain window.__kk_ext_queue into on_ext_message (console IPC is unreliable on HeadlessWebView).
     void drain_ext_queue();
+    /// Find-in-page (LibWeb ViewImplementation::find_in_page). end ends search.
+    /// forward=false → previous match when a search is already active with the same query.
+    bool find_in_page(std::string const& query, bool match_case, bool forward, bool end, int& active_match,
+        int& match_count);
 
 private:
     Session& m_session;
@@ -55,6 +59,7 @@ private:
     struct LibWeb;
     std::unique_ptr<LibWeb> m_libweb;
     double m_zoom { 1.0 };
+    std::string m_find_query;
 #else
     void emit_load(bool done);
     void emit_title(std::string const& title);

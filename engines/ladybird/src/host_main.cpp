@@ -366,6 +366,33 @@ int main(int argc, char** argv)
             }
             continue;
         }
+        if (has_cmd(line, "find")) {
+            int id = 0;
+            if (field_int(line, "id", id)) {
+                std::string query;
+                field_str(line, "query", query);
+                // Unescape \n / \" if present in the simple field_str path (no nested escapes).
+                bool match_case = line.find("\"matchCase\":true") != std::string::npos
+                    || line.find("\"matchCase\":1") != std::string::npos;
+                bool forward = line.find("\"forward\":false") == std::string::npos
+                    && line.find("\"forward\":0") == std::string::npos;
+                bool end = line.find("\"end\":true") != std::string::npos
+                    || line.find("\"end\":1") != std::string::npos;
+                int active = 0;
+                int count = 0;
+                bool ok = false;
+                if (auto it = host.views.find(id); it != host.views.end())
+                    ok = kk_lb_view_find(it->second.view, query.c_str(), match_case ? 1 : 0, forward ? 1 : 0,
+                            end ? 1 : 0, &active, &count)
+                        != 0;
+                emit(std::string("{\"event\":\"find\",\"id\":") + std::to_string(id)
+                    + ",\"ok\":" + (ok ? "true" : "false")
+                    + ",\"activeMatch\":" + std::to_string(active)
+                    + ",\"matchCount\":" + std::to_string(count)
+                    + (ok ? "" : ",\"reason\":\"find unavailable\"") + "}");
+            }
+            continue;
+        }
         if (has_cmd(line, "clear_data")) {
             bool const has_cookies = line.find("\"cookies\"") != std::string::npos;
             bool const has_cache = line.find("\"cache\"") != std::string::npos;
