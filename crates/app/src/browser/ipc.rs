@@ -267,6 +267,12 @@ impl Browser {
                 if let Some(wv) = self.active_webview() {
                     let _ = platform::stop(wv);
                 }
+                // Ladybird / host-missing: there is no WebView2 stop target; still clear the
+                // omnibox spinner so Stop is not a no-op under the purple-K splash.
+                if let Some(i) = self.index(self.active) {
+                    self.tabs[i].view.loading = false;
+                    self.render();
+                }
             }
             "focuspage" => {
                 if let Some(wv) = self.active_webview() {
