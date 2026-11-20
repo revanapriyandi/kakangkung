@@ -100,31 +100,26 @@ fn has_cmd(line: &str, cmd: &str) -> bool {
     line.contains(&format!("\"cmd\":\"{cmd}\""))
 }
 
-/// Build a child HWND without blocking the stdin loop indefinitely.
+/// Optionally parent a stub HWND without blocking stdin.
 ///
-/// Cross-process `CreateWindowEx(WS_CHILD, parent)` waits for the parent's message pump. If that
-/// pump is itself blocked on our stdout/stdin, we deadlock. Run the create on a helper thread and
-/// abandon it after a short budget — protocol already acked `load`.
+/// Cross-process `CreateWindowEx(WS_CHILD, parent)` waits for the parent's message pump. Doing that
+/// on the stdin thread deadlocks Kakangkung's next `send_line`. HWND is also `!Send`, so we cannot
+/// create on a helper and return the surface here. Fire-and-forget a helper that owns (and leaks)
+/// the surface if create ever completes; protocol already acked `load` with `surface: None`.
 #[cfg(windows)]
-fn create_surface_timed(parent: usize, x: i32, y: i32, w: i32, h: i32, url: &str) -> Option<hwnd::Surface> {
-    use std::sync::mpsc;
-    use std::time::Duration;
+fn spawn_surface_best_effort(parent: usize, x: i32, y: i32, w: i32, h: i32, url: &str) {
+    if parent == 0 {
+        return;
+    }
     let url = url.to_string();
-    let (tx, rx) = mpsc::channel();
-    std::thread::Builder::new()
+    let _ = std::thread::Builder::new()
         .name("ladybird-stub-hwnd".into())
         .spawn(move || {
-            let _ = tx.send(hwnd::Surface::create(parent, x, y, w, h, &url));
-        })
-        .ok()?;
-    match rx.recv_timeout(Duration::from_millis(250)) {
-        Ok(surface) => surface,
-        Err(_) => {
-            // Helper may still finish later and leak a thread/HWND; prefer a live host over a hang.
-            eprintln!("ladybird-host: HWND create timed out (parent=0x{parent:x}); continuing without surface");
-            None
-        }
-    }
+            if let Some(surface) = hwnd::Surface::create(parent, x, y, w, h, &url) {
+                // Keep the HWND alive for the process lifetime; we are not tracking it on View.
+                std::mem::forget(surface);
+            }
+        });
 }
 
 fn main() {
@@ -185,12 +180,7 @@ fn main() {
             v.emit_nav(id);
             views.insert(id, v);
             #[cfg(windows)]
-            {
-                let surface = create_surface_timed(parent, x, y, w, h, &url);
-                if let Some(v) = views.get_mut(&id) {
-                    v.surface = surface;
-                }
-            }
+            spawn_surface_best_effort(parent, x, y, w, h, &url);
             #[cfg(not(windows))]
             let _ = (parent, x, y, w, h);
             continue;
