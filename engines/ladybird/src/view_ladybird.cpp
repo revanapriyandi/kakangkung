@@ -323,10 +323,13 @@ void View::navigate(std::string url)
 {
     if (!m_libweb || !m_libweb->surface)
         return;
-    if (auto parsed = WebView::sanitize_url(url); parsed.has_value())
+    auto view = StringView { url.data(), url.size() };
+    if (auto parsed = WebView::sanitize_url(view); parsed.has_value()) {
         m_libweb->surface->load(*parsed);
-    else
-        m_libweb->surface->load(URL::URL::create_with_url_or_path(url));
+        return;
+    }
+    if (auto fallback = URL::create_with_url_or_path(ByteString { url.c_str(), url.size() }); fallback.has_value())
+        m_libweb->surface->load(*fallback);
 }
 
 void View::stop()
