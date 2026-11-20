@@ -95,7 +95,7 @@ pub(crate) fn extensions_doc(answer: &Json) -> PageDoc {
     ]));
     sections.push(section("about", "", vec![Row::new(
         "How extensions run",
-        "Extensions run in Kakangkung's tabs through Microsoft WebView2: content scripts, background work and blocking rules run. The extensions button in the toolbar opens an extension's own pop-up; it runs beside the page, so an extension that acts on \"the current tab\" may not see the page behind it.",
+        "Extensions install to the profile folder. With the LibWeb host linked, matching MV3 content scripts inject on navigation (chrome.runtime bootstrap + disk JS). The extensions button opens the Extensions page until LibWeb can host toolbar pop-ups.",
         Control::None,
     )]));
     PageDoc {

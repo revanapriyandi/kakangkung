@@ -62,5 +62,13 @@ With `HAVE_LADYBIRD=1`:
 
 Without LibWeb linked, those commands return `ok:false` (no fake trees / stub screenshots).
 
+## MV3 content scripts (KB-3)
+
+On `load` `done:true`, the LibWeb host scans `<profile>/extensions/*/manifest.json`
+(skipping folders with `.disabled`), match-tests the page URL against each
+`content_scripts[].matches` pattern, injects a real `chrome.runtime` bootstrap for
+that extension id, then `run_javascript`s each listed JS file from disk. No empty
+stub scripts.
+
 Clients that `wait` on `load` with `done:true` can rely on **back** / **forward** / **reload**
 always emitting that event (even when history is empty — a no-op ack) so waiters never hang.

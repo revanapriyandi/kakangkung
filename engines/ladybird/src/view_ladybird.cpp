@@ -8,6 +8,7 @@
 
 #include "view.h"
 #include "application.h"
+#include "extensions.h"
 
 #include <AK/ByteString.h>
 #include <AK/JsonObject.h>
@@ -19,6 +20,7 @@
 #include <LibGfx/ShareableBitmap.h>
 #include <LibGfx/SystemTheme.h>
 #include <LibURL/URL.h>
+#include <LibWebCommon/WebView/ConsoleOutput.h>
 #include <LibWebCommon/WebView/Debugger.h>
 #include <LibWebView/Application.h>
 #include <LibWebView/HeadlessWebView.h>
@@ -53,9 +55,9 @@ public:
 class LibWebSurface final : public WebView::HeadlessWebView {
 public:
     static NonnullOwnPtr<LibWebSurface> create(Core::AnonymousBuffer theme, Web::DevicePixelSize size,
-        std::uintptr_t parent_hwnd, kk_lb_callbacks callbacks)
+        std::uintptr_t parent_hwnd, kk_lb_callbacks callbacks, std::string profile_dir)
     {
-        auto view = adopt_own(*new LibWebSurface(move(theme), size, parent_hwnd, callbacks));
+        auto view = adopt_own(*new LibWebSurface(move(theme), size, parent_hwnd, callbacks, move(profile_dir)));
         view->initialize_tab(Web::HTML::VisibilityState::Visible);
         view->set_presents_from_cpu_memory(true);
         view->wire_callbacks();
@@ -115,10 +117,12 @@ public:
     }
 
 private:
-    LibWebSurface(Core::AnonymousBuffer theme, Web::DevicePixelSize size, std::uintptr_t parent_hwnd, kk_lb_callbacks callbacks)
+    LibWebSurface(Core::AnonymousBuffer theme, Web::DevicePixelSize size, std::uintptr_t parent_hwnd, kk_lb_callbacks callbacks,
+        std::string profile_dir)
         : HeadlessWebView(move(theme), size)
         , m_cb(callbacks)
         , m_parent(parent_hwnd)
+        , m_profile_dir(move(profile_dir))
         , m_w(size.width().value())
         , m_h(size.height().value())
     {
@@ -133,6 +137,7 @@ private:
         };
         on_url_change = [this](auto const& url) {
             auto text = url.to_byte_string();
+            m_url = text.characters();
             if (m_cb.on_url)
                 m_cb.on_url(m_cb.user, text.characters());
         };
@@ -141,9 +146,38 @@ private:
                 m_cb.on_load(m_cb.user, 0);
         };
         on_load_finish = [this](auto const&) {
+            inject_content_scripts();
             if (m_cb.on_load)
                 m_cb.on_load(m_cb.user, 1);
         };
+        on_console_message = [this](WebView::ConsoleOutput const& output) {
+            // chrome.runtime.sendMessage bridge: content scripts log kk-ext:{...}
+            output.output.visit(
+                [this](WebView::ConsoleLog const& log) {
+                    for (auto const& arg : log.arguments) {
+                        if (!arg.is_string())
+                            continue;
+                        auto const& msg = arg.as_string();
+                        if (!msg.starts_with_bytes("kk-ext:"sv))
+                            continue;
+                        // Host-side extension message bus can pick this up later (MCP / DevTools).
+                        (void)this;
+                        (void)msg;
+                    }
+                },
+                [](auto const&) {});
+        };
+    }
+
+    void inject_content_scripts()
+    {
+        if (m_url.empty() || m_profile_dir.empty())
+            return;
+        auto scripts = scripts_for_url(load_content_scripts(m_profile_dir), m_url);
+        for (auto const& src : scripts) {
+            auto script = MUST(String::from_utf8(StringView { src.data(), src.size() }));
+            run_javascript(script);
+        }
     }
 
     void create_native_window()
@@ -252,6 +286,8 @@ private:
 
     kk_lb_callbacks m_cb {};
     std::uintptr_t m_parent {};
+    std::string m_profile_dir;
+    std::string m_url;
     int m_x {}, m_y {}, m_w { 800 }, m_h { 600 };
 #if defined(_WIN32)
     HWND m_hwnd { nullptr };
@@ -319,7 +355,7 @@ View::View(Session& session, std::uintptr_t parent_hwnd, kk_lb_callbacks callbac
         warnln("Kakangkung LibWeb theme failed: {}", theme_or_error.error());
         return;
     }
-    m_libweb->surface = LibWebSurface::create(theme_or_error.release_value(), { 800, 600 }, parent_hwnd, callbacks);
+    m_libweb->surface = LibWebSurface::create(theme_or_error.release_value(), { 800, 600 }, parent_hwnd, callbacks, session.profile_dir());
     if (callbacks.on_load)
         callbacks.on_load(callbacks.user, 1);
 }

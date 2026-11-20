@@ -12,6 +12,7 @@ set(HOST_SOURCES
     src/host_main.cpp
     src/application.cpp
     src/abi.cpp
+    src/extensions.cpp
 )
 if(HAVE_LADYBIRD)
     list(APPEND HOST_SOURCES src/view_ladybird.cpp)
