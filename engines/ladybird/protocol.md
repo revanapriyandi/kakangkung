@@ -38,6 +38,7 @@ Environment: `KAKANGKUNG_LADYBIRD_HOST` may point Kakangkung at a non-default ho
 {"cmd":"ext_drain","id":1}
 {"cmd":"download","url":"https://example.com/file.bin","path":"/tmp/file.bin"}
 {"cmd":"download_action","downloadId":1,"action":"pause"}
+{"cmd":"adblock","enabled":true,"allowlist":"news.example.com\\nother.example.com"}
 {"cmd":"destroy","id":1}
 {"cmd":"quit"}
 ```
@@ -65,6 +66,7 @@ Environment: `KAKANGKUNG_LADYBIRD_HOST` may point Kakangkung at a non-default ho
 {"event":"download_started","ok":true,"url":"https://example.com/file.bin","path":"/tmp/file.bin"}
 {"event":"download","downloadId":1,"url":"https://example.com/file.bin","path":"/tmp/file.bin","received":0,"total":-1,"state":"in_progress","can_resume":false}
 {"event":"download_removed","downloadId":1}
+{"event":"adblock","ok":true,"enabled":true}
 ```
 
 `engine` is `"ladybird"` when LibWeb is linked, `"stub"` for the offline host.
@@ -111,3 +113,11 @@ Kakangkung demuxes those events in every host wait loop and polls host stdout wh
 (`Host::poll_events`). Live rows feed `platform::downloads()` / the Downloads page; finished
 non-incognito rows go through `take_finished` → `PastDownload` SQLite. Pause / resume / cancel
 from the Downloads page call `Host::download_action` when `ladybird_owns(id)`.
+
+## Adblock (KB-7)
+
+`adblock` loads Kakangkung's ad-network domain list into LibWeb `ContentFilter` /
+`ContentBlocker` so `ResourceLoader` refuses matching requests. Domain file:
+`data/adblock-domains.txt` (or `KAKANGKUNG_ADBLOCK_LIST`). `enabled:false` clears patterns.
+Document navigations are also gated in Rust via EasyList (`blocks_document_navigation`).
+Per-site allowlist is enforced in Rust; patterns stay global in LibWeb when enabled.

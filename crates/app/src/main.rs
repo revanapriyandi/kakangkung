@@ -284,6 +284,7 @@ fn main() {
     // "Clear browsing data when you exit" also runs at the next start (WebView2 clears
     // asynchronously, so the exit may beat it); done when the first webview exists.
     platform::configure_adblock_sites(&browser.settings.adblock_allowlist);
+    browser.sync_ladybird_adblock();
     browser.clear_at_start = browser.settings.clear_on_exit && matches!(run, Run::Normal(_));
     browser.update_dir = base.join("Updates");
     // The native frame is ready as soon as it exists: show the window now, before any webview

@@ -463,6 +463,8 @@ static ErrorOr<void> ensure_application()
     };
     g_app = TRY(KakangkungApplication::create(arguments));
     kk_lb_downloads_ensure_observer();
+    // Default: load domain list into LibWeb ContentFilter/ContentBlocker (Settings can clear).
+    (void)kk_lb_adblock_configure(1, "");
     return {};
 }
 

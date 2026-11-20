@@ -129,6 +129,13 @@ KK_LB_API void kk_lb_downloads_ensure_observer(void);
 KK_LB_API int kk_lb_download_start(char const* url_utf8, char const* path_utf8);
 KK_LB_API int kk_lb_download_action(uint64_t id, char const* action_utf8 /* pause|resume|cancel */);
 
+/**
+ * KB-7: configure LibWeb ContentFilter/ContentBlocker from Kakangkung domain lists.
+ * enabled=0 clears patterns. allowlist_utf8 is newline-separated hosts (Rust enforces per-site).
+ */
+KK_LB_API int kk_lb_adblock_configure(int enabled, char const* allowlist_utf8);
+KK_LB_API int kk_lb_adblock_enabled(void);
+
 KK_LB_API void kk_lb_string_free(char* s);
 
 /** Pump Ladybird / stub events; return non-zero if the session should quit. */

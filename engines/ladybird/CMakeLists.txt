@@ -15,7 +15,7 @@ set(HOST_SOURCES
     src/extensions.cpp
 )
 if(HAVE_LADYBIRD)
-    list(APPEND HOST_SOURCES src/view_ladybird.cpp src/downloads_ladybird.cpp)
+    list(APPEND HOST_SOURCES src/view_ladybird.cpp src/downloads_ladybird.cpp src/adblock_ladybird.cpp)
     if(UNIX AND NOT APPLE)
         list(APPEND HOST_SOURCES src/x11_surface.cpp)
     endif()
@@ -86,3 +86,9 @@ if(WIN32)
 endif()
 
 install(TARGETS kakangkung-ladybird-host RUNTIME DESTINATION bin)
+install(FILES
+    ${CMAKE_CURRENT_SOURCE_DIR}/data/adblock-domains.txt
+    ${CMAKE_CURRENT_SOURCE_DIR}/data/adblock-domains.list
+    DESTINATION share/kakangkung
+    OPTIONAL
+)

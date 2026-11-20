@@ -314,6 +314,31 @@ impl Host {
         Err("Ladybird host: no print event".into())
     }
 
+    /// KB-7: push adblock on/off + allowlist into LibWeb ContentFilter/ContentBlocker.
+    pub fn adblock_configure(&self, enabled: bool, allowlist: &str) -> Result<(), String> {
+        let allow = allowlist.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
+        self.send_line(&format!(
+            r#"{{"cmd":"adblock","enabled":{},"allowlist":"{allow}"}}"#,
+            if enabled { "true" } else { "false" }
+        ))?;
+        let deadline = Instant::now() + HOST_WAIT;
+        while Instant::now() < deadline {
+            let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
+            let line = self.read_line_timeout(remain)?;
+            if Self::apply_side_effect(&line) {
+                continue;
+            }
+            if line.contains("\"event\":\"adblock\"") {
+                return if line.contains("\"ok\":true") {
+                    Ok(())
+                } else {
+                    Err(format!("adblock configure failed: {line}"))
+                };
+            }
+        }
+        Err("Ladybird host: no adblock event".into())
+    }
+
     /// Page zoom. `None` resets to 100%; `Some(f)` multiplies the current factor (clamped 0.25…5).
     /// Matches `platform::zoom` semantics for menu Ctrl+/- / reset.
     pub fn zoom(&self, id: i32, factor: Option<f64>) -> Result<f64, String> {

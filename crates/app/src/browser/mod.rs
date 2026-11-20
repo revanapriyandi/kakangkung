@@ -535,6 +535,16 @@ impl Browser {
         }
     }
 
+    /// Push privacy.adblock + allowlist into the Ladybird LibWeb ContentFilter/ContentBlocker.
+    pub(crate) fn sync_ladybird_adblock(&self) {
+        platform::set_adblock_enabled(self.settings.protection.adblock);
+        platform::configure_adblock_sites(&self.settings.adblock_allowlist);
+        let Some(host) = self.ladybird.as_ref() else { return };
+        if let Err(e) = host.adblock_configure(self.settings.protection.adblock, &self.settings.adblock_allowlist) {
+            eprintln!("ladybird adblock: {e}");
+        }
+    }
+
     /// Apply changed appearance/privacy settings to every open webview.
     pub(crate) fn apply_settings(&mut self, settings: Settings) {
         self.page_menu_on.set((settings.reader, settings.translate, settings.incognito || self.incognito));
@@ -587,6 +597,9 @@ impl Browser {
         if !self.settings.split_view && self.split.is_some() {
             let a = self.active;
             self.tab_action(&format!("unsplit:{a}"));
+        }
+        if new.protection.adblock != old.protection.adblock || new.adblock_allowlist != old.adblock_allowlist {
+            self.sync_ladybird_adblock();
         }
         for i in 0..self.tabs.len() {
             self.apply(i, tabs::Event::ProtectionChanged);
@@ -654,6 +667,10 @@ impl Browser {
         let numeric = ui::numeric_host(ui::host(&url).split(':').next().unwrap_or(""));
         if self.settings.https_first && !numeric && ui::Security::of(&url) == ui::Security::Insecure {
             url = url.replacen("http://", "https://", 1);
+        }
+        if self.settings.protection.adblock && platform::blocks_document_navigation(&url) {
+            eprintln!("adblock: blocked document navigation to {url}");
+            return;
         }
         if let Some(i) = self.index(self.active) {
             let (was, now) = (crate::native::page_of(&self.tabs[i].view.url), crate::native::page_of(&url));

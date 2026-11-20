@@ -85,7 +85,7 @@ Or set `KAKANGKUNG_LADYBIRD_HOST` to the host path.
 | LibWeb `HeadlessWebView` + native blit | `view_ladybird.cpp` (HAVE_LADYBIRD=1) — build on Boat `bx_cnfw3mch` |
 | Downloads / PastDownload from LibWeb | KB-6 — FileDownloader events → live list + SQLite |
 | Page zoom over host protocol | KB-8 — `zoom` cmd + CSS zoom via LibWeb |
-| Adblock request intercept | KB-7 (LibWeb ResourceLoader + EasyList) |
+| Adblock request intercept | KB-7 — ContentFilter/Blocker + EasyList document gate |
 | Memory Saver (discard, not fake Suspend) | KB-9 — map SuspendDue → DropWebview |
 | Chrome-parity pillars | See store `docs/chrome-parity-roadmap.md` (KB-2…KB-9) |
 

@@ -347,6 +347,23 @@ int main(int argc, char** argv)
             }
             continue;
         }
+        if (has_cmd(line, "adblock")) {
+            bool enabled = line.find("\"enabled\":false") == std::string::npos
+                && line.find("\"enabled\":0") == std::string::npos;
+            std::string allowlist;
+            field_str(line, "allowlist", allowlist);
+            // allowlist may contain escaped newlines as \n in JSON string — accept both.
+            for (size_t i = 0; i + 1 < allowlist.size(); ++i) {
+                if (allowlist[i] == '\\' && allowlist[i + 1] == 'n') {
+                    allowlist.replace(i, 2, "\n");
+                }
+            }
+            bool ok = kk_lb_adblock_configure(enabled ? 1 : 0, allowlist.c_str()) != 0;
+            emit(std::string("{\"event\":\"adblock\",\"ok\":") + (ok ? "true" : "false")
+                + ",\"enabled\":" + (enabled ? "true" : "false")
+                + (ok ? "" : ",\"reason\":\"content filter unavailable\"") + "}");
+            continue;
+        }
         if (has_cmd(line, "zoom")) {
             int id = 0;
             if (field_int(line, "id", id)) {

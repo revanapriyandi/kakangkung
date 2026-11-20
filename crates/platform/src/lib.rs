@@ -52,7 +52,10 @@ pub use hash::{random_bytes, sha256, sha256_hex};
 pub use secret::{aes_gcm_decrypt, base64_decode, protect, unprotect};
 
 pub use extensions::{extension_add, extension_change, extensions_list, Extension};
-pub use adblock::{ads_blocked, adblock_blocks_popup, adblock_memory_status, configure_adblock_sites, adblock_site_allowed, adblock_site_enabled, blocked_for_site, adblock_site_key};
+pub use adblock::{
+    ads_blocked, adblock_blocks_popup, adblock_memory_status, adblock_site_allowed, adblock_site_enabled,
+    adblock_site_key, blocked_for_site, blocks_document_navigation, configure_adblock_sites, set_adblock_enabled,
+};
 pub use hooks::{hook_fullscreen, hook_security, hook, unhook, Hooks, Key};
 pub use identity::{edge_identity, on_close_requested, on_lost_focus, present_as_edge, runtime_version, ParentWindow};
 pub use processes::{processes, ProcessMemory};

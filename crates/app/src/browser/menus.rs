@@ -430,6 +430,7 @@ impl Browser {
                 let value = sites.join("\n");
                 self.settings.adblock_allowlist = value.clone();
                 platform::configure_adblock_sites(&value);
+                self.sync_ladybird_adblock();
                 self.db(move |s| s.set_setting("privacy.adblock_allowlist", &value));
                 if let Some(wv) = self.active_webview() { let _ = wv.reload(); }
             }
