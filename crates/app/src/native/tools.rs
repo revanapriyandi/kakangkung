@@ -199,17 +199,50 @@ pub(crate) fn taskmanager_doc(m: &Json) -> PageDoc {
     let mut rows: Vec<Row> = procs
         .iter()
         .map(|p| {
-            let sub = format!("PID {} · commit {}", p["pid"], size(p["commit"].as_i64().unwrap_or(0)));
+            let site = p["site"].as_str().unwrap_or("").trim();
+            let sub = if site.is_empty() {
+                format!("PID {} · commit {}", p["pid"], size(p["commit"].as_i64().unwrap_or(0)))
+            } else {
+                format!(
+                    "PID {} · {} · commit {}",
+                    p["pid"],
+                    site,
+                    size(p["commit"].as_i64().unwrap_or(0))
+                )
+            };
             Row::new(p["kind"].as_str().unwrap_or("Process"), &sub, Control::Value(size(p["ws"].as_i64().unwrap_or(0))))
         })
         .collect();
     rows.push(Row::new("Total", &format!("{} processes · commit {}", procs.len(), size(commit)), Control::Value(size(total))));
+    let sites: Vec<String> = procs
+        .iter()
+        .filter_map(|p| p["site"].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string))
+        .collect();
+    let mut unique_sites = sites.clone();
+    unique_sites.sort();
+    unique_sites.dedup();
+    let isolation = vec![
+        Row::new(
+            "WebContent sites",
+            &format!(
+                "{} distinct site URL(s) from LibWeb ProcessManager (cross-site navigation uses a separate WebContent process)",
+                unique_sites.len()
+            ),
+            Control::Value(unique_sites.len().to_string()),
+        ),
+        Row::new(
+            "Isolation model",
+            "Ladybird swaps WebContent on cross-site navigations. Kakangkung surfaces those PIDs and site URLs — it does not invent fake per-tab processes.",
+            Control::None,
+        ),
+    ];
     PageDoc {
         title: "Task manager".into(),
         search: "Search processes".into(),
         nav: nav(&[("open:taskmanager", "Task manager", "\u{E9D9}"), ("open:settings/performance", "Performance settings", "\u{EC4A}")]),
         sections: vec![
             section("overview", "Overview", overview),
+            section("isolation", "Site isolation", isolation),
             section("processes", "Processes", rows),
             section("about", "", vec![Row::new(
                 "About these numbers",
@@ -262,9 +295,16 @@ mod tests {
         assert!(rows(&doc).iter().any(|r| matches!(&r.control, Control::Toggle { id, on: true } if id == "ext:abc")));
         let err = extensions_doc(&json!({ "error": "open a tab first" }));
         assert!(rows(&err).iter().any(|r| r.sub == "open a tab first"));
-        let tm = taskmanager_doc(&json!({ "processes": [{ "pid": 1, "kind": "GPU", "ws": 1_048_576, "commit": 0 }, { "pid": 2, "kind": "Browser", "ws": 3_145_728, "commit": 0 }], "running": 1, "frozen": 0, "unloaded": 2, "mode": "Balanced" }));
-        let procs = &tm.sections[1].cards[0];
-        assert_eq!(procs[0].title, "Browser");
-        assert_eq!(procs.last().map(|r| r.control.clone()), Some(Control::Value("4.0 MB".into())));
+        let tm = taskmanager_doc(&json!({ "processes": [
+            { "pid": 1, "kind": "GPU", "ws": 1_048_576, "commit": 0 },
+            { "pid": 2, "kind": "Browser", "ws": 3_145_728, "commit": 0 },
+            { "pid": 3, "kind": "WebContent", "ws": 2_097_152, "commit": 0, "site": "https://a.example/" },
+            { "pid": 4, "kind": "WebContent", "ws": 1_048_576, "commit": 0, "site": "https://b.example/" },
+        ], "running": 1, "frozen": 0, "unloaded": 2, "mode": "Balanced" }));
+        assert_eq!(tm.sections[1].id, "isolation");
+        assert!(tm.sections[1].cards[0].iter().any(|r| r.title == "WebContent sites" && matches!(&r.control, Control::Value(v) if v == "2")));
+        let procs = &tm.sections[2].cards[0];
+        assert!(procs.iter().any(|r| r.title == "WebContent" && r.sub.contains("https://a.example/")));
+        assert_eq!(procs.last().map(|r| r.control.clone()), Some(Control::Value("7.0 MB".into())));
     }
 }

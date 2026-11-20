@@ -202,7 +202,8 @@ cast picker or stub protocol. Revisit when Ladybird adds the Web APIs.
 
 `permissions_defaults` / `permissions_list` / `permissions_reset` wrap LibWeb
 `PermissionManager` for geolocation, microphone, and notifications. Settings site.*
-ask/block maps to global defaults. Camera and process-per-site isolation remain deferred.
+ask/block maps to global defaults. Camera remains deferred. **Process-per-site isolation** is
+LibWeb’s own WebContent swap on cross-site navigation; Task Manager shows those sites (B4 / KB-22b).
 
 ## Print preview (KB-20)
 
