@@ -816,9 +816,9 @@ fn json_raw_field(line: &str, key: &str) -> Option<String> {
     if rest.is_empty() {
         return None;
     }
-    if rest.starts_with('"') {
+    if let Some(inner) = rest.strip_prefix('"') {
         let mut out = String::from("\"");
-        let mut chars = rest[1..].chars();
+        let mut chars = inner.chars();
         while let Some(c) = chars.next() {
             out.push(c);
             if c == '\\' {
