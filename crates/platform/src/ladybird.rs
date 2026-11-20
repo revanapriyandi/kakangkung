@@ -24,6 +24,18 @@ thread_local! {
     static PAGE_IPC: RefCell<Vec<(i32, String)>> = const { RefCell::new(Vec::new()) };
     /// Spontaneous WebContent crash events `(ladybird_view_id, reason)`.
     static WEB_CRASHES: RefCell<Vec<(i32, String)>> = const { RefCell::new(Vec::new()) };
+    /// Content-script `chrome.runtime.sendMessage` → host (no MV3 SW yet).
+    static EXT_MESSAGES: RefCell<Vec<ExtMessage>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A pending `chrome.runtime.sendMessage` from a content script.
+#[derive(Debug, Clone)]
+pub struct ExtMessage {
+    pub view_id: i32,
+    pub extension_id: String,
+    pub request_id: String,
+    /// Raw JSON value of the message field (object / array / string / …).
+    pub message_json: String,
 }
 
 /// Take queued page IPC messages `(ladybird_view_id, message)`.
@@ -34,6 +46,11 @@ pub fn take_page_ipc() -> Vec<(i32, String)> {
 /// Take queued WebContent crash notifications `(ladybird_view_id, reason)`.
 pub fn take_web_crashes() -> Vec<(i32, String)> {
     WEB_CRASHES.with(|q| std::mem::take(&mut *q.borrow_mut()))
+}
+
+/// Take queued extension `sendMessage` events for Kakangkung to answer via `Host::ext_reply`.
+pub fn take_ext_messages() -> Vec<ExtMessage> {
+    EXT_MESSAGES.with(|q| std::mem::take(&mut *q.borrow_mut()))
 }
 
 /// How long a single host wait (create / navigate / screenshot / …) may block the UI thread.
@@ -169,6 +186,24 @@ impl Host {
             if let Some(id) = json_i64_field(line, "id").map(|n| n as i32) {
                 let reason = json_str_field(line, "reason").unwrap_or_else(|| "ProcessCrash".into());
                 WEB_CRASHES.with(|q| q.borrow_mut().push((id, reason)));
+                return true;
+            }
+        }
+        if line.contains("\"event\":\"ext_message\"") {
+            if let (Some(view_id), Some(extension_id), Some(request_id)) = (
+                json_i64_field(line, "id").map(|n| n as i32),
+                json_str_field(line, "extension"),
+                json_str_field(line, "requestId"),
+            ) {
+                let message_json = json_raw_field(line, "message").unwrap_or_else(|| "null".into());
+                EXT_MESSAGES.with(|q| {
+                    q.borrow_mut().push(ExtMessage {
+                        view_id,
+                        extension_id,
+                        request_id,
+                        message_json,
+                    })
+                });
                 return true;
             }
         }
@@ -707,6 +742,43 @@ window.ipc=window.ipc||{{postMessage:function(m){{try{{console.log('kk-pw:'+m)}}
         ))
     }
 
+    /// Resolve a content-script `chrome.runtime.sendMessage` callback (`ext_reply` protocol).
+    pub fn ext_reply(&self, view_id: i32, extension_id: &str, request_id: &str, response_json: &str) -> Result<(), String> {
+        let ext = extension_id.replace('\\', "\\\\").replace('"', "\\\"");
+        let req = request_id.replace('\\', "\\\\").replace('"', "\\\"");
+        let response = if response_json.trim().is_empty() {
+            "null"
+        } else {
+            response_json
+        };
+        self.send_line(&format!(
+            r#"{{"cmd":"ext_reply","id":{view_id},"extension":"{ext}","requestId":"{req}","response":{response}}}"#
+        ))?;
+        let deadline = Instant::now() + HOST_WAIT;
+        while Instant::now() < deadline {
+            let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
+            let line = self.read_line_timeout(remain)?;
+            if Self::apply_side_effect(&line) {
+                continue;
+            }
+            if line.contains("\"event\":\"ext_reply\"")
+                && (line.contains(&format!("\"id\":{view_id}")) || line.contains(&format!("\"id\": {view_id}")))
+            {
+                return if line.contains("\"ok\":true") {
+                    Ok(())
+                } else {
+                    Err(format!("ext_reply failed: {line}"))
+                };
+            }
+        }
+        Err("Ladybird host: no ext_reply event".into())
+    }
+
+    /// Ask the host to drain `window.__kk_ext_queue` into `ext_message` events.
+    pub fn ext_drain(&self, view_id: i32) -> Result<(), String> {
+        self.send_line(&format!(r#"{{"cmd":"ext_drain","id":{view_id}}}"#))
+    }
+
     pub fn quit(&self) -> Result<(), String> {
         self.send_line(r#"{"cmd":"quit"}"#)
     }
@@ -734,6 +806,64 @@ fn json_str_field(line: &str, key: &str) -> Option<String> {
     let rest = line.split(&needle).nth(1)?;
     let end = rest.find('"')?;
     Some(rest[..end].to_string())
+}
+
+/// Raw JSON value after `"key":` (object / array / null / number / string).
+fn json_raw_field(line: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\":");
+    let rest = line.split(&needle).nth(1)?;
+    let rest = rest.trim_start();
+    if rest.is_empty() {
+        return None;
+    }
+    if rest.starts_with('"') {
+        let mut out = String::from("\"");
+        let mut chars = rest[1..].chars();
+        while let Some(c) = chars.next() {
+            out.push(c);
+            if c == '\\' {
+                if let Some(n) = chars.next() {
+                    out.push(n);
+                }
+            } else if c == '"' {
+                break;
+            }
+        }
+        return Some(out);
+    }
+    if rest.starts_with('{') || rest.starts_with('[') {
+        let open = rest.chars().next()?;
+        let close = if open == '{' { '}' } else { ']' };
+        let mut depth = 0i32;
+        let mut in_str = false;
+        let mut escape = false;
+        for (i, c) in rest.char_indices() {
+            if in_str {
+                if escape {
+                    escape = false;
+                } else if c == '\\' {
+                    escape = true;
+                } else if c == '"' {
+                    in_str = false;
+                }
+                continue;
+            }
+            match c {
+                '"' => in_str = true,
+                c if c == open => depth += 1,
+                c if c == close => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(rest[..=i].to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+        return None;
+    }
+    let end = rest.find([',', '}']).unwrap_or(rest.len());
+    Some(rest[..end].trim().to_string())
 }
 
 fn json_u64_field(line: &str, key: &str) -> Option<u64> {

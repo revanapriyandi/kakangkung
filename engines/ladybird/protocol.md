@@ -128,6 +128,11 @@ the page callback via `chrome.runtime.__resolve`. **Extension service workers
 remain blocked** — there is no MV3 background SW process in this host (page
 `navigator.serviceWorker` is unrelated).
 
+**KB-24b messaging demux:** Kakangkung drains `ext_message` events, answers with
+`ext_reply` (currently `null` — no background listener without SW), and issues
+`ext_drain` on the active view so `__kk_ext_queue` reaches the host when console
+IPC misses.
+
 Clients that `wait` on `load` with `done:true` can rely on **back** / **forward** / **reload**
 always emitting that event (even when history is empty — a no-op ack) so waiters never hang.
 

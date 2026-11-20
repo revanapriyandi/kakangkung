@@ -98,9 +98,10 @@ Or set `KAKANGKUNG_LADYBIRD_HOST` to the host path.
 | Process-per-site visibility | KB-22 — LibWeb ProcessManager snapshots in Task Manager |
 | Presentation / Chromecast casting | **KB-23 blocked** — LibWeb has no `PresentationRequest` / `RemotePlayback` / Cast API (CompositorPresentation* is GPU frames, not casting). No stub. |
 | Crash recovery / cold start | **KB-25** — `web_content_crashed` → reload; `session.running` marker forces restore after unclean exit |
-| Extension service workers | **KB-24** — content-script `chrome.*` deepen; full MV3 SW blocked (no extension worker host) |
+| Extension service workers | **KB-24** — `chrome.storage.local` + messaging demux; full MV3 SW blocked (no extension worker host) |
 | Paginated print / PDF | **Blocked** — no LibWeb `print_to_pdf`; KB-20 keeps screenshot preview |
 | Chrome-parity pillars | See store `docs/chrome-parity-roadmap.md` (KB-2…KB-25) |
+| Stack merge procedure | Store `docs/merge-stack-14-38.md` — merge bottom-up only when a human says merge |
 
 ## Related
 

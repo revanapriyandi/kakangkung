@@ -311,6 +311,17 @@ fn main() {
             }
             continue;
         }
+        if has_cmd(&line, "ext_reply") {
+            // Stub has no page JS to resolve; still ack so Kakangkung waiters complete.
+            if let Some(id) = field_int(&line, "id") {
+                emit(&format!(r#"{{"event":"ext_reply","id":{id},"ok":true}}"#));
+            }
+            continue;
+        }
+        if has_cmd(&line, "ext_drain") {
+            // No content-script queue in the stub host.
+            continue;
+        }
         if has_cmd(&line, "a11y") {
             if let Some(id) = field_int(&line, "id") {
                 emit(&format!(

@@ -474,6 +474,12 @@ fn main() {
         // Drain Ladybird host stdout so spontaneous download / page_ipc events reach the UI
         // even when no navigate/create wait is active.
         if browser.ladybird.is_some() {
+            // Pull console-missed kk-ext queue entries from the active view, then drain stdout.
+            if let Some(vid) = browser.index(browser.active).and_then(|i| browser.tabs[i].ladybird_view) {
+                if let Some(host) = browser.ladybird.as_ref() {
+                    let _ = host.ext_drain(vid);
+                }
+            }
             let drained = browser.ladybird.as_ref().is_some_and(|h| h.poll_events());
             if drained {
                 let _ = browser.proxy.send_event(Msg::DownloadsChanged);
@@ -503,6 +509,17 @@ fn main() {
                                 Err(e) => eprintln!("KB-25: reload after crash failed: {e}"),
                             }
                         }
+                    }
+                }
+            }
+            // Content→host sendMessage (no MV3 SW). Resolve with null until a native handler exists.
+            for msg in platform::take_ext_messages() {
+                if let Some(host) = browser.ladybird.as_ref() {
+                    if let Err(e) = host.ext_reply(msg.view_id, &msg.extension_id, &msg.request_id, "null") {
+                        eprintln!(
+                            "ext_reply {} / {} failed: {e}",
+                            msg.extension_id, msg.request_id
+                        );
                     }
                 }
             }
