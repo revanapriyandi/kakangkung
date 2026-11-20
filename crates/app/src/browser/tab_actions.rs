@@ -221,7 +221,7 @@ impl Browser {
         self.popup.show_input(
             "find",
             12.0,
-            platform::frame::FRAME_H as f32 - 4.0,
+            platform::frame::FRAME_H - 4.0,
             320.0,
             &text,
             "Find in page",
