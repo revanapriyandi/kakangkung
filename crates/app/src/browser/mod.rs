@@ -21,7 +21,7 @@ mod memory_diagnostics;
 mod tab_preview;
 
 use std::path::PathBuf;
-use std::sync::{mpsc, Mutex};
+use std::sync::mpsc;
 use std::time::Instant;
 
 use serde_json::{json, Value as Json};
@@ -32,42 +32,18 @@ use tao::platform::windows::WindowExtWindows;
 use tao::window::Window;
 use platform::frame::{Chip, Frame, FrameGroup, FrameState, FrameTab};
 use ui::{Action, TabView};
-use wry::{NewWindowResponse, PageLoadEvent, Rect, WebContext, WebView, WebViewBuilder, WebViewExtWindows};
+use wry::{NewWindowResponse, Rect, WebContext, WebView, WebViewExtWindows};
 use wry::dpi::{PhysicalPosition, PhysicalSize};
 
 use crate::{timing, APP};
 use crate::jobs::Job;
 use crate::msg::Msg;
-use crate::pages::{builtin_page, json_reply, random_hex, Reply};
+use crate::pages::{random_hex, Reply};
 use crate::prefs::Settings;
 
 /// wry's default is `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection`.
 /// We keep the first two (Edge-only mini menus) but leave SmartScreen protection ON.
 const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI";
-
-/// Runs in every tab page: reports whether it holds a live camera, microphone or screen-capture
-/// track, so Memory Saver never freezes a call. `track.stop()` fires no event, hence the check
-/// every few seconds, which only runs once the page has captured something.
-pub(crate) const MEDIA_WATCH_JS: &str = include_str!("../../../../assets/media-watch.js");
-
-/// Runs in every tab page, acts only on the Chrome Web Store: the "Add to Kakangkung" button.
-const STORE_JS: &str = include_str!("../../../../assets/webstore.js");
-/// The password manager's page side.
-const PASSWORDS_JS: &str = include_str!("../../../../assets/passwords.js");
-const PREVIEW_READY_JS: &str = r#"(() => {
-  if (window.top !== window || !window.ipc) return;
-  const ready = () => window.ipc.postMessage('kk:preview-ready');
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ready, { once: true });
-  else ready();
-})();"#;
-
-/// Protocol of the one built-in page a webview loads (the self-test's, with its `/api`). wry
-/// serves it by answering every request to `https://<protocol>.*` itself, so the name must not
-/// begin a real site's host: as "kakangkung" it swallowed kakangkung.rnevio.com, the browser's
-/// own website. Native pages (`ui::INTERNAL`) never reach a webview.
-// ponytail: a host starting with "kakangkung-internal." would still be swallowed; an own
-// WebResourceRequested handler for one exact host if that ever matters.
-const PROTOCOL: &str = "kakangkung-internal";
 
 /// Run-wide locations.
 pub(crate) struct Paths {
@@ -444,116 +420,6 @@ impl TabKit {
         // No WebView2 pop-ups. Ladybird will own window.open once the UI port paints HWNDs.
         eprintln!("pop-up blocked (WebView2 disabled): {url}");
         NewWindowResponse::Deny
-    }
-
-    fn configure<'a>(&self, builder: WebViewBuilder<'a>, id: u64, private: bool) -> WebViewBuilder<'a> {
-        let p = self.proxy.clone();
-        let (p1, p2, p3, p4) = (p.clone(), p.clone(), p.clone(), p.clone());
-        let kit = self.clone();
-        let app = self.app.clone(); let navigation = self.proxy.clone();
-        builder.with_navigation_handler(move |url| {
-            // A web page linked to a native page: nothing to load, the tab shows it natively.
-            if crate::native::page_of(&url).is_some() {
-                let _ = navigation.send_event(Msg::Load { id, url, done: true });
-                return false;
-            }
-            if let Some(app) = &app {
-                if url != "about:blank" && !app.contains(&url) {
-                    if url.starts_with("https://") || url.starts_with("http://") { let _ = navigation.send_event(Msg::OpenExternal(url)); }
-                    return false;
-                }
-            }
-            true
-        })
-            .with_initialization_script(MEDIA_WATCH_JS)
-            .with_initialization_script(focus_script(self.focus_highlight))
-            .with_initialization_script(STORE_JS)
-            .with_initialization_script(PASSWORDS_JS)
-            .with_initialization_script(PREVIEW_READY_JS)
-            .with_initialization_script(include_str!("../../../../assets/webapps.js"))
-            // Pages can only send these messages. A page claiming "live" merely keeps itself
-            // from being frozen, which it could also do by playing sound; store messages count
-            // only from the Chrome Web Store, and installing still asks the person first.
-            .with_ipc_handler(move |req| {
-                let body = req.body().as_str();
-                if body == "kk:preview-ready" {
-                    let _ = p4.send_event(Msg::PreviewReady { id, url: req.uri().to_string() });
-                    return;
-                }
-                if let Some(data) = body.strip_prefix("kk:webapp:") {
-                    if data.len() <= 32_768 && !private {
-                        let _ = p4.send_event(Msg::WebAppFound { id, url: req.uri().to_string(), data: data.into() });
-                    }
-                    return;
-                }
-                // Password manager: the page's own origin comes from the browser (the message's
-                // source), never from what the page says.
-                if let Some(what) = body.strip_prefix("kk:pw:") {
-                    let _ = p4.send_event(Msg::Password { tab: id, url: req.uri().to_string(), what: what.to_string() });
-                    return;
-                }
-                if let Some(cmd) = body.strip_prefix("kk:store:") {
-                    if ui::host(&req.uri().to_string()) == crate::webstore::HOST {
-                        let _ = p4.send_event(Msg::Store { tab: id, cmd: cmd.to_string() });
-                    }
-                    return;
-                }
-                if let Some((frame, live)) = media::media_message(body) {
-                    let _ = p4.send_event(Msg::Media { id, frame, live });
-                }
-            })
-            .with_background_color(self.page_bg)
-            .with_incognito(private)
-            .with_devtools(true)
-            .with_theme(self.theme)
-            .with_bounds(self.bounds)
-            .with_https_scheme(true)
-            .with_hotkeys_zoom(true)
-            .with_asynchronous_custom_protocol(PROTOCOL.into(), {
-                let token = self.token.clone();
-                let proxy = Mutex::new(self.proxy.clone());
-                move |_, req, respond| {
-                    let path = req.uri().path().to_string();
-                    let Some(api) = path.strip_prefix("/api/") else {
-                        return respond.respond(builtin_page(&path, &token));
-                    };
-                    // Only Kakangkung's own pages know the token (CSRF guard for the actions below).
-                    let sent = req.headers().get("X-Kakangkung-Token").and_then(|v| v.to_str().ok());
-                    if sent != Some(token.as_str()) {
-                        return respond.respond(json_reply(json!({ "error": "forbidden" })));
-                    }
-                    let msg = Msg::Api {
-                        path: api.to_string(),
-                        query: req.uri().query().unwrap_or("").to_string(),
-                        body: String::from_utf8_lossy(req.body()).into_owned(),
-                        respond: Reply::Http(respond),
-                    };
-                    if let Ok(p) = proxy.lock() {
-                        let _ = p.send_event(msg);
-                    }
-                }
-            })
-            .with_on_page_load_handler(move |ev, url| {
-                let done = matches!(ev, PageLoadEvent::Finished);
-                let _ = p1.send_event(Msg::Load { id, url, done });
-            })
-            .with_document_title_changed_handler(move |title| {
-                let _ = p2.send_event(Msg::Title { id, title });
-            })
-            // `window.open` with a size is a pop-up that keeps `window.opener` (sign-in and
-            // payment pop-ups); everything else opens as a new tab.
-            .with_new_window_req_handler(move |url, features| {
-                if platform::adblock_blocks_popup(&features.opener.webview, &url) { return NewWindowResponse::Deny; }
-                if kit.app.is_some() {
-                    if url.starts_with("https://") || url.starts_with("http://") { let _ = p3.send_event(Msg::OpenExternal(url)); }
-                    return NewWindowResponse::Deny;
-                }
-                if features.size.is_some() {
-                    return kit.popup(id, private, url, features);
-                }
-                let _ = p3.send_event(Msg::OpenTab(url));
-                NewWindowResponse::Deny
-            })
     }
 }
 

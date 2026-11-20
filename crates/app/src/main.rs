@@ -259,7 +259,11 @@ fn main() {
         eprintln!("{}", platform::ladybird_status(&resolution));
         browser.page_engine = resolution.active;
         if let Some(host_path) = resolution.host.clone() {
-            let profile = browser.ctx.data_directory().cloned().unwrap_or_else(|| base.clone());
+            let profile = browser
+                .ctx
+                .data_directory()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_else(|| base.clone());
             let hwnd = browser.window.hwnd() as usize;
             match platform::LadybirdHost::spawn(&host_path, &profile, hwnd) {
                 Ok(host) => {
