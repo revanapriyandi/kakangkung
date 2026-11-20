@@ -236,7 +236,7 @@ fn handle(host: &mut Host, req: Value) -> Option<Value> {
         "ping" => id.map(|i| json!({"jsonrpc":"2.0","id":i,"result":{}})),
         "tools/list" => Some(json!({"jsonrpc":"2.0","id":id,"result":{"tools":tools()}})),
         "tools/call" => {
-            let Some(i) = id else { return None };
+            let i = id?;
             let name = req.pointer("/params/name").and_then(|v| v.as_str()).unwrap_or("");
             let args = req.pointer("/params/arguments").cloned().unwrap_or_else(|| json!({}));
             match call_tool(host, name, &args) {
