@@ -65,6 +65,14 @@ Or set `KAKANGKUNG_LADYBIRD_HOST` to the host path.
 
 `browser.page_engine` = `ladybird` only. Changing it to WebView2 / Chromium is rejected.
 
+### Windows release packaging (KB-38)
+
+Installers and portable zips **must** include `kakangkung-ladybird-host.exe` beside
+`kakangkung.exe` (`installer/bundle-ladybird.ps1`, `release.yml`). Optional
+`ladybird-runtime\` (Lagom libs + `share/Lagom`) comes from secret
+`LADYBIRD_RUNTIME_URL` or `engines/ladybird/package-runtime.sh` on Boat. See
+[RELEASING.md](RELEASING.md).
+
 ## Status
 
 | Item | Status |

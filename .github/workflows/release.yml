@@ -55,7 +55,30 @@ jobs:
         env:
           KAKANGKUNG_GOOGLE_CLIENT_ID: ${{ secrets.KAKANGKUNG_GOOGLE_CLIENT_ID }}
           KAKANGKUNG_GOOGLE_CLIENT_SECRET: ${{ secrets.KAKANGKUNG_GOOGLE_CLIENT_SECRET }}
-        run: cargo build --release --locked --target ${{ matrix.target }}
+        # KB-38: page engine host must ship beside kakangkung.exe (v0.4.4 was ~5 MB exe-only).
+        run: cargo build --release --locked --target ${{ matrix.target }} -p app -p ladybird-host
+
+      # Optional: Windows Lagom/LibWeb runtime archive (Boat or offline build). Without it the
+      # Rust host still ships so tabs are not host-missing; full LibWeb needs this URL.
+      - name: Fetch Ladybird runtime (optional)
+        shell: pwsh
+        env:
+          LADYBIRD_RUNTIME_URL: ${{ secrets.LADYBIRD_RUNTIME_URL }}
+        run: |
+          if (-not $env:LADYBIRD_RUNTIME_URL) {
+            'No LADYBIRD_RUNTIME_URL secret — packaging host only (see docs/RELEASING.md KB-38).'
+            return
+          }
+          $zip = Join-Path $env:RUNNER_TEMP 'ladybird-runtime.zip'
+          $out = Join-Path $env:RUNNER_TEMP 'ladybird-runtime'
+          Invoke-WebRequest -Uri $env:LADYBIRD_RUNTIME_URL -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $out -Force
+          "LADYBIRD_RUNTIME_DIR=$out" | Out-File -Append $env:GITHUB_ENV
+          Get-ChildItem -Recurse $out | Select-Object -First 20 FullName
+
+      - name: Bundle Ladybird into bin dir
+        shell: pwsh
+        run: ./installer/bundle-ladybird.ps1 -BinDir target\${{ matrix.target }}\release
 
       # Signs kakangkung.exe, Setup and the uninstaller when the SIGN_PFX_BASE64 and
       # SIGN_PFX_PASSWORD secrets exist (see docs/RELEASING.md); unsigned otherwise.
@@ -66,13 +89,24 @@ jobs:
           SIGN_PFX_PASSWORD: ${{ secrets.SIGN_PFX_PASSWORD }}
         run: ./installer/build.ps1 -Version $env:VERSION -Arch ${{ matrix.arch }} -BinDir target\${{ matrix.target }}\release
 
-      # After the installer, so the zip holds the same (signed) program file.
+      # After the installer, so the zip holds the same (signed) program file + host (+ runtime).
       - name: Portable zip
         shell: pwsh
         run: |
-          Compress-Archive -Path target\${{ matrix.target }}\release\kakangkung.exe, LICENSE, README.md, `
-            THIRD_PARTY_NOTICES.md, assets\filterlists\LICENSE-MPL-2.0.txt, assets\filterlists\LICENSE-CC-BY-SA-3.0.txt `
-            -DestinationPath "dist\Kakangkung-$env:VERSION-${{ matrix.arch }}.zip"
+          $bin = "target\${{ matrix.target }}\release"
+          $stage = Join-Path $env:RUNNER_TEMP "portable-${{ matrix.arch }}"
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          Copy-Item "$bin\kakangkung.exe" $stage
+          Copy-Item "$bin\kakangkung-ladybird-host.exe" $stage
+          if (Test-Path "$bin\ladybird-runtime") {
+            Copy-Item -Recurse "$bin\ladybird-runtime" (Join-Path $stage 'ladybird-runtime')
+          }
+          Copy-Item LICENSE, README.md, THIRD_PARTY_NOTICES.md $stage
+          Copy-Item assets\filterlists\LICENSE-MPL-2.0.txt, assets\filterlists\LICENSE-CC-BY-SA-3.0.txt $stage
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path "$stage\*" -DestinationPath "dist\Kakangkung-$env:VERSION-${{ matrix.arch }}.zip" -Force
+          Get-Item "dist\Kakangkung-$env:VERSION-${{ matrix.arch }}.zip" |
+            ForEach-Object { "$($_.Name)  $([math]::Round($_.Length / 1MB, 1)) MB" }
 
       - name: Installer smoke test
         if: matrix.arch == 'x64'

@@ -73,6 +73,8 @@ jobs:
         shell: pwsh
         run: |
           $v = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          # KB-38: host must be next to kakangkung.exe inside the installer.
+          ./installer/bundle-ladybird.ps1 -BinDir target\release
           ./installer/build.ps1 -Version $v -Arch x64 -BinDir target\release
           ./installer/smoke-test.ps1 -Setup "dist\Kakangkung-Setup-$v-x64.exe"
 
