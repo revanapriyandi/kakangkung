@@ -1,0 +1,19 @@
+[package]
+name = "ladybird-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Kakangkung Ladybird UI-port host (Rust stub). Replace with LibWeb-linked host from engines/ladybird when built on Boat."
+
+[[bin]]
+name = "kakangkung-ladybird-host"
+path = "src/main.rs"
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Storage_Xps",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
+] }

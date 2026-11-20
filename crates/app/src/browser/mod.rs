@@ -21,7 +21,7 @@ mod memory_diagnostics;
 mod tab_preview;
 
 use std::path::PathBuf;
-use std::sync::{mpsc, Mutex};
+use std::sync::mpsc;
 use std::time::Instant;
 
 use serde_json::{json, Value as Json};
@@ -32,42 +32,18 @@ use tao::platform::windows::WindowExtWindows;
 use tao::window::Window;
 use platform::frame::{Chip, Frame, FrameGroup, FrameState, FrameTab};
 use ui::{Action, TabView};
-use wry::{NewWindowResponse, PageLoadEvent, Rect, WebContext, WebView, WebViewBuilder, WebViewBuilderExtWindows, WebViewExtWindows};
+use wry::{NewWindowResponse, Rect, WebContext, WebView, WebViewExtWindows};
 use wry::dpi::{PhysicalPosition, PhysicalSize};
 
 use crate::{timing, APP};
 use crate::jobs::Job;
 use crate::msg::Msg;
-use crate::pages::{builtin_page, json_reply, random_hex, Reply};
+use crate::pages::{random_hex, Reply};
 use crate::prefs::Settings;
 
 /// wry's default is `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection`.
 /// We keep the first two (Edge-only mini menus) but leave SmartScreen protection ON.
 const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI";
-
-/// Runs in every tab page: reports whether it holds a live camera, microphone or screen-capture
-/// track, so Memory Saver never freezes a call. `track.stop()` fires no event, hence the check
-/// every few seconds, which only runs once the page has captured something.
-pub(crate) const MEDIA_WATCH_JS: &str = include_str!("../../../../assets/media-watch.js");
-
-/// Runs in every tab page, acts only on the Chrome Web Store: the "Add to Kakangkung" button.
-const STORE_JS: &str = include_str!("../../../../assets/webstore.js");
-/// The password manager's page side.
-const PASSWORDS_JS: &str = include_str!("../../../../assets/passwords.js");
-const PREVIEW_READY_JS: &str = r#"(() => {
-  if (window.top !== window || !window.ipc) return;
-  const ready = () => window.ipc.postMessage('kk:preview-ready');
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ready, { once: true });
-  else ready();
-})();"#;
-
-/// Protocol of the one built-in page a webview loads (the self-test's, with its `/api`). wry
-/// serves it by answering every request to `https://<protocol>.*` itself, so the name must not
-/// begin a real site's host: as "kakangkung" it swallowed kakangkung.rnevio.com, the browser's
-/// own website. Native pages (`ui::INTERNAL`) never reach a webview.
-// ponytail: a host starting with "kakangkung-internal." would still be swallowed; an own
-// WebResourceRequested handler for one exact host if that ever matters.
-const PROTOCOL: &str = "kakangkung-internal";
 
 /// Run-wide locations.
 pub(crate) struct Paths {
@@ -78,6 +54,8 @@ pub(crate) struct Paths {
 pub(crate) struct Tab {
     pub(crate) view: TabView,
     pub(crate) webview: Option<WebView>,
+    /// Ladybird host view id when `page_engine` is Ladybird (mutually exclusive with `webview`).
+    pub(crate) ladybird_view: Option<i32>,
     pub(crate) hooks: platform::Hooks,
     pub(crate) state: Lifecycle,
     /// When the tab stopped being visible (memory saver clock).
@@ -89,14 +67,45 @@ pub(crate) struct Tab {
     pub(crate) web_app: Option<crate::webapps::WebApp>,
     pub(crate) connection: site_info::Connection,
     /// Addresses left by switching between a native page and a web page: Back returns to them
-    /// once the webview has no history of its own.
+    /// once the page engine has no history of its own.
     pub(crate) before: Vec<String>,
+    /// Ladybird host history chrome (from `history` events after navigate/back/forward).
+    pub(crate) ladybird_can_back: bool,
+    pub(crate) ladybird_can_forward: bool,
 }
 
 impl Tab {
     /// A tab without a webview yet: activating it creates one (restored and background tabs).
     pub(crate) fn unloaded(view: TabView) -> Self {
-        Self { view, webview: None, hooks: platform::Hooks::default(), state: Lifecycle::Discarded, hidden_since: None, compacted: false, media_frames: media::MediaFrames::default(), revision: 0, document_ready: false, web_app: None, connection: Default::default(), before: vec![] }
+        Self {
+            view,
+            webview: None,
+            ladybird_view: None,
+            hooks: platform::Hooks::default(),
+            state: Lifecycle::Discarded,
+            hidden_since: None,
+            compacted: false,
+            media_frames: media::MediaFrames::default(),
+            revision: 0,
+            document_ready: false,
+            web_app: None,
+            connection: Default::default(),
+            before: vec![],
+            ladybird_can_back: false,
+            ladybird_can_forward: false,
+        }
+    }
+
+    pub(crate) fn apply_ladybird_nav(&mut self, nav: &platform::LadybirdNav) {
+        if let Some(url) = nav.url.as_ref() {
+            self.view.url = url.clone();
+        }
+        if let Some(title) = nav.title.as_ref() {
+            self.view.title = title.clone();
+        }
+        self.ladybird_can_back = nav.can_back;
+        self.ladybird_can_forward = nav.can_forward;
+        self.view.loading = false;
     }
 }
 
@@ -108,6 +117,10 @@ pub(crate) struct Browser {
     /// Profile folder of the tabs; the first tab creates the shared WebView2 environment from it.
     pub(crate) ctx: WebContext,
     pub(crate) env: Option<platform::Environment>,
+    /// Active page engine after resolution (Ladybird when the host is present, else WebView2).
+    pub(crate) page_engine: engine::Kind,
+    /// Ladybird UI-port host process, when `page_engine` is Ladybird.
+    pub(crate) ladybird: Option<platform::LadybirdHost>,
     /// Browser-process switches, applied when the environment is created.
     pub(crate) browser_args: String,
     /// Finished downloads already seen ("Show downloads when they're done" opens the page for new ones).
@@ -142,6 +155,8 @@ pub(crate) struct Browser {
     pub(crate) previews: tab_preview::Previews,
     pub(crate) compact_idle: bool,
     /// Tab background while a page loads, matching the Windows theme (no white flash).
+    /// Kept for Ladybird page surfaces (was WebView2 `with_background_color`).
+    #[allow(dead_code)]
     pub(crate) page_bg: (u8, u8, u8, u8),
     pub(crate) settings: Settings,
     /// The window is shown once the toolbar has painted (no blank flash at start).
@@ -172,6 +187,8 @@ pub(crate) struct Browser {
     /// A second storage thread (its own database connection) for work that takes seconds:
     /// reading another browser's data, a sync round. What pages ask for never waits behind it.
     pub(crate) background: mpsc::Sender<Job>,
+    /// CSRF token for built-in `/api` pages once Ladybird serves them.
+    #[allow(dead_code)]
     pub(crate) token: String,
     pub(crate) paths: Paths,
     pub(crate) synced: bool,
@@ -193,7 +210,8 @@ pub(crate) struct Browser {
     pub(crate) menu_place: (f64, f64, bool),
     /// Self-test only: windows that would open, as (address, Incognito), instead of starting them.
     pub(crate) window_probe: Option<Vec<(String, bool)>>,
-    /// Next id for a pop-up tab (handed out inside the new-window handler).
+    /// Next id for a pop-up tab (handed out inside the new-window handler). Unused until Ladybird hosts pop-ups.
+    #[allow(dead_code)]
     pub(crate) next_popup: std::rc::Rc<std::cell::Cell<u64>>,
     /// An extension's toolbar pop-up, open under the extensions button.
     pub(crate) ext_bubble: Option<WebView>,
@@ -302,6 +320,8 @@ impl Browser {
             frame,
             ctx,
             env: None,
+            page_engine: engine::Kind::Ladybird,
+            ladybird: None,
             browser_args,
             done_downloads: vec![],
             omnibox: omnibox::Omnibox::default(),
@@ -373,46 +393,6 @@ impl Browser {
         })
     }
 
-    /// What every tab webview is built with (also handed to the pop-up handler).
-    fn tab_kit(&self) -> TabKit {
-        TabKit {
-            proxy: self.proxy.clone(),
-            token: self.token.clone(),
-            focus_highlight: self.settings.focus_highlight,
-            page_bg: self.page_bg,
-            theme: self.settings.wry_theme(),
-            app: self.installed_app.clone(),
-            parent: self.window.hwnd(),
-            bounds: page_bounds(&self.window),
-            next_popup: self.next_popup.clone(),
-        }
-    }
-
-    pub(crate) fn build_tab_webview(&mut self, id: u64, url: &str, visible: bool, private: bool) -> wry::Result<WebView> {
-        let kit = self.tab_kit();
-        // WebView2 started early while the address bar was typed in (see `prewarm_webview2`).
-        if self.env.is_none() {
-            self.env = platform::take_prewarmed_environment();
-        }
-        let builder = match &self.env {
-            Some(env) => WebViewBuilder::new().with_environment(env.clone()),
-            None => WebViewBuilder::new_with_web_context(&mut self.ctx)
-                .with_additional_browser_args(&self.browser_args)
-                .with_browser_extensions_enabled(true),
-        };
-        let wv = kit.configure(builder, id, private).with_visible(visible).build_as_child(&self.window)?;
-        if self.env.is_none() {
-            self.env = Some(wv.environment());
-        }
-        // The identity applies from the first request, so the page loads after it.
-        if let Err(e) = platform::present_as_edge(&wv) {
-            eprintln!("tab {id}: browser identity: {e}");
-        }
-        if let Err(error) = platform::prepare_adblock_script(&wv, Some(url), self.settings.protection.adblock, &self.settings.adblock_allowlist) {
-            eprintln!("tab {id}: ad blocker: {error}");
-        }
-        Ok(wv)
-    }
 }
 
 thread_local! {
@@ -431,10 +411,12 @@ pub(crate) fn take_popup(id: u64) -> Option<WebView> {
 }
 
 /// Ids of pop-up tabs start here, apart from the ids the strip hands out.
+#[allow(dead_code)]
 pub(crate) const FIRST_POPUP_ID: u64 = 1 << 40;
 
-/// Everything a tab webview is configured with; cloned into the new-window handler so a pop-up
-/// is built exactly like a tab.
+/// Former WebView2 tab/pop-up kit. Kept (unused) until Ladybird hosts `window.open` / tab page
+/// surfaces in-process; clippy: dead until that lands.
+#[allow(dead_code)]
 #[derive(Clone)]
 pub(crate) struct TabKit {
     proxy: EventLoopProxy<Msg>,
@@ -448,146 +430,22 @@ pub(crate) struct TabKit {
     app: Option<crate::webapps::WebApp>,
 }
 
+#[allow(dead_code)]
 impl TabKit {
     /// A sized `window.open` (sign-in, payment): our own webview instead of WebView2's bare
     /// window, so it keeps `window.opener`, gets the tab handlers and the tab's browser identity
     /// (Google refuses sign-in pop-ups that announce WebView2), and shows as a tab next to its
     /// opener that closes again when the page calls `window.close()`.
     fn popup(&self, opener: u64, private: bool, url: String, features: wry::NewWindowFeatures) -> NewWindowResponse {
-        let id = self.next_popup.get();
-        self.next_popup.set(id + 1);
-        let builder = WebViewBuilder::new().with_environment(features.opener.environment);
-        let built = self.configure(builder, id, private).with_visible(false).build_as_child(&platform::ParentWindow(self.parent));
-        match built {
-            Ok(wv) => {
-                if let Err(e) = platform::present_as_edge(&wv) {
-                    eprintln!("pop-up: browser identity: {e}");
-                }
-                let core = wv.webview();
-                POPUPS.with(|p| p.borrow_mut().push((id, wv)));
-                let _ = self.proxy.send_event(Msg::Popup { id, opener, url });
-                NewWindowResponse::Create { webview: core }
-            }
-            Err(e) => {
-                eprintln!("pop-up: {e}");
-                NewWindowResponse::Allow
-            }
-        }
-    }
-
-    fn configure<'a>(&self, builder: WebViewBuilder<'a>, id: u64, private: bool) -> WebViewBuilder<'a> {
-        let p = self.proxy.clone();
-        let (p1, p2, p3, p4) = (p.clone(), p.clone(), p.clone(), p.clone());
-        let kit = self.clone();
-        let app = self.app.clone(); let navigation = self.proxy.clone();
-        builder.with_navigation_handler(move |url| {
-            // A web page linked to a native page: nothing to load, the tab shows it natively.
-            if crate::native::page_of(&url).is_some() {
-                let _ = navigation.send_event(Msg::Load { id, url, done: true });
-                return false;
-            }
-            if let Some(app) = &app {
-                if url != "about:blank" && !app.contains(&url) {
-                    if url.starts_with("https://") || url.starts_with("http://") { let _ = navigation.send_event(Msg::OpenExternal(url)); }
-                    return false;
-                }
-            }
-            true
-        })
-            .with_initialization_script(MEDIA_WATCH_JS)
-            .with_initialization_script(focus_script(self.focus_highlight))
-            .with_initialization_script(STORE_JS)
-            .with_initialization_script(PASSWORDS_JS)
-            .with_initialization_script(PREVIEW_READY_JS)
-            .with_initialization_script(include_str!("../../../../assets/webapps.js"))
-            // Pages can only send these messages. A page claiming "live" merely keeps itself
-            // from being frozen, which it could also do by playing sound; store messages count
-            // only from the Chrome Web Store, and installing still asks the person first.
-            .with_ipc_handler(move |req| {
-                let body = req.body().as_str();
-                if body == "kk:preview-ready" {
-                    let _ = p4.send_event(Msg::PreviewReady { id, url: req.uri().to_string() });
-                    return;
-                }
-                if let Some(data) = body.strip_prefix("kk:webapp:") {
-                    if data.len() <= 32_768 && !private {
-                        let _ = p4.send_event(Msg::WebAppFound { id, url: req.uri().to_string(), data: data.into() });
-                    }
-                    return;
-                }
-                // Password manager: the page's own origin comes from the browser (the message's
-                // source), never from what the page says.
-                if let Some(what) = body.strip_prefix("kk:pw:") {
-                    let _ = p4.send_event(Msg::Password { tab: id, url: req.uri().to_string(), what: what.to_string() });
-                    return;
-                }
-                if let Some(cmd) = body.strip_prefix("kk:store:") {
-                    if ui::host(&req.uri().to_string()) == crate::webstore::HOST {
-                        let _ = p4.send_event(Msg::Store { tab: id, cmd: cmd.to_string() });
-                    }
-                    return;
-                }
-                if let Some((frame, live)) = media::media_message(body) {
-                    let _ = p4.send_event(Msg::Media { id, frame, live });
-                }
-            })
-            .with_background_color(self.page_bg)
-            .with_incognito(private)
-            .with_devtools(true)
-            .with_theme(self.theme)
-            .with_bounds(self.bounds)
-            .with_https_scheme(true)
-            .with_hotkeys_zoom(true)
-            .with_asynchronous_custom_protocol(PROTOCOL.into(), {
-                let token = self.token.clone();
-                let proxy = Mutex::new(self.proxy.clone());
-                move |_, req, respond| {
-                    let path = req.uri().path().to_string();
-                    let Some(api) = path.strip_prefix("/api/") else {
-                        return respond.respond(builtin_page(&path, &token));
-                    };
-                    // Only Kakangkung's own pages know the token (CSRF guard for the actions below).
-                    let sent = req.headers().get("X-Kakangkung-Token").and_then(|v| v.to_str().ok());
-                    if sent != Some(token.as_str()) {
-                        return respond.respond(json_reply(json!({ "error": "forbidden" })));
-                    }
-                    let msg = Msg::Api {
-                        path: api.to_string(),
-                        query: req.uri().query().unwrap_or("").to_string(),
-                        body: String::from_utf8_lossy(req.body()).into_owned(),
-                        respond: Reply::Http(respond),
-                    };
-                    if let Ok(p) = proxy.lock() {
-                        let _ = p.send_event(msg);
-                    }
-                }
-            })
-            .with_on_page_load_handler(move |ev, url| {
-                let done = matches!(ev, PageLoadEvent::Finished);
-                let _ = p1.send_event(Msg::Load { id, url, done });
-            })
-            .with_document_title_changed_handler(move |title| {
-                let _ = p2.send_event(Msg::Title { id, title });
-            })
-            // `window.open` with a size is a pop-up that keeps `window.opener` (sign-in and
-            // payment pop-ups); everything else opens as a new tab.
-            .with_new_window_req_handler(move |url, features| {
-                if platform::adblock_blocks_popup(&features.opener.webview, &url) { return NewWindowResponse::Deny; }
-                if kit.app.is_some() {
-                    if url.starts_with("https://") || url.starts_with("http://") { let _ = p3.send_event(Msg::OpenExternal(url)); }
-                    return NewWindowResponse::Deny;
-                }
-                if features.size.is_some() {
-                    return kit.popup(id, private, url, features);
-                }
-                let _ = p3.send_event(Msg::OpenTab(url));
-                NewWindowResponse::Deny
-            })
+        let _ = (private, features);
+        // No WebView2: sized window.open becomes a Ladybird tab next to the opener.
+        eprintln!("window.open → Ladybird tab (opener={opener}): {url}");
+        let _ = self.proxy.send_event(Msg::OpenTab(url));
+        NewWindowResponse::Deny
     }
 }
 
 impl Browser {
-
     pub(crate) fn hook_tab(&self, id: u64, wv: &WebView) -> platform::Hooks {
         let (p1, p2, p3, p4) = (self.proxy.clone(), self.proxy.clone(), self.proxy.clone(), self.proxy.clone());
         let mut hooks = platform::hook(
@@ -794,7 +652,17 @@ impl Browser {
                 return;
             }
             self.tabs[i].view.url = url.clone();
-            if let Some(wv) = &self.tabs[i].webview {
+            let tab_id = self.tabs[i].view.id;
+            if let (Some(host), Some(vid)) = (self.ladybird.as_ref(), self.tabs[i].ladybird_view) {
+                match host.navigate(vid, &url) {
+                    Ok(nav) => {
+                        self.tabs[i].apply_ladybird_nav(&nav);
+                        let url = self.tabs[i].view.url.clone();
+                        let _ = self.proxy.send_event(Msg::Load { id: tab_id, url, done: true });
+                    }
+                    Err(e) => eprintln!("ladybird navigate({url}) failed: {e}"),
+                }
+            } else if let Some(wv) = &self.tabs[i].webview {
                 if let Err(e) = wv.load_url(&url) {
                     eprintln!("load_url({url}) failed: {e}");
                 }
@@ -851,19 +719,48 @@ impl Browser {
                 }
             }
             Action::Reload => {
-                if let Some(wv) = self.active_webview() {
-                    let _ = wv.reload();
+                if let Some(i) = self.index(self.active) {
+                    if let (Some(host), Some(vid)) = (self.ladybird.as_ref(), self.tabs[i].ladybird_view) {
+                        let id = self.tabs[i].view.id;
+                        match host.reload(vid) {
+                            Ok(nav) => {
+                                self.tabs[i].apply_ladybird_nav(&nav);
+                                let url = self.tabs[i].view.url.clone();
+                                let _ = self.proxy.send_event(Msg::Load { id, url, done: true });
+                            }
+                            Err(e) => eprintln!("ladybird reload failed: {e}"),
+                        }
+                    } else if let Some(wv) = self.active_webview() {
+                        let _ = wv.reload();
+                    }
                 }
             }
             Action::Back => {
-                let own = self.active_webview().is_some_and(|wv| wv.can_go_back().unwrap_or(false));
-                match (own, self.index(self.active)) {
-                    (true, _) => {
+                let ladybird_own = self
+                    .index(self.active)
+                    .is_some_and(|i| self.tabs[i].ladybird_view.is_some() && self.tabs[i].ladybird_can_back);
+                let webview_own = self.active_webview().is_some_and(|wv| wv.can_go_back().unwrap_or(false));
+                match (ladybird_own, webview_own, self.index(self.active)) {
+                    (true, _, Some(i)) => {
+                        if let (Some(host), Some(vid)) = (self.ladybird.as_ref(), self.tabs[i].ladybird_view) {
+                            let id = self.tabs[i].view.id;
+                            match host.go_back(vid) {
+                                Ok(nav) => {
+                                    self.tabs[i].apply_ladybird_nav(&nav);
+                                    let url = self.tabs[i].view.url.clone();
+                                    let _ = self.proxy.send_event(Msg::Load { id, url, done: true });
+                                    self.render();
+                                }
+                                Err(e) => eprintln!("ladybird back failed: {e}"),
+                            }
+                        }
+                    }
+                    (_, true, _) => {
                         if let Some(wv) = self.active_webview() {
                             let _ = wv.go_back();
                         }
                     }
-                    (false, Some(i)) => {
+                    (_, _, Some(i)) => {
                         if let Some(url) = self.tabs[i].before.pop() {
                             self.tabs[i].view.url = url;
                             self.reload_kind(i);
@@ -874,8 +771,23 @@ impl Browser {
                 }
             }
             Action::Forward => {
-                if let Some(wv) = self.active_webview() {
-                    let _ = wv.go_forward();
+                if let Some(i) = self.index(self.active) {
+                    if self.tabs[i].ladybird_view.is_some() && self.tabs[i].ladybird_can_forward {
+                        if let (Some(host), Some(vid)) = (self.ladybird.as_ref(), self.tabs[i].ladybird_view) {
+                            let id = self.tabs[i].view.id;
+                            match host.go_forward(vid) {
+                                Ok(nav) => {
+                                    self.tabs[i].apply_ladybird_nav(&nav);
+                                    let url = self.tabs[i].view.url.clone();
+                                    let _ = self.proxy.send_event(Msg::Load { id, url, done: true });
+                                    self.render();
+                                }
+                                Err(e) => eprintln!("ladybird forward failed: {e}"),
+                            }
+                        }
+                    } else if let Some(wv) = self.active_webview() {
+                        let _ = wv.go_forward();
+                    }
                 }
             }
             Action::Home => self.navigate(&self.settings.home_url.clone()),
@@ -934,7 +846,12 @@ impl Browser {
             .active_webview()
             .map(|wv| (wv.can_go_back().unwrap_or(false), wv.can_go_forward().unwrap_or(false)))
             .unwrap_or((false, false));
-        let can_back = can_back || self.index(self.active).is_some_and(|i| !self.tabs[i].before.is_empty());
+        let can_back = can_back
+            || self.index(self.active).is_some_and(|i| {
+                !self.tabs[i].before.is_empty() || self.tabs[i].ladybird_can_back
+            });
+        let can_forward = can_forward
+            || self.index(self.active).is_some_and(|i| self.tabs[i].ladybird_can_forward);
         if let Some(t) = self.tabs.iter().find(|t| t.view.id == self.active) {
             let title = if t.view.title.is_empty() { "New Tab" } else { &t.view.title };
             let mode = if self.incognito { " (Incognito)" } else { "" };

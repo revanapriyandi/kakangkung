@@ -17,6 +17,8 @@ impl MediaFrames {
     pub(crate) fn clear(&mut self) { self.live.clear(); self.overflow = false; }
 }
 
+/// Parses `kk:media:` IPC from the page script (dormant until Ladybird injects MEDIA_WATCH_JS).
+#[allow(dead_code)]
 pub(crate) fn media_message(body: &str) -> Option<(String, bool)> {
     let fields = body.strip_prefix("kk:media:")?;
     let (frame, live) = fields.rsplit_once(':').unwrap_or(("legacy", fields));

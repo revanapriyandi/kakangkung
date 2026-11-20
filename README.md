@@ -25,9 +25,10 @@
 </p>
 
 Kakangkung draws its whole interface itself — tab strip, toolbar, address bar, menus, pop-ups and
-every built-in page — with Direct2D, like Chrome and Edge do. Only web pages are rendered by the
-engine, Microsoft Edge WebView2 (Chromium). There is no HTML in the browser's own UI, so a tab that
-shows Settings or History has no page process at all.
+every built-in page — with Direct2D. Web pages are rendered by **[Ladybird](https://ladybird.org)**
+(LibWeb), not by Microsoft Edge WebView2 or Chromium. There is no HTML in the browser's own UI, so a
+tab that shows Settings or History has no page process at all. Ladybird host builds: [docs/LADYBIRD.md](docs/LADYBIRD.md)
+(prefer [Boat](https://boat.dev/dashboard)).
 
 ## Download
 
@@ -39,14 +40,13 @@ Get the installer for your PC from the **[latest release](https://github.com/rev
 | Windows 11 on ARM (Snapdragon) | `Kakangkung-Setup-<version>-arm64.exe` |
 | No installation (portable) | `Kakangkung-<version>-<x64 or arm64>.zip` |
 
-The installer needs no administrator rights, installs Microsoft Edge WebView2 when the PC does not
-have it, and **keeps Kakangkung up to date automatically**: new versions are downloaded in the
-background, checked against their SHA-256, and installed when you close the browser — or at once
-with ⋮ > *Restart to update*. Details: [docs/INSTALL.md](docs/INSTALL.md),
+The installer needs no administrator rights and **keeps Kakangkung up to date automatically**: new
+versions are downloaded in the background, checked against their SHA-256, and installed when you
+close the browser — or at once with ⋮ > *Restart to update*. Details: [docs/INSTALL.md](docs/INSTALL.md),
 [docs/UPDATES.md](docs/UPDATES.md).
 
-> Windows only. Kakangkung is built on Win32, Direct2D and WebView2; macOS and Linux are not
-> supported.
+> Windows chrome (Win32 + Direct2D) today; page engine is Ladybird. macOS/Linux chrome is not
+> supported yet. Build the Ladybird host on [Boat](https://boat.dev/dashboard) — see [docs/LADYBIRD.md](docs/LADYBIRD.md).
 
 ## Features
 
@@ -138,23 +138,27 @@ toolchain is pinned in `rust-toolchain.toml`).
 ```powershell
 git clone https://github.com/revanapriyandi/kakangkung
 cd kakangkung
-cargo run --release
+cargo build --release -p ladybird-host -p app
+cargo run --release -p app
 ```
 
-More, including the installer, the self-test and ARM64 builds: [docs/BUILDING.md](docs/BUILDING.md).
+`kakangkung-ladybird-host` must sit next to `kakangkung.exe` (both land in `target\release\` when
+built together). More: [docs/BUILDING.md](docs/BUILDING.md), [docs/LADYBIRD.md](docs/LADYBIRD.md).
 
 ## Project layout
 
 ```
-crates/app/        the browser: window, tabs, built-in pages (native/), updater, self-test
-crates/platform/   all Windows code (the only crate with `unsafe`): native frame, pop-ups and
-                   pages (Direct2D), menus, WebView2, downloads, HTTP, SQLite, SHA-256
-crates/ui/         address-bar input, shortcuts, security state, the logo
-crates/tabs/       tab lifecycle state machine (active, idle, frozen, discarded)
-crates/memory/     Memory Saver modes and protection rules
-crates/storage/    history, bookmarks, settings, import from other browsers, sync
-installer/         Inno Setup installer
-docs/              settings, design notes, building, releasing, updates
+crates/app/             the browser: window, tabs, built-in pages (native/), updater, self-test
+crates/engine/          page-engine selection (Ladybird only)
+crates/ladybird-host/   Ladybird UI-port host (Rust stub; LibWeb host on Boat)
+crates/platform/        Windows code: native frame, pop-ups, pages (Direct2D), Ladybird IPC, …
+crates/ui/              address-bar input, shortcuts, security state, the logo
+crates/tabs/            tab lifecycle state machine (active, idle, frozen, discarded)
+crates/memory/          Memory Saver modes and protection rules
+crates/storage/         history, bookmarks, settings, import from other browsers, sync
+engines/ladybird/       C++ Ladybird UI-port scaffolding (full LibWeb link on Boat)
+installer/              Inno Setup installer
+docs/                   settings, design notes, building, Ladybird, releasing, updates
 ```
 
 ## Contributing

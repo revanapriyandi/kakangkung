@@ -24,7 +24,7 @@ use crate::frame::style::{color, glyph};
 /// Pages bigger than this (physical pixels) are drawn with the GPU.
 const GPU_ABOVE_PIXELS: u64 = 2_200_000;
 
-/// The page's colours (Chrome's settings look in Kakangkung's purple).
+/// Settings / built-in page colours: Kakangkung brand violet as accent on a calm charcoal/paper base.
 pub(super) struct Colors {
     pub bg: u32,
     pub card: u32,
@@ -42,9 +42,35 @@ pub(super) struct Colors {
 
 pub(super) fn colors(dark: bool) -> Colors {
     if dark {
-        Colors { bg: 0x1c1a21, card: 0x2a2830, text: 0xebe8f2, muted: 0xb5b2bd, line: 0x3a3842, brand: 0xa78bfa, on_brand: 0x1c1a21, selected: 0x3f3456, hover: (0xffffff, 0.07), field: 0x24222a, danger: 0xf2b8b5, off: 0x5a5763 }
+        Colors {
+            bg: 0x141318,
+            card: 0x1e1c24,
+            text: 0xf0eef4,
+            muted: 0x9e9ba8,
+            line: 0x2e2c36,
+            brand: 0xb59bff,
+            on_brand: 0x141318,
+            selected: 0x2a2438,
+            hover: (0xffffff, 0.06),
+            field: 0x1a1820,
+            danger: 0xf2b8b5,
+            off: 0x55525e,
+        }
     } else {
-        Colors { bg: 0xf6f4fa, card: 0xffffff, text: 0x1f1d24, muted: 0x5f5c66, line: 0xeceaf1, brand: 0x7c3aed, on_brand: 0xffffff, selected: 0xebe3fd, hover: (0x1f1f1f, 0.05), field: 0xf1eef8, danger: 0xb3261e, off: 0xc9c5d0 }
+        Colors {
+            bg: 0xf3f2f5,
+            card: 0xffffff,
+            text: 0x1a1820,
+            muted: 0x5c5966,
+            line: 0xe4e2e9,
+            brand: 0x5b21b6,
+            on_brand: 0xffffff,
+            selected: 0xeee8f8,
+            hover: (0x1a1820, 0.04),
+            field: 0xeeedf1,
+            danger: 0xb3261e,
+            off: 0xc5c2cc,
+        }
     }
 }
 
@@ -339,16 +365,23 @@ impl Inner {
             let r = self.layout.nav_item(k);
             let on = current == Some(item.id.as_str());
             if on {
-                p.fill(r, 20.0, c.selected, 1.0);
+                p.fill(r, 8.0, c.selected, 1.0);
+                // Brand rail marks the active section without washing the whole row purple.
+                p.fill(rect(r.left + 2.0, r.top + 8.0, 3.0, (r.bottom - r.top) - 16.0), 1.5, c.brand, 1.0);
             } else {
                 let a = self.lit(Target::Nav(k));
                 if a > 0.001 {
-                    p.fill(r, 20.0, c.hover.0, c.hover.1 * a);
+                    p.fill(r, 8.0, c.hover.0, c.hover.1 * a);
                 }
             }
-            let fg = if on { c.brand } else { c.text };
-            p.text(&item.icon, rect(r.left + 12.0, r.top, 24.0, r.bottom - r.top), &self.fonts.icons, fg);
-            p.text(&item.label, rect(r.left + 48.0, r.top, r.right - r.left - 56.0, r.bottom - r.top), if on { &self.fonts.nav_on } else { &self.fonts.nav }, fg);
+            let icon = if on { c.brand } else { c.muted };
+            p.text(&item.icon, rect(r.left + 14.0, r.top, 24.0, r.bottom - r.top), &self.fonts.icons, icon);
+            p.text(
+                &item.label,
+                rect(r.left + 48.0, r.top, r.right - r.left - 56.0, r.bottom - r.top),
+                if on { &self.fonts.nav_on } else { &self.fonts.nav },
+                c.text,
+            );
         }
     }
 
@@ -379,11 +412,15 @@ impl Inner {
         }
         for &card in &self.layout.cards {
             if card.bottom > from && card.top < to {
-                // A soft two-step shadow, the card, and a hairline edge.
-                p.fill(D2D_RECT_F { top: card.top + 3.0, bottom: card.bottom + 3.0, ..card }, 12.0, 0x000000, if self.dark { 0.12 } else { 0.025 });
-                p.fill(D2D_RECT_F { top: card.top + 1.0, bottom: card.bottom + 1.0, ..card }, 12.0, 0x000000, if self.dark { 0.22 } else { 0.05 });
-                p.fill(card, 12.0, c.card, 1.0);
-                p.outline(card, 12.0, c.line, 1.0);
+                // One soft lift + hairline — professional settings, not stacked glow.
+                p.fill(
+                    D2D_RECT_F { top: card.top + 2.0, bottom: card.bottom + 2.0, ..card },
+                    10.0,
+                    0x000000,
+                    if self.dark { 0.28 } else { 0.04 },
+                );
+                p.fill(card, 10.0, c.card, 1.0);
+                p.outline(card, 10.0, c.line, 1.0);
             }
         }
         for (k, b) in self.layout.rows.iter().enumerate() {

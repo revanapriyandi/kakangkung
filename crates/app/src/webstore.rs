@@ -1,13 +1,13 @@
 //! Installing extensions from the Chrome Web Store.
 //!
-//! The store's own "Add to Chrome" button needs Chrome's private store API, which WebView2 does
-//! not have. Kakangkung puts its own button on the store's extension pages (assets/webstore.js);
-//! a click downloads the extension's CRX from Google's update service, unpacks it into
-//! `Extensions/<id>` and loads it unpacked (`AddBrowserExtension`).
+//! The store's own "Add to Chrome" button needs Chrome's private store API. Kakangkung puts its
+//! own button on the store's extension pages (`assets/webstore.js`); a click downloads the CRX
+//! from Google's update service, unpacks it into `Extensions/<id>`, and registers it for the
+//! Ladybird / native host (MV3 manifests preferred). There is no WebView2 `AddBrowserExtension`
+//! path — content scripts and `chrome.*` APIs run when LibWebView extension support lands.
 //!
 //! The CRX's public key goes into the unpacked manifest as `key`, so the extension keeps its
-//! store id (its storage, the sync list and the toolbar menu all go by id).
-//! Blocking (download, unzip): run off the UI thread.
+//! store id (storage, sync list, toolbar menu). Blocking (download, unzip): run off the UI thread.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,6 +22,42 @@ const MAX_CRX: usize = 200 * 1024 * 1024;
 /// An extension id: 32 letters a–p.
 pub(crate) fn valid_id(id: &str) -> bool {
     id.len() == 32 && id.bytes().all(|b| (b'a'..=b'p').contains(&b))
+}
+
+/// Extensions unpacked on disk under `root` (Ladybird registry — no WebView2 profile).
+pub(crate) fn list_installed(root: &Path) -> Vec<platform::Extension> {
+    let Ok(entries) = std::fs::read_dir(root) else { return vec![] };
+    let mut out: Vec<platform::Extension> = entries
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().into_string().ok()?;
+            if !valid_id(&name) || !e.path().join("manifest.json").is_file() {
+                return None;
+            }
+            let disabled = e.path().join(".disabled").is_file();
+            Some(platform::Extension {
+                id: name.clone(),
+                name: display_name(&e.path()).unwrap_or(name),
+                enabled: !disabled,
+            })
+        })
+        .collect();
+    out.sort_by_key(|a| a.name.to_lowercase());
+    out
+}
+
+/// Mark an on-disk extension enabled or disabled (Ladybird host reads `.disabled`).
+pub(crate) fn set_enabled(root: &Path, id: &str, enabled: bool) -> Result<(), String> {
+    if !valid_id(id) {
+        return Err("not an extension id".into());
+    }
+    let marker = root.join(id).join(".disabled");
+    if enabled {
+        let _ = std::fs::remove_file(&marker);
+        Ok(())
+    } else {
+        std::fs::write(&marker, b"1").map_err(|e| e.to_string())
+    }
 }
 
 /// The id Chrome derives from a public key: SHA-256, first 16 bytes, each nibble as a–p.

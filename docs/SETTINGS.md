@@ -186,6 +186,7 @@ shows whether Kakangkung is the default.
 
 | Setting | Key | Values | Applies |
 |---|---|---|---|
+| Page engine | `browser.page_engine` | **ladybird** only (WebView2 / Chromium removed) | Restart |
 | Use graphics acceleration when available | `system.hardware_acceleration` | **on** / off | Restart |
 | Update Kakangkung automatically | `system.auto_update` | **on** / off (check GitHub releases, download and verify in the background, install when Kakangkung closes; see docs/UPDATES.md) | Live |
 | Open your computer's proxy settings | — | opens Windows proxy settings | — |

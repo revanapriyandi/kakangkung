@@ -12,6 +12,7 @@ platform = { path = "../platform" }
 tabs = { path = "../tabs" }
 storage = { path = "../storage" }
 memory = { path = "../memory" }
+engine.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 ui = { path = "../ui" }

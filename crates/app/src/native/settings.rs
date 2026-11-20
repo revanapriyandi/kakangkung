@@ -138,21 +138,28 @@ pub(crate) fn settings_doc(s: &Json, permissions: Option<&[Json]>) -> PageDoc {
             v.toggle("downloads.show_done", "Show downloads when they're done", "Opens the Downloads page"),
             Row::new("Show downloads", "Ctrl+J", Control::None),
         ]]),
-        section("accessibility", "Accessibility", "accessibility focus highlight keyboard animations motion zoom", vec![vec![
-            v.toggle("accessibility.focus_highlight", "Show a highlight on the focused object", "A thick outline follows the keyboard focus on web pages"),
+        section("accessibility", "Accessibility", "accessibility focus highlight keyboard animations motion zoom screen reader a11y", vec![vec![
+            v.toggle("accessibility.focus_highlight", "Show a highlight on the focused object", "Thick outline on keyboard focus in native chrome; LibWeb pages when the Boat host links a11y"),
+            Row::new("Screen reader / a11y tree", "Agents and AT can request a document tree via the Ladybird host `a11y` command and kakangkung-mcp", Control::None),
             Row::new("Animations and smooth scrolling", "Set under Appearance > Motion", Control::Link { id: "open:settings/appearance".into() }),
             Row::new("Page zoom", "Set under Appearance; Ctrl + / Ctrl − change one tab", Control::None),
         ]]),
-        section("system", "System", "system hardware acceleration gpu proxy network", vec![vec![
+        section("system", "System", "system hardware acceleration gpu proxy network ladybird webview2 page engine", vec![vec![
             v.toggle("system.hardware_acceleration", "Use graphics acceleration when available", "Takes effect after you restart Kakangkung"),
             v.toggle("system.auto_update", "Update Kakangkung automatically", "New versions are downloaded in the background, checked, and installed when you close Kakangkung"),
+            v.select(
+                "browser.page_engine",
+                "Page engine",
+                "Ladybird (LibWeb) only — Kakangkung no longer uses WebView2 or Chromium. Build the host on Boat (docs/LADYBIRD.md).",
+                &[("ladybird", "Ladybird")],
+            ),
             Row::new("Open your computer's proxy settings", "Kakangkung uses the Windows network settings", buttons(&[("proxy", "Open", ButtonStyle::Normal)])),
         ]]),
         section("reset", "Reset settings", "reset restore defaults original", vec![vec![
             Row::new("Restore settings to their original defaults", "Your account, history, bookmarks and downloads stay", buttons(&[("reset-all", "Reset settings", ButtonStyle::Danger)])),
         ]]),
-        section("about", "About Kakangkung", "about version update updates webview2", vec![vec![
-            Row::new("Kakangkung", &format!("Version {} · Chromium {}", text("version"), text("webview2")), Control::Avatar { initial: "K".into() }),
+        section("about", "About Kakangkung", "about version update updates webview2 ladybird", vec![vec![
+            Row::new("Kakangkung", &format!("Version {} · Ladybird page engine", text("version")), Control::Avatar { initial: "K".into() }),
             update_row(&s["update"], v.on("system.auto_update")),
             Row::new("Source code, help and releases", "github.com/revanapriyandi/kakangkung", Control::Link { id: "visit:https://github.com/revanapriyandi/kakangkung".into() }),
         ]]),

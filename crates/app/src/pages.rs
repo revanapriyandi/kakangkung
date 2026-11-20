@@ -10,6 +10,8 @@ use wry::RequestAsyncResponder;
 use crate::msg::Msg;
 use crate::APP;
 
+/// HTML helper for the former wry custom-protocol pages (self-test); kept for Ladybird hosting.
+#[allow(dead_code)]
 pub(crate) fn html(body: Cow<'static, [u8]>, status: u16) -> Response<Cow<'static, [u8]>> {
     reply(body, status, "text/html; charset=utf-8")
 }
@@ -19,6 +21,7 @@ pub(crate) const INTERNAL_CSP: &str = "default-src 'self'; script-src 'self' 'un
     img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'";
 
 /// The ad-network host the self-test's ad-blocker step asks for (see `selftest`).
+#[allow(dead_code)]
 pub(crate) const SELFTEST_AD: &str = "https://securepubads.g.doubleclick.net";
 
 pub(crate) fn reply(body: Cow<'static, [u8]>, status: u16, content_type: &str) -> Response<Cow<'static, [u8]>> {
@@ -50,6 +53,8 @@ pub(crate) fn api_json<T: serde::Serialize>(r: Result<T, String>) -> Json {
 
 /// Where an API answer goes: a built-in HTML page's request, or a native page (as a message).
 pub(crate) enum Reply {
+    /// Built-in wry/custom-protocol responder; unused until Ladybird serves `/api`.
+    #[allow(dead_code)]
     Http(RequestAsyncResponder),
     Native { proxy: EventLoopProxy<Msg>, path: String, done: String },
 }
@@ -67,6 +72,7 @@ impl Reply {
 
 /// What the built-in host serves to webviews: only the self-test's blank page, which carries the
 /// session token for its `/api` script. Every page people see is native (`crate::native`).
+#[allow(dead_code)]
 pub(crate) fn builtin_page(path: &str, token: &str) -> Response<Cow<'static, [u8]>> {
     match path {
         "/selftest" => {

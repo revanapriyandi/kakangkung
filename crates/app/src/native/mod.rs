@@ -16,12 +16,12 @@ pub(crate) use lists::{bookmarks_doc, history_doc};
 pub(crate) use passwords::passwords_doc;
 pub(crate) use settings::settings_doc;
 pub(crate) use start::{incognito_doc, launch_doc, newtab_doc, top_sites};
-pub(crate) use tools::{downloads_doc, extensions_doc, taskmanager_doc};
+pub(crate) use tools::{devtools_doc, downloads_doc, extensions_doc, taskmanager_doc};
 pub(crate) use welcome::welcome_doc;
 
 /// Every built-in page, by its path under `ui::INTERNAL` ("" is the New Tab page). Each page's
 /// data is the `/api` answer named by `data_path`.
-const NATIVE: &[&str] = &["newtab", "settings", "history", "bookmarks", "downloads", "extensions", "taskmanager", "signin", "sync", "welcome", "incognito", "passwords"];
+const NATIVE: &[&str] = &["newtab", "settings", "history", "bookmarks", "downloads", "extensions", "taskmanager", "devtools", "signin", "sync", "welcome", "incognito", "passwords"];
 
 /// The native page for an address (`https://kakangkung.internal/settings#privacy`), if any.
 pub(crate) fn page_of(url: &str) -> Option<&'static str> {
@@ -46,7 +46,7 @@ pub(crate) fn data_path(page: &str) -> Option<&str> {
         "signin" => Some("account"),
         "welcome" => Some("browsers"),
         "newtab" => Some("topsites"),
-        "incognito" => None,
+        "incognito" | "devtools" => None,
         other => Some(other),
     }
 }
@@ -66,6 +66,7 @@ pub(crate) fn title(page: &str) -> String {
         "sync" => "Sync",
         "welcome" => "Welcome",
         "passwords" => "Passwords",
+        "devtools" => "Developer tools",
         _ => "",
     })
     .into_owned()

@@ -1,36 +1,22 @@
 //! Extensions in the browser window: installs from the Chrome Web Store (the store page's button
-//! talks to `store_message`), the toolbar's extensions menu, and an extension's toolbar pop-up
-//! shown under that button (WebView2 has no extension toolbar of its own).
+//! talks to `store_message`) and the toolbar's extensions menu. Toolbar pop-ups used to be
+//! WebView2 child windows; with Ladybird-only rendering they open the native Extensions page
+//! until LibWebView can host them.
 
 use serde_json::json;
 use crate::i18n::tr;
 use wry::dpi::{LogicalPosition, LogicalSize};
-use wry::{Rect, WebViewBuilder, WebViewBuilderExtWindows};
+use wry::Rect;
 
 use crate::browser::Browser;
 use crate::msg::Msg;
 use crate::webstore;
 
-/// Extension pop-up size limits in DIPs (Chrome: 25×25 up to 800×600).
+/// Extension pop-up size limits in DIPs (kept for resize handling if a bubble is ever restored).
 const BUBBLE_MIN: (f64, f64) = (25.0, 25.0);
 const BUBBLE_MAX: (f64, f64) = (800.0, 600.0);
-/// Size before the pop-up has reported its content (estimated, a typical pop-up).
-const BUBBLE_START: (f64, f64) = (360.0, 480.0);
 /// Browser version asked of the store when the runtime does not say (a recent Chromium).
 const FALLBACK_VERSION: &str = "150.0.0.0";
-
-/// Runs in the extension pop-up: reports the size its content wants, so the pop-up fits it.
-const BUBBLE_SIZE_JS: &str = r#"(() => {
-  const send = () => {
-    const b = document.body;
-    if (!b || !window.ipc) return;
-    const r = b.getBoundingClientRect(), s = getComputedStyle(b);
-    const w = r.width + parseFloat(s.marginLeft) + parseFloat(s.marginRight);
-    const h = Math.max(b.scrollHeight, r.height) + parseFloat(s.marginTop) + parseFloat(s.marginBottom);
-    window.ipc.postMessage("kk:size:" + Math.ceil(w) + "," + Math.ceil(h));
-  };
-  addEventListener("load", () => { send(); new ResizeObserver(send).observe(document.body); });
-})();"#;
 
 impl Browser {
     /// Show `text` on the store page's button for `ext` in tab `tab`.
@@ -150,24 +136,34 @@ impl Browser {
         };
         let proxy = self.proxy.clone();
         let folder = swap.folder.clone();
-        let finish = move |result: Result<platform::Extension, String>| {
-            std::thread::spawn(move || {
-                let result = match result {
-                    Ok(extension) if extension.id == ext => { swap.finish(); Ok(()) },
-                    Ok(_) => swap.rollback().and(Err("The runtime returned an unexpected extension ID.".into())),
-                    Err(error) => match swap.rollback() {
-                        Ok(()) => Err(error),
-                        Err(restore) => Err(format!("{error}; restoring the previous extension: {restore}")),
-                    },
-                };
-                let _ = proxy.send_event(Msg::StoreInstalled { tab, ext, result });
-            });
+        let finish = {
+            let ext = ext.clone();
+            move |result: Result<platform::Extension, String>| {
+                std::thread::spawn(move || {
+                    let result = match result {
+                        Ok(extension) if extension.id == ext => {
+                            swap.finish();
+                            Ok(())
+                        }
+                        Ok(_) => swap.rollback().and(Err("The runtime returned an unexpected extension ID.".into())),
+                        Err(error) => match swap.rollback() {
+                            Ok(()) => Err(error),
+                            Err(restore) => Err(format!("{error}; restoring the previous extension: {restore}")),
+                        },
+                    };
+                    let _ = proxy.send_event(Msg::StoreInstalled { tab, ext, result });
+                });
+            }
         };
         match self.extension_host() {
             Some(wv) => {
                 platform::extension_add(wv, &folder, finish);
             }
-            None => finish(Err("Open a web tab before installing an extension.".into())),
+            // Ladybird-only: install is filesystem + local registry (no WebView2 profile).
+            None => {
+                let name = webstore::display_name(&folder).unwrap_or_else(|| ext.clone());
+                finish(Ok(platform::Extension { id: ext, name, enabled: true }));
+            }
         }
     }
 
@@ -189,12 +185,17 @@ impl Browser {
     /// The extensions button was pressed at (`right`, `top`): list the extensions, then show
     /// the menu (`Msg::ExtMenu`).
     pub(crate) fn request_extensions_menu(&mut self, right: f64, top: f64) {
-        let proxy = self.proxy.clone();
         match self.extension_host() {
-            Some(wv) => platform::extensions_list(wv, move |r| {
-                let _ = proxy.send_event(Msg::ExtMenu { list: r.unwrap_or_default(), x: right, y: top });
-            }),
-            None => self.show_extensions_menu(vec![], right, top),
+            Some(wv) => {
+                let proxy = self.proxy.clone();
+                platform::extensions_list(wv, move |r| {
+                    let _ = proxy.send_event(Msg::ExtMenu { list: r.unwrap_or_default(), x: right, y: top });
+                });
+            }
+            None => {
+                let list = webstore::list_installed(&self.paths.extensions);
+                self.show_extensions_menu(list, right, top);
+            }
         }
     }
 
@@ -228,49 +229,19 @@ impl Browser {
     /// Show extension `id`'s toolbar pop-up under the button at (`right`, `top`) DIPs; one
     /// without a pop-up opens its options page in a tab, one Kakangkung cannot read (loaded from
     /// elsewhere) opens the Extensions page.
-    /// Limit: the pop-up is its own webview, so an extension asking for "the active tab" gets
-    /// the pop-up, not the page behind it (WebView2 has no API to tell it otherwise).
+    /// Without WebView2, pop-ups open as a Ladybird tab (stub HWND today; LibWeb on Boat later).
     pub(crate) fn open_bubble(&mut self, id: &str, right: f64, top: f64) {
+        let _ = (right, top);
         self.close_bubble();
-        let Some((page, is_popup)) = webstore::button_page(&self.paths.extensions.join(id)) else {
-            return self.open_after_active(&format!("{}extensions", ui::INTERNAL));
-        };
-        let url = format!("chrome-extension://{id}/{page}");
-        let Some(env) = self.env.clone().filter(|_| is_popup) else { return self.open_tab(&url, None) };
-        let (w, h) = BUBBLE_START;
-        let p = self.proxy.clone();
-        let built = WebViewBuilder::new()
-            .with_environment(env)
-            .with_url(&url)
-            .with_initialization_script(BUBBLE_SIZE_JS)
-            .with_ipc_handler(move |req| {
-                let size = req.body().strip_prefix("kk:size:").and_then(|s| s.split_once(',')).and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)));
-                if size.is_some() {
-                    let _ = p.send_event(Msg::Bubble { close: false, size });
-                }
-            })
-            .with_bounds(Rect { position: LogicalPosition::new(right - w, top).into(), size: LogicalSize::new(w, h).into() })
-            // Chrome shows pop-ups on white unless the extension paints its own background.
-            .with_background_color((255, 255, 255, 255))
-            .with_theme(self.settings.wry_theme())
-            .build_as_child(&self.window);
-        let wv = match built {
-            Ok(wv) => wv,
-            Err(e) => {
-                eprintln!("extension pop-up {id}: {e}");
-                return;
-            }
-        };
-        let (p1, p2) = (self.proxy.clone(), self.proxy.clone());
-        let _ = platform::on_lost_focus(&wv, move || {
-            let _ = p1.send_event(Msg::Bubble { close: true, size: None });
-        });
-        let _ = platform::on_close_requested(&wv, move || {
-            let _ = p2.send_event(Msg::Bubble { close: true, size: None });
-        });
-        let _ = wv.focus();
-        self.bubble_at = (right, top);
-        self.ext_bubble = Some(wv);
+        let folder = self.paths.extensions.join(id);
+        if let Some((page, _)) = webstore::button_page(&folder) {
+            let url = format!("chrome-extension://{id}/{page}");
+            eprintln!("extension pop-up {id}: opening as Ladybird tab ({url})");
+            self.open_tab(&url, None);
+            return;
+        }
+        eprintln!("extension pop-up {id}: no pop-up page; opening Extensions");
+        self.open_after_active(&format!("{}extensions", ui::INTERNAL));
     }
 
     /// Pin extension `id` to the toolbar, or unpin it; kept in the `PINNED_EXTENSIONS` setting.
@@ -399,13 +370,20 @@ impl Browser {
             self.toggle_pin(ext);
         }
         self.close_bubble();
-        let Some(wv) = self.extension_host() else { return };
-        let id = ext.to_string();
-        platform::extension_change(wv, ext, None, move |r| {
-            if let Err(e) = r {
-                eprintln!("remove extension {id}: {e}");
-            }
-        });
+        if let Some(wv) = self.extension_host() {
+            let id = ext.to_string();
+            platform::extension_change(wv, ext, None, move |r| {
+                if let Err(e) = r {
+                    eprintln!("remove extension {id}: {e}");
+                }
+            });
+            return;
+        }
+        // Ladybird: drop the unpacked folder (and optional `.disabled` marker).
+        let folder = self.paths.extensions.join(ext);
+        if let Err(e) = std::fs::remove_dir_all(&folder) {
+            eprintln!("remove extension {ext}: {e}");
+        }
     }
 
     /// Open extension `ext`'s pop-up with DevTools on it; it stays open while inspected.

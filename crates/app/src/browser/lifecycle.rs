@@ -285,32 +285,36 @@ impl Browser {
         if cmd == Command::CreateWebview {
             let url = self.tabs[i].view.url.clone();
             let private = self.tabs[i].view.private;
-            timing("tab webview: start");
-            let first = self.env.is_none();
-            let wv = self.build_tab_webview(id, &url, false, private).map_err(|e| e.to_string())?;
-            timing("tab webview: created");
-            // The profile's own settings, once its first webview exists.
-            if first {
-                if let Some(folder) = &self.downloads_folder {
-                    let _ = platform::set_download_folder(&wv, folder);
-                }
-                if std::mem::take(&mut self.clear_at_start) {
-                    let _ = wv.clear_all_browsing_data();
-                }
-            }
-            for e in platform::apply_protection(&wv, self.settings.protection) {
-                eprintln!("tab {id}: {e}");
-            }
-            self.tabs[i].hooks = self.hook_tab(id, &wv);
-            set_default_zoom(&wv, self.settings.zoom);
-            if self.tabs[i].view.muted {
-                let _ = platform::set_muted(&wv, true);
-            }
-            self.tabs[i].webview = Some(wv);
+            // Ladybird only — WebView2 / Chromium page surfaces are not created.
+            let _ = (url, private);
+            let Some(host) = self.ladybird.as_ref() else {
+                return Err(
+                    "Ladybird host is not running. Build kakangkung-ladybird-host on Boat \
+                     (https://boat.dev/dashboard) and place it next to Kakangkung. \
+                     WebView2 is disabled."
+                        .into(),
+                );
+            };
+            timing("tab ladybird: start");
+            let b = self.tab_bounds(id);
+            let scale = self.window.scale_factor();
+            let (p, s) = (b.position.to_physical::<i32>(scale), b.size.to_physical::<i32>(scale));
+            let page_url = self.tabs[i].view.url.clone();
+            let vid = host.create_view(&page_url, p.x, p.y, s.width, s.height)?;
+            timing("tab ladybird: created");
+            self.tabs[i].ladybird_view = Some(vid);
             self.tabs[i].view.discarded = false;
+            self.tabs[i].view.loading = false;
+            // Host already waited for load; tell the UI thread (self-test, omnibox, etc.).
+            let _ = self.proxy.send_event(Msg::Load { id, url: page_url, done: true });
             return Ok(());
         }
         if cmd == Command::DropWebview {
+            if let Some(vid) = self.tabs[i].ladybird_view.take() {
+                if let Some(host) = self.ladybird.as_ref() {
+                    let _ = host.destroy_view(vid);
+                }
+            }
             let tab = &mut self.tabs[i];
             if let Some(wv) = tab.webview.take() {
                 platform::unhook(&wv, &mut tab.hooks);
@@ -318,36 +322,57 @@ impl Browser {
             tab.view.discarded = true;
             return Ok(());
         }
-        let Some(wv) = self.tabs[i].webview.as_ref() else {
-            return Err("no webview".into());
-        };
-        let e = |e: wry::Error| e.to_string();
-        match cmd {
-            Command::Show => {
-                // The first web page is ready: the hopping logo makes way.
-                if self.native.tab == 0 && self.page.is_visible() {
-                    self.page.set_visible(false);
+        if let Some(vid) = self.tabs[i].ladybird_view {
+            let host = self.ladybird.as_ref().ok_or("no Ladybird host")?;
+            match cmd {
+                Command::Show => {
+                    if self.native.tab == 0 && self.page.is_visible() {
+                        self.page.set_visible(false);
+                    }
+                    let b = self.tab_bounds(id);
+                    let scale = self.window.scale_factor();
+                    let (p, s) = (b.position.to_physical::<i32>(scale), b.size.to_physical::<i32>(scale));
+                    host.set_bounds(vid, p.x, p.y, s.width, s.height)?;
+                    host.set_visible(vid, true)?;
+                    Ok(())
                 }
-                wv.set_bounds(self.tab_bounds(id)).map_err(e)?;
-                wv.set_visible(true).map_err(e)?;
-                // Visibility succeeded even if the OS denies keyboard focus.
-                if let Err(e) = wv.focus() {
-                    eprintln!("tab {id}: focus failed: {e}");
+                Command::Hide => host.set_visible(vid, false),
+                // Memory Saver / WebView2-only commands are no-ops on Ladybird for now.
+                Command::TrySuspend | Command::Resume | Command::SetLevelLow | Command::SetLevelNormal => Ok(()),
+                _ => Err(format!("Ladybird: unsupported command {cmd:?}")),
+            }
+        } else {
+            let Some(wv) = self.tabs[i].webview.as_ref() else {
+                return Err("no webview".into());
+            };
+            let e = |e: wry::Error| e.to_string();
+            match cmd {
+                Command::Show => {
+                    // The first web page is ready: the hopping logo makes way.
+                    if self.native.tab == 0 && self.page.is_visible() {
+                        self.page.set_visible(false);
+                    }
+                    wv.set_bounds(self.tab_bounds(id)).map_err(e)?;
+                    wv.set_visible(true).map_err(e)?;
+                    // Visibility succeeded even if the OS denies keyboard focus.
+                    if let Err(e) = wv.focus() {
+                        eprintln!("tab {id}: focus failed: {e}");
+                    }
+                    Ok(())
                 }
-                Ok(())
+                Command::Hide => wv.set_visible(false).map_err(e),
+                Command::TrySuspend => {
+                    let p = self.proxy.clone();
+                    platform::try_suspend(wv, move |r| {
+                        let _ = p.send_event(Msg::Suspended { id, ok: matches!(r, Ok(true)) });
+                    })
+                    .map_err(|e| e.to_string())
+                }
+                Command::Resume => platform::resume(wv).map_err(|e| e.to_string()),
+                Command::SetLevelLow => wv.set_memory_usage_level(MemoryUsageLevel::Low).map_err(e),
+                Command::SetLevelNormal => wv.set_memory_usage_level(MemoryUsageLevel::Normal).map_err(e),
+                Command::CreateWebview | Command::DropWebview => Ok(()),
             }
-            Command::Hide => wv.set_visible(false).map_err(e),
-            Command::TrySuspend => {
-                let p = self.proxy.clone();
-                platform::try_suspend(wv, move |r| {
-                    let _ = p.send_event(Msg::Suspended { id, ok: matches!(r, Ok(true)) });
-                })
-                .map_err(|e| e.to_string())
-            }
-            Command::Resume => platform::resume(wv).map_err(|e| e.to_string()),
-            Command::SetLevelLow => wv.set_memory_usage_level(MemoryUsageLevel::Low).map_err(e),
-            Command::SetLevelNormal => wv.set_memory_usage_level(MemoryUsageLevel::Normal).map_err(e),
-            Command::CreateWebview | Command::DropWebview => Ok(()),
         }
     }
 
@@ -385,6 +410,11 @@ impl Browser {
             return;
         }
         self.hide_native(id);
+        if let Some(vid) = self.tabs[i].ladybird_view.take() {
+            if let Some(host) = self.ladybird.as_ref() {
+                let _ = host.destroy_view(vid);
+            }
+        }
         let tab = &mut self.tabs[i];
         if let Some(wv) = tab.webview.take() {
             platform::unhook(&wv, &mut tab.hooks);
@@ -411,6 +441,11 @@ impl Browser {
         }
         let mut tab = self.tabs.remove(i);
         self.prune_groups();
+        if let Some(vid) = tab.ladybird_view.take() {
+            if let Some(host) = self.ladybird.as_ref() {
+                let _ = host.destroy_view(vid);
+            }
+        }
         if let Some(wv) = tab.webview.take() {
             platform::unhook(&wv, &mut tab.hooks);
         }

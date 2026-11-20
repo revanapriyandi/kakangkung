@@ -31,8 +31,12 @@ mod profile;
 mod secret;
 mod shell;
 mod time;
+mod ladybird;
 mod webview;
 mod window;
+pub use ladybird::{
+    host_path, resolve_page_engine, status_line as ladybird_status, Host as LadybirdHost, NavResult as LadybirdNav,
+};
 pub mod frame;
 pub mod http;
 pub mod menu;

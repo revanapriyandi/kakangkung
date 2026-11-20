@@ -9,6 +9,7 @@ edition = "2021"
 license = "MIT"
 
 [workspace.dependencies]
+engine = { path = "crates/engine" }
 wry = { version = "=0.57.1", default-features = false, features = ["os-webview", "devtools"] }
 tao = { version = "=0.37.2", default-features = false, features = ["rwh_06"] }
 webview2-com = "=0.39.1"

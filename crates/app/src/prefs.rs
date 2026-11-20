@@ -121,6 +121,8 @@ pub(crate) const SETTABLE: &[(&str, &[&str], &str)] = &[
     ("accessibility.focus_highlight", OFF_ON, "0"),
     ("system.hardware_acceleration", ON_OFF, "1"),
     ("system.auto_update", ON_OFF, "1"),
+    // Page engine: Ladybird only (WebView2 / Chromium removed).
+    ("browser.page_engine", &["ladybird"], "ladybird"),
     ("languages.translate_to", LANGUAGES, "auto"),
     ("languages.preferred", LANGUAGES, "auto"),
     ("languages.ui", &["auto", "en", "id"], "auto"),
@@ -233,6 +235,8 @@ pub(crate) struct Settings {
     pub(crate) hardware_acceleration: bool,
     /// Download new versions in the background and install them when Kakangkung closes.
     pub(crate) auto_update: bool,
+    /// Page engine id (only `ladybird`). WebView2 / Chromium are not supported.
+    pub(crate) page_engine: String,
     /// Target language of "Translate page" ("auto" = the browser's language).
     pub(crate) translate_to: String,
     /// Interface language ("auto": the Windows display language).
@@ -337,6 +341,7 @@ impl Settings {
             focus_highlight: on("accessibility.focus_highlight"),
             hardware_acceleration: on("system.hardware_acceleration"),
             auto_update: on("system.auto_update"),
+            page_engine: v("browser.page_engine"),
             translate_to: v("languages.translate_to"),
             ui_language: v("languages.ui"),
             home_button: on("appearance.home_button"),

@@ -1,8 +1,8 @@
 # Native UI: plan and status
 
-Goal: no HTML in Kakangkung's own UI. Like Chrome and Edge, the browser draws its frame itself;
-only web pages are rendered by the engine (WebView2, later also Servo). Every built-in page is
-redesigned to look like Chrome's.
+Goal: no HTML in Kakangkung's own UI. The browser draws its frame itself; web pages are rendered
+by **Ladybird** (LibWeb) only — not WebView2 / Chromium. Every built-in page is native. See
+[LADYBIRD.md](LADYBIRD.md).
 
 ## Decisions (with evidence)
 

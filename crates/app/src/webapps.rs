@@ -48,6 +48,8 @@ impl WebApp {
         Ok(())
     }
 
+    /// Scope check for installed-app navigation (was WebView2 navigation handler).
+    #[allow(dead_code)]
     pub(crate) fn contains(&self, text: &str) -> bool {
         let (Ok(url), Ok(scope)) = (Url::parse(text), Url::parse(&self.scope)) else { return false };
         url.origin() == scope.origin() && url.path().starts_with(scope.path()) && url.username().is_empty() && url.password().is_none()
