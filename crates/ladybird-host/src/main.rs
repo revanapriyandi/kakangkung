@@ -30,11 +30,6 @@ impl View {
             !self.forward.is_empty()
         ));
         emit(&format!(r#"{{"event":"load","id":{id},"done":true}}"#));
-        #[cfg(windows)]
-        if let Some(s) = self.surface.as_ref() {
-            // surface label updated by callers that hold &mut
-            let _ = s;
-        }
     }
 
     fn go_to(&mut self, url: String, record: bool) {

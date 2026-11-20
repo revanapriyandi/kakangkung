@@ -184,7 +184,7 @@ impl Surface {
             if n != h {
                 return Err(format!("GetDIBits {n}/{h}"));
             }
-            let rgb: Vec<u8> = bgra.chunks_exact(4).flat_map(|p| [p[2], p[1], p[0]]).collect();
+            let rgb: Vec<u8> = bgra.as_chunks::<4>().0.iter().flat_map(|p| [p[2], p[1], p[0]]).collect();
             std::fs::write(path, encode_png(w as u32, h as u32, &rgb)).map_err(|e| e.to_string())
         }
     }
