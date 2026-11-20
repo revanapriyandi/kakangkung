@@ -164,6 +164,13 @@ void on_page_ipc(void* user, char const* message)
         + ",\"message\":\"" + json_escape(message ? message : "") + "\"}");
 }
 
+void on_crash(void* user, char const* reason)
+{
+    auto* hv = static_cast<HostView*>(user);
+    emit(std::string("{\"event\":\"web_content_crashed\",\"id\":") + std::to_string(hv->id)
+        + ",\"reason\":\"" + json_escape(reason ? reason : "ProcessCrash") + "\"}");
+}
+
 std::string extract_raw_json_field(std::string const& line, char const* key)
 {
     auto needle = std::string("\"") + key + "\":";
@@ -254,6 +261,7 @@ int main(int argc, char** argv)
             cb.on_load = on_load;
             cb.on_ext_message = on_ext_message;
             cb.on_page_ipc = on_page_ipc;
+            cb.on_crash = on_crash;
             int x = 0, y = 0, w = 800, h = 600;
             field_int(line, "x", x);
             field_int(line, "y", y);

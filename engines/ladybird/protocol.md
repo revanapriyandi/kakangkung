@@ -81,9 +81,15 @@ Environment: `KAKANGKUNG_LADYBIRD_HOST` may point Kakangkung at a non-default ho
 {"event":"processes","ok":true,"processes":[{"pid":1234,"kind":"WebContent","ws":1048576,"site":"https://example.com/"}]}
 {"event":"permissions_reset","ok":true}
 {"event":"page_ipc","id":1,"message":"kk:pw:focus:{…}"}
+{"event":"web_content_crashed","id":1,"reason":"ProcessCrash"}
 ```
 
 `engine` is `"ladybird"` when LibWeb is linked, `"stub"` for the offline host.
+
+**KB-25 crash recovery:** LibWeb respawns WebContent on crash; the host emits `web_content_crashed`
+(`reason`: `ProcessCrash` | `RejectedIPC` | `ExceededMemoryLimit`). Kakangkung reloads the tab
+URL except for `ExceededMemoryLimit`. Cold start after an unclean exit uses a `session.running`
+profile marker to force last-session restore.
 
 With `HAVE_LADYBIRD=1`:
 - **screenshot** → wait for presented CPU frame, then `take_frame_snapshot` / `displayed_frame` + `PNGWriter`

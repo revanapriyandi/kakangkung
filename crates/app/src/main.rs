@@ -94,6 +94,24 @@ fn restore_requested() -> bool {
     std::env::args().any(|a| a == "--restore-session")
 }
 
+/// Marker left while a Normal run is alive. Present on the next cold start ⇒ prior exit was unclean
+/// (crash / power cut); force session restore like `--restore-session`.
+fn session_running_marker(base: &std::path::Path) -> std::path::PathBuf {
+    base.join("session.running")
+}
+
+fn mark_session_running(base: &std::path::Path) {
+    let _ = std::fs::write(session_running_marker(base), format!("{}\n", std::process::id()));
+}
+
+fn clear_session_running(base: &std::path::Path) {
+    let _ = std::fs::remove_file(session_running_marker(base));
+}
+
+fn unclean_shutdown(base: &std::path::Path) -> bool {
+    session_running_marker(base).is_file()
+}
+
 /// Switches that may come with any run; `parse_args` skips them.
 fn is_global(a: &str) -> bool {
     a == "--restore-session" || a == "--no-first-run" || a.starts_with("--user-data-dir=")
@@ -295,15 +313,23 @@ fn main() {
     browser.show_launch();
     // "On startup": continue where you left off, or open specific pages. Tabs other than the
     // selected one come back lazily (no page loads until selected).
+    // KB-25: unclean prior exit (session.running still present) forces tab restore.
+    let force_restore = restore_requested() || (matches!(run, Run::Normal(_)) && unclean_shutdown(&base));
+    if force_restore && unclean_shutdown(&base) {
+        eprintln!("KB-25: unclean shutdown detected — restoring last session");
+    }
     let restore = match (&run, &prefs) {
-        (Run::Normal(url), Some(p)) if url == ui::NEWTAB_URL && (p.startup == "continue" || restore_requested()) && !p.session.is_empty() => {
+        (Run::Normal(url), Some(p)) if url == ui::NEWTAB_URL && (p.startup == "continue" || force_restore) && !p.session.is_empty() => {
             Some((p.session.clone(), p.session_active))
         }
-        (Run::Normal(url), Some(p)) if url == ui::NEWTAB_URL && p.startup == "pages" && !p.startup_pages.is_empty() => {
+        (Run::Normal(url), Some(p)) if url == ui::NEWTAB_URL && p.startup == "pages" && !p.startup_pages.is_empty() && !force_restore => {
             Some((p.startup_pages.clone(), 0))
         }
         _ => None,
     };
+    if matches!(run, Run::Normal(_)) {
+        mark_session_running(&base);
+    }
     match restore {
         Some((urls, active)) => {
             let ids: Vec<u64> = urls.iter().map(|u| browser.open_tab_lazy(u)).collect();
@@ -402,6 +428,10 @@ fn main() {
                 }));
                 let _ = done_rx.recv_timeout(Duration::from_secs(5));
                 drop(storage_thread.take());
+                // Clean exit only after session flush — next cold start skips forced restore.
+                if matches!(run, Run::Normal(_)) {
+                    clear_session_running(&base);
+                }
             }
             Event::WindowEvent { event: WindowEvent::Moved(_), .. } => browser.hide_overlay(),
             // Tab search takes the keyboard into its own pop-up window and closes itself when it
@@ -458,6 +488,21 @@ fn main() {
                             url,
                             what: what.to_string(),
                         });
+                    }
+                }
+            }
+            // KB-25: LibWeb already respawned WebContent; reload the tab URL into the new process.
+            for (vid, reason) in platform::take_web_crashes() {
+                if let Some(i) = browser.tabs.iter().position(|t| t.ladybird_view == Some(vid)) {
+                    let url = browser.tabs[i].view.url.clone();
+                    eprintln!("KB-25: WebContent crashed ({reason}) on view {vid}; reloading {url}");
+                    if reason != "ExceededMemoryLimit" {
+                        if let (Some(host), Some(vid)) = (browser.ladybird.as_ref(), browser.tabs[i].ladybird_view) {
+                            match host.navigate(vid, &url) {
+                                Ok(nav) => browser.tabs[i].apply_ladybird_nav(&nav),
+                                Err(e) => eprintln!("KB-25: reload after crash failed: {e}"),
+                            }
+                        }
                     }
                 }
             }

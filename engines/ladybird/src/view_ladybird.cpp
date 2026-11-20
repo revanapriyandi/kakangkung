@@ -220,6 +220,18 @@ private:
             if (m_cb.on_load)
                 m_cb.on_load(m_cb.user, 1);
         };
+        // LibWeb respawns WebContent itself; tell Kakangkung so chrome can reload / show UI.
+        on_web_content_crashed = [this](WebView::ViewImplementation::WebContentCrashReason reason) {
+            if (!m_cb.on_crash)
+                return;
+            char const* token = "ProcessCrash";
+            using R = WebView::ViewImplementation::WebContentCrashReason;
+            if (reason == R::RejectedIPC)
+                token = "RejectedIPC";
+            else if (reason == R::ExceededMemoryLimit)
+                token = "ExceededMemoryLimit";
+            m_cb.on_crash(m_cb.user, token);
+        };
         on_console_message = [this](WebView::ConsoleOutput const& output) {
             append_console(output);
             // chrome.runtime.sendMessage bridge: content scripts log kk-ext:{...}

@@ -33,6 +33,8 @@ typedef void (*kk_lb_ext_fn)(void* user, char const* extension_id_utf8, char con
     char const* message_json);
 /** Page → host IPC (password manager kk:pw:…, media, …). */
 typedef void (*kk_lb_page_ipc_fn)(void* user, char const* message_utf8);
+/** WebContent process crash (KB-25). reason is a short token: ProcessCrash / RejectedIPC / ExceededMemoryLimit. */
+typedef void (*kk_lb_crash_fn)(void* user, char const* reason_utf8);
 
 typedef struct kk_lb_callbacks {
     void* user;
@@ -41,6 +43,7 @@ typedef struct kk_lb_callbacks {
     kk_lb_load_fn on_load;
     kk_lb_ext_fn on_ext_message; /* may be null */
     kk_lb_page_ipc_fn on_page_ipc; /* may be null */
+    kk_lb_crash_fn on_crash; /* may be null; LibWeb only */
 } kk_lb_callbacks;
 
 /** "ladybird" when LibWeb is linked, "stub" otherwise. */

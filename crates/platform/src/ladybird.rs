@@ -22,11 +22,18 @@ use crate::downloads::{remove_ladybird, upsert_ladybird, DownloadInfo, DownloadS
 thread_local! {
     /// Spontaneous `page_ipc` events from the host (password manager, …), drained by the UI.
     static PAGE_IPC: RefCell<Vec<(i32, String)>> = const { RefCell::new(Vec::new()) };
+    /// Spontaneous WebContent crash events `(ladybird_view_id, reason)`.
+    static WEB_CRASHES: RefCell<Vec<(i32, String)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Take queued page IPC messages `(ladybird_view_id, message)`.
 pub fn take_page_ipc() -> Vec<(i32, String)> {
     PAGE_IPC.with(|q| std::mem::take(&mut *q.borrow_mut()))
+}
+
+/// Take queued WebContent crash notifications `(ladybird_view_id, reason)`.
+pub fn take_web_crashes() -> Vec<(i32, String)> {
+    WEB_CRASHES.with(|q| std::mem::take(&mut *q.borrow_mut()))
 }
 
 /// How long a single host wait (create / navigate / screenshot / …) may block the UI thread.
@@ -155,6 +162,13 @@ impl Host {
         if line.contains("\"event\":\"page_ipc\"") {
             if let (Some(id), Some(msg)) = (json_i64_field(line, "id").map(|n| n as i32), json_str_field(line, "message")) {
                 PAGE_IPC.with(|q| q.borrow_mut().push((id, msg)));
+                return true;
+            }
+        }
+        if line.contains("\"event\":\"web_content_crashed\"") {
+            if let Some(id) = json_i64_field(line, "id").map(|n| n as i32) {
+                let reason = json_str_field(line, "reason").unwrap_or_else(|| "ProcessCrash".into());
+                WEB_CRASHES.with(|q| q.borrow_mut().push((id, reason)));
                 return true;
             }
         }

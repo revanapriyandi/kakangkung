@@ -97,7 +97,10 @@ Or set `KAKANGKUNG_LADYBIRD_HOST` to the host path.
 | Folder sync passwords | KB-21 — vault merges via sync folder |
 | Process-per-site visibility | KB-22 — LibWeb ProcessManager snapshots in Task Manager |
 | Presentation / Chromecast casting | **KB-23 blocked** — LibWeb has no `PresentationRequest` / `RemotePlayback` / Cast API (CompositorPresentation* is GPU frames, not casting). No stub. |
-| Chrome-parity pillars | See store `docs/chrome-parity-roadmap.md` (KB-2…KB-23) |
+| Crash recovery / cold start | **KB-25** — `web_content_crashed` → reload; `session.running` marker forces restore after unclean exit |
+| Extension service workers | **KB-24** — content-script `chrome.*` deepen; full MV3 SW blocked (no extension worker host) |
+| Paginated print / PDF | **Blocked** — no LibWeb `print_to_pdf`; KB-20 keeps screenshot preview |
+| Chrome-parity pillars | See store `docs/chrome-parity-roadmap.md` (KB-2…KB-25) |
 
 ## Related
 
