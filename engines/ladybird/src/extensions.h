@@ -25,8 +25,18 @@ bool url_matches_pattern(std::string const& url, std::string const& pattern);
 /// True when any `matches` hits and no `exclude_matches` hits.
 bool content_script_matches_url(ContentScript const& cs, std::string const& url);
 
-/// Bootstrap chrome.runtime (real getManifest + messaging with request ids).
+/// Bootstrap chrome.runtime + chrome.storage.local (file-backed in the extension profile dir).
 std::string chrome_runtime_bootstrap(std::string const& extension_id, std::string const& manifest_json);
+
+/// Read/merge chrome.storage.local JSON under `<profile>/extensions/<id>/local-storage.json`.
+/// `message_json` is the get keys object / null / array, or the set items object.
+std::string chrome_storage_get(std::string const& profile_dir, std::string const& extension_id,
+    std::string const& message_json);
+std::string chrome_storage_set(std::string const& profile_dir, std::string const& extension_id,
+    std::string const& message_json);
+std::string chrome_storage_remove(std::string const& profile_dir, std::string const& extension_id,
+    std::string const& message_json);
+std::string chrome_storage_clear(std::string const& profile_dir, std::string const& extension_id);
 
 /// CSS injector wrapping stylesheet text.
 std::string css_inject_script(std::string const& css_text);

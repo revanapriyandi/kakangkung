@@ -275,6 +275,22 @@ private:
         std::string message_json;
         if (!parse_kk_ext_payload(payload, extension_id, type, request_id, message_json))
             return;
+        // KB-24: chrome.storage.local — resolve in-host from profile JSON (no stub).
+        if (type == "storageGet" || type == "storageSet" || type == "storageRemove" || type == "storageClear") {
+            std::string response = "undefined";
+            if (type == "storageGet")
+                response = chrome_storage_get(m_profile_dir, extension_id, message_json);
+            else if (type == "storageSet")
+                response = chrome_storage_set(m_profile_dir, extension_id, message_json);
+            else if (type == "storageRemove")
+                response = chrome_storage_remove(m_profile_dir, extension_id, message_json);
+            else
+                response = chrome_storage_clear(m_profile_dir, extension_id);
+            auto reply = chrome_runtime_reply_script(extension_id, request_id, response);
+            if (auto script_or_error = String::from_utf8(StringView { reply.data(), reply.size() }); !script_or_error.is_error())
+                run_javascript(script_or_error.release_value());
+            return;
+        }
         // Notify Kakangkung first (avoid re-entrancy issues with page script).
         if (type == "sendMessage" && m_cb.on_ext_message)
             m_cb.on_ext_message(m_cb.user, extension_id.c_str(), request_id.c_str(), message_json.c_str());

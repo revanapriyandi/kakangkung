@@ -333,24 +333,25 @@ std::string chrome_runtime_bootstrap(std::string const& extension_id, std::strin
        << "const listeners = [];\n"
        << "const pending = new Map();\n"
        << "let nextReq = 1;\n"
+       << "function bridge(type, message, response) {\n"
+       << "  const requestId = String(nextReq++);\n"
+       << "  if (typeof response === 'function') pending.set(requestId, response);\n"
+       << "  const entry = { id, type, requestId, message };\n"
+       << "  (window.__kk_ext_queue = window.__kk_ext_queue || []).push(entry);\n"
+       << "  try { console.log('kk-ext:' + JSON.stringify(entry)); } catch (e) {}\n"
+       << "  setTimeout(() => {\n"
+       << "    if (!pending.has(requestId)) return;\n"
+       << "    const cb = pending.get(requestId); pending.delete(requestId);\n"
+       << "    try { cb(undefined); } catch (e) {}\n"
+       << "  }, 8000);\n"
+       << "}\n"
        << "const chromeObj = window.chrome || (window.chrome = {});\n"
        << "chromeObj.runtime = {\n"
        << "  __kk: true,\n"
        << "  id,\n"
        << "  getManifest() { return JSON.parse(JSON.stringify(manifest)); },\n"
        << "  getURL(path) { return 'kk-extension://' + id + '/' + String(path||'').replace(/^\\/+/, ''); },\n"
-       << "  sendMessage(message, response) {\n"
-       << "    const requestId = String(nextReq++);\n"
-       << "    if (typeof response === 'function') pending.set(requestId, response);\n"
-       << "    const entry = { id, type: 'sendMessage', requestId, message };\n"
-       << "    (window.__kk_ext_queue = window.__kk_ext_queue || []).push(entry);\n"
-       << "    try { console.log('kk-ext:' + JSON.stringify(entry)); } catch (e) {}\n"
-       << "    setTimeout(() => {\n"
-       << "      if (!pending.has(requestId)) return;\n"
-       << "      const cb = pending.get(requestId); pending.delete(requestId);\n"
-       << "      try { cb(undefined); } catch (e) {}\n"
-       << "    }, 8000);\n"
-       << "  },\n"
+       << "  sendMessage(message, response) { bridge('sendMessage', message, response); },\n"
        << "  onMessage: { addListener(fn) { listeners.push(fn); }, removeListener(fn) {\n"
        << "    const i = listeners.indexOf(fn); if (i >= 0) listeners.splice(i, 1); } },\n"
        << "  __deliver(message, sender) {\n"
@@ -363,8 +364,271 @@ std::string chrome_runtime_bootstrap(std::string const& extension_id, std::strin
        << "    try { cb(response); } catch (e) {}\n"
        << "  }\n"
        << "};\n"
+       // KB-24: real chrome.storage.local via host-backed JSON (not in-page localStorage).
+       << "chromeObj.storage = chromeObj.storage || {};\n"
+       << "chromeObj.storage.local = {\n"
+       << "  get(keys, cb) { bridge('storageGet', keys == null ? null : keys, cb); },\n"
+       << "  set(items, cb) { bridge('storageSet', items || {}, cb); },\n"
+       << "  remove(keys, cb) { bridge('storageRemove', keys, cb); },\n"
+       << "  clear(cb) { bridge('storageClear', null, cb); }\n"
+       << "};\n"
        << "})();\n";
     return js.str();
+}
+
+namespace {
+
+fs::path storage_path(std::string const& profile_dir, std::string const& extension_id)
+{
+    return fs::path(profile_dir) / "extensions" / extension_id / "local-storage.json";
+}
+
+std::string load_storage_object(std::string const& profile_dir, std::string const& extension_id)
+{
+    auto raw = read_file(storage_path(profile_dir, extension_id));
+    if (raw.empty())
+        return "{}";
+    // Keep only object payloads; corrupt files reset.
+    size_t i = 0;
+    while (i < raw.size() && (raw[i] == ' ' || raw[i] == '\n' || raw[i] == '\r' || raw[i] == '\t'))
+        ++i;
+    if (i >= raw.size() || raw[i] != '{')
+        return "{}";
+    return raw;
+}
+
+bool write_storage_object(std::string const& profile_dir, std::string const& extension_id, std::string const& json)
+{
+    auto path = storage_path(profile_dir, extension_id);
+    std::error_code ec;
+    fs::create_directories(path.parent_path(), ec);
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out)
+        return false;
+    out << (json.empty() ? "{}" : json);
+    return static_cast<bool>(out);
+}
+
+/// Very small JSON object key extractor: returns value substrings for top-level keys (best-effort).
+std::string json_object_get(std::string const& obj, std::string const& key)
+{
+    auto needle = std::string("\"") + key + "\"";
+    auto pos = obj.find(needle);
+    if (pos == std::string::npos)
+        return {};
+    pos = obj.find(':', pos + needle.size());
+    if (pos == std::string::npos)
+        return {};
+    ++pos;
+    while (pos < obj.size() && (obj[pos] == ' ' || obj[pos] == '\t'))
+        ++pos;
+    if (pos >= obj.size())
+        return {};
+    if (obj[pos] == '"') {
+        size_t i = pos;
+        auto s = json_string_at(obj, i);
+        return js_string_literal(s);
+    }
+    if (obj[pos] == '{' || obj[pos] == '[') {
+        char open = obj[pos];
+        char close = open == '{' ? '}' : ']';
+        int depth = 0;
+        size_t i = pos;
+        for (; i < obj.size(); ++i) {
+            if (obj[i] == open)
+                ++depth;
+            else if (obj[i] == close) {
+                --depth;
+                if (depth == 0) {
+                    ++i;
+                    break;
+                }
+            } else if (obj[i] == '"') {
+                ++i;
+                while (i < obj.size() && obj[i] != '"') {
+                    if (obj[i] == '\\' && i + 1 < obj.size())
+                        i += 2;
+                    else
+                        ++i;
+                }
+            }
+        }
+        return obj.substr(pos, i - pos);
+    }
+    size_t end = pos;
+    while (end < obj.size() && obj[end] != ',' && obj[end] != '}')
+        ++end;
+    return obj.substr(pos, end - pos);
+}
+
+std::vector<std::string> storage_keys_from_message(std::string const& message_json)
+{
+    std::vector<std::string> keys;
+    if (message_json.empty() || message_json == "null")
+        return keys;
+    if (!message_json.empty() && message_json[0] == '"') {
+        size_t i = 0;
+        keys.push_back(json_string_at(message_json, i));
+        return keys;
+    }
+    if (!message_json.empty() && message_json[0] == '[') {
+        size_t i = 1;
+        while (i < message_json.size() && message_json[i] != ']') {
+            while (i < message_json.size() && (message_json[i] == ' ' || message_json[i] == ',' || message_json[i] == '\n'))
+                ++i;
+            if (i < message_json.size() && message_json[i] == '"')
+                keys.push_back(json_string_at(message_json, i));
+            else
+                break;
+        }
+        return keys;
+    }
+    // Object form: return those keys (values ignored for get filter).
+    size_t i = 0;
+    while (i < message_json.size()) {
+        auto q = message_json.find('"', i);
+        if (q == std::string::npos)
+            break;
+        i = q;
+        auto key = json_string_at(message_json, i);
+        if (!key.empty())
+            keys.push_back(key);
+        auto colon = message_json.find(':', i);
+        if (colon == std::string::npos)
+            break;
+        i = colon + 1;
+        while (i < message_json.size() && (message_json[i] == ' ' || message_json[i] == '\t'))
+            ++i;
+        if (i < message_json.size() && (message_json[i] == '{' || message_json[i] == '[')) {
+            char open = message_json[i];
+            char close = open == '{' ? '}' : ']';
+            int depth = 0;
+            for (; i < message_json.size(); ++i) {
+                if (message_json[i] == open)
+                    ++depth;
+                else if (message_json[i] == close) {
+                    --depth;
+                    if (depth == 0) {
+                        ++i;
+                        break;
+                    }
+                }
+            }
+        } else if (i < message_json.size() && message_json[i] == '"') {
+            json_string_at(message_json, i);
+        } else {
+            while (i < message_json.size() && message_json[i] != ',' && message_json[i] != '}')
+                ++i;
+        }
+    }
+    return keys;
+}
+
+} // namespace
+
+std::string chrome_storage_get(std::string const& profile_dir, std::string const& extension_id,
+    std::string const& message_json)
+{
+    auto store = load_storage_object(profile_dir, extension_id);
+    auto keys = storage_keys_from_message(message_json);
+    if (keys.empty() && (message_json.empty() || message_json == "null"))
+        return store;
+    std::ostringstream out;
+    out << '{';
+    bool first = true;
+    for (auto const& key : keys) {
+        auto val = json_object_get(store, key);
+        if (val.empty())
+            continue;
+        if (!first)
+            out << ',';
+        first = false;
+        out << js_string_literal(key) << ':' << val;
+    }
+    out << '}';
+    return out.str();
+}
+
+std::string chrome_storage_set(std::string const& profile_dir, std::string const& extension_id,
+    std::string const& message_json)
+{
+    auto store = load_storage_object(profile_dir, extension_id);
+    auto keys = storage_keys_from_message(message_json);
+    // Merge: for each key in items, replace value from message_json.
+    std::ostringstream out;
+    out << '{';
+    bool first = true;
+    // Keep existing keys not overwritten.
+    auto existing_keys = storage_keys_from_message(store);
+    for (auto const& key : existing_keys) {
+        bool overwritten = false;
+        for (auto const& k : keys) {
+            if (k == key) {
+                overwritten = true;
+                break;
+            }
+        }
+        if (overwritten)
+            continue;
+        auto val = json_object_get(store, key);
+        if (val.empty())
+            continue;
+        if (!first)
+            out << ',';
+        first = false;
+        out << js_string_literal(key) << ':' << val;
+    }
+    for (auto const& key : keys) {
+        auto val = json_object_get(message_json, key);
+        if (val.empty())
+            continue;
+        if (!first)
+            out << ',';
+        first = false;
+        out << js_string_literal(key) << ':' << val;
+    }
+    out << '}';
+    auto merged = out.str();
+    write_storage_object(profile_dir, extension_id, merged);
+    return "undefined";
+}
+
+std::string chrome_storage_remove(std::string const& profile_dir, std::string const& extension_id,
+    std::string const& message_json)
+{
+    auto store = load_storage_object(profile_dir, extension_id);
+    auto remove = storage_keys_from_message(message_json);
+    auto existing = storage_keys_from_message(store);
+    std::ostringstream out;
+    out << '{';
+    bool first = true;
+    for (auto const& key : existing) {
+        bool drop = false;
+        for (auto const& r : remove) {
+            if (r == key) {
+                drop = true;
+                break;
+            }
+        }
+        if (drop)
+            continue;
+        auto val = json_object_get(store, key);
+        if (val.empty())
+            continue;
+        if (!first)
+            out << ',';
+        first = false;
+        out << js_string_literal(key) << ':' << val;
+    }
+    out << '}';
+    write_storage_object(profile_dir, extension_id, out.str());
+    return "undefined";
+}
+
+std::string chrome_storage_clear(std::string const& profile_dir, std::string const& extension_id)
+{
+    write_storage_object(profile_dir, extension_id, "{}");
+    return "undefined";
 }
 
 std::string css_inject_script(std::string const& css_text)

@@ -120,6 +120,14 @@ load start; `document_end` + `document_idle` on load finish.
 `ext_message`, and delivers to same-page `onMessage` listeners. Kakangkung
 replies with `ext_reply`.
 
+**KB-24 `chrome.storage.local`:** content-script bootstrap also exposes
+`chrome.storage.local.get/set/remove/clear`, bridged as `kk-ext` types
+`storageGet` / `storageSet` / `storageRemove` / `storageClear`. The LibWeb host
+persists JSON under `<profile>/extensions/<id>/local-storage.json` and resolves
+the page callback via `chrome.runtime.__resolve`. **Extension service workers
+remain blocked** — there is no MV3 background SW process in this host (page
+`navigator.serviceWorker` is unrelated).
+
 Clients that `wait` on `load` with `done:true` can rely on **back** / **forward** / **reload**
 always emitting that event (even when history is empty — a no-op ack) so waiters never hang.
 
