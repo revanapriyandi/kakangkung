@@ -239,6 +239,16 @@ bool View::a11y_json(std::string&)
     return false;
 }
 
+bool View::dom_json(std::string&)
+{
+    return false;
+}
+
+bool View::console_json(std::string&, bool)
+{
+    return false;
+}
+
 bool View::eval_js(std::string const&, std::string&)
 {
     return false;

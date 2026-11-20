@@ -28,6 +28,8 @@ Environment: `KAKANGKUNG_LADYBIRD_HOST` may point Kakangkung at a non-default ho
 {"cmd":"screenshot","id":1,"path":"C:\\\\temp\\\\page.png"}
 {"cmd":"print","id":1}
 {"cmd":"a11y","id":1}
+{"cmd":"dom","id":1}
+{"cmd":"console","id":1,"clear":false}
 {"cmd":"eval","id":1,"js":"document.title"}
 {"cmd":"capabilities","id":1}
 {"cmd":"destroy","id":1}
@@ -47,6 +49,8 @@ Environment: `KAKANGKUNG_LADYBIRD_HOST` may point Kakangkung at a non-default ho
 {"event":"screenshot","id":1,"path":"C:\\\\temp\\\\page.png","ok":true}
 {"event":"print","id":1,"ok":true}
 {"event":"a11y","id":1,"tree":{"role":"document","name":"…","children":[]}}
+{"event":"dom","id":1,"ok":true,"tree":{"type":"element","name":"HTML","children":[]}}
+{"event":"console","id":1,"ok":true,"messages":[{"kind":"log","level":"log","args":["hi"]}]}
 {"event":"eval","id":1,"ok":true,"result":"Ladybird"}
 {"event":"capabilities","id":1,"ok":true,"caps":{"engine":"ladybird","wasm":true,"webgpu":true}}
 ```
@@ -54,11 +58,15 @@ Environment: `KAKANGKUNG_LADYBIRD_HOST` may point Kakangkung at a non-default ho
 `engine` is `"ladybird"` when LibWeb is linked, `"stub"` for the offline host.
 
 With `HAVE_LADYBIRD=1`:
-- **screenshot** → `ViewImplementation::take_frame_snapshot` + `PNGWriter`
+- **screenshot** → wait for presented CPU frame, then `take_frame_snapshot` / `displayed_frame` + `PNGWriter`
 - **print** → `run_javascript("window.print()")`
 - **a11y** → `inspect_accessibility_tree` / `on_received_accessibility_tree`
+- **dom** → `inspect_dom_tree` / `on_received_dom_tree`
+- **console** → buffered `on_console_message` (optional `clear`)
 - **eval** → `js_console_input` / `on_received_js_console_result`
 - **capabilities** → live LibWeb feature probe (CSS/JS/WASM/WebGL/WebGPU/media codecs)
+
+Resources: host prefix must expose `share/Lagom` (symlink from Ladybird `Build/release/share/Lagom`) so `resource://ladybird/…` (WebCompat.json) resolves without site-compat warnings.
 
 Without LibWeb linked, those commands return `ok:false` (no fake trees / stub screenshots).
 

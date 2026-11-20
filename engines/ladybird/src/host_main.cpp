@@ -289,6 +289,44 @@ int main(int argc, char** argv)
             }
             continue;
         }
+        if (has_cmd(line, "dom")) {
+            int id = 0;
+            if (field_int(line, "id", id)) {
+                char* tree = nullptr;
+                bool ok = false;
+                if (auto it = host.views.find(id); it != host.views.end())
+                    ok = kk_lb_view_dom_json(it->second.view, &tree) != 0;
+                if (ok && tree) {
+                    emit(std::string("{\"event\":\"dom\",\"id\":") + std::to_string(id)
+                        + ",\"ok\":true,\"tree\":" + tree + "}");
+                    kk_lb_string_free(tree);
+                } else {
+                    emit(std::string("{\"event\":\"dom\",\"id\":") + std::to_string(id)
+                        + ",\"tree\":null,\"ok\":false,\"reason\":\"dom unavailable\"}");
+                }
+            }
+            continue;
+        }
+        if (has_cmd(line, "console")) {
+            int id = 0;
+            if (field_int(line, "id", id)) {
+                bool clear = line.find("\"clear\":true") != std::string::npos
+                    || line.find("\"clear\":1") != std::string::npos;
+                char* messages = nullptr;
+                bool ok = false;
+                if (auto it = host.views.find(id); it != host.views.end())
+                    ok = kk_lb_view_console_json(it->second.view, &messages, clear ? 1 : 0) != 0;
+                if (ok && messages) {
+                    emit(std::string("{\"event\":\"console\",\"id\":") + std::to_string(id)
+                        + ",\"ok\":true,\"messages\":" + messages + "}");
+                    kk_lb_string_free(messages);
+                } else {
+                    emit(std::string("{\"event\":\"console\",\"id\":") + std::to_string(id)
+                        + ",\"messages\":null,\"ok\":false,\"reason\":\"console unavailable\"}");
+                }
+            }
+            continue;
+        }
         if (has_cmd(line, "eval")) {
             int id = 0;
             std::string js;

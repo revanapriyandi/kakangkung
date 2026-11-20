@@ -108,7 +108,7 @@ pub(crate) fn extensions_doc(answer: &Json) -> PageDoc {
     }
 }
 
-/// Native Ladybird DevTools page (LibWeb inspector docks here when the Boat host links LibWeb).
+/// Native Ladybird DevTools page — surfaces real LibWeb inspect/console/a11y via host + MCP.
 pub(crate) fn devtools_doc() -> PageDoc {
     PageDoc {
         title: "Developer tools".into(),
@@ -120,33 +120,61 @@ pub(crate) fn devtools_doc() -> PageDoc {
         sections: vec![
             section(
                 "inspector",
-                "Ladybird inspector",
+                "Ladybird LibWeb",
                 vec![
                     Row::new(
                         "Page engine",
-                        "Kakangkung uses Ladybird only. Docked Edge DevTools are not available.",
+                        "Kakangkung is Ladybird-only. DOM, a11y, console, eval, and capabilities come from LibWeb — not Edge DevTools.",
                         Control::None,
                     ),
                     Row::new(
-                        "Elements & console",
-                        "Build kakangkung-ladybird-host with HAVE_LADYBIRD=1 on Boat to attach LibWeb's inspector to this panel.",
-                        Control::Link {
-                            id: "visit:https://boat.dev/dashboard".into(),
-                        },
+                        "Elements",
+                        "Host cmd `dom` → inspect_dom_tree. MCP: browser_dom.",
+                        Control::None,
                     ),
                     Row::new(
-                        "AI agents",
-                        "Drive navigation, screenshots, a11y, and eval through kakangkung-mcp (stdio MCP).",
+                        "Accessibility",
+                        "Host cmd `a11y` → inspect_accessibility_tree. MCP: browser_a11y.",
+                        Control::None,
+                    ),
+                    Row::new(
+                        "Console",
+                        "Host buffers LibWeb console output (`console` cmd). MCP: browser_console / browser_eval.",
+                        Control::None,
+                    ),
+                    Row::new(
+                        "Screenshot",
+                        "Waits for a presented CPU frame, then PNG via take_frame_snapshot / displayed_frame.",
                         Control::None,
                     ),
                     Row::new("Keyboard", "F12 or Ctrl+Shift+I opens this page on Ladybird tabs", Control::None),
                 ],
             ),
             section(
+                "mcp",
+                "Stable MCP (kakangkung-mcp)",
+                vec![
+                    Row::new(
+                        "Transport",
+                        "stdio JSON-RPC 2.0 — requires engine=ladybird host (refuses stub).",
+                        Control::None,
+                    ),
+                    Row::new(
+                        "Tools",
+                        "open · navigate · back/forward/reload · screenshot · a11y · dom · console · print · eval · capabilities · info",
+                        Control::None,
+                    ),
+                ],
+            ),
+            section(
                 "protocol",
                 "Host protocol",
                 vec![
-                    Row::new("Commands", "navigate · back · forward · reload · stop · visible · screenshot · print · a11y · eval", Control::None),
+                    Row::new(
+                        "Commands",
+                        "navigate · screenshot · print · a11y · dom · console · eval · capabilities",
+                        Control::None,
+                    ),
                     Row::new("Docs", "engines/ladybird/protocol.md", Control::None),
                 ],
             ),

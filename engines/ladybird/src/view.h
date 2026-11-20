@@ -37,6 +37,8 @@ public:
     bool screenshot_png(std::string const& path);
     bool print_page();
     bool a11y_json(std::string& out_json);
+    bool dom_json(std::string& out_json);
+    bool console_json(std::string& out_json, bool clear);
     bool eval_js(std::string const& js, std::string& out_result);
     bool capabilities_json(std::string& out_json);
 

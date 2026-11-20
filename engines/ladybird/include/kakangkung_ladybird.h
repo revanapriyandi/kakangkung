@@ -78,6 +78,18 @@ KK_LB_API int kk_lb_view_print(kk_lb_view* view);
 KK_LB_API int kk_lb_view_a11y_json(kk_lb_view* view, char** out_utf8);
 
 /**
+ * Write a JSON DOM tree snapshot (LibWeb inspect_dom_tree) into out_utf8.
+ * Caller frees with kk_lb_string_free. Returns 1 on success.
+ */
+KK_LB_API int kk_lb_view_dom_json(kk_lb_view* view, char** out_utf8);
+
+/**
+ * Write a JSON array of buffered console messages into out_utf8.
+ * When clear_after is non-zero, the buffer is drained. Caller frees. Returns 1 on success.
+ */
+KK_LB_API int kk_lb_view_console_json(kk_lb_view* view, char** out_utf8, int clear_after);
+
+/**
  * Run JavaScript in the page. With HAVE_LADYBIRD uses run_javascript.
  * out_utf8 receives a JSON string result when available (caller frees).
  * Returns 1 when the script was submitted to LibWeb.

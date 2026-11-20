@@ -289,9 +289,24 @@ fn main() {
         }
         if has_cmd(&line, "a11y") {
             if let Some(id) = field_int(&line, "id") {
-                let url = views.get(&id).map(|v| json_escape(&v.url)).unwrap_or_default();
                 emit(&format!(
-                    r#"{{"event":"a11y","id":{id},"tree":[{{"role":"document","name":"{url}","children":[]}}]}}"#
+                    r#"{{"event":"a11y","id":{id},"tree":null,"ok":false,"reason":"a11y requires LibWeb-linked host"}}"#
+                ));
+            }
+            continue;
+        }
+        if has_cmd(&line, "dom") {
+            if let Some(id) = field_int(&line, "id") {
+                emit(&format!(
+                    r#"{{"event":"dom","id":{id},"tree":null,"ok":false,"reason":"dom requires LibWeb-linked host"}}"#
+                ));
+            }
+            continue;
+        }
+        if has_cmd(&line, "console") {
+            if let Some(id) = field_int(&line, "id") {
+                emit(&format!(
+                    r#"{{"event":"console","id":{id},"messages":null,"ok":false,"reason":"console requires LibWeb-linked host"}}"#
                 ));
             }
             continue;
@@ -301,6 +316,14 @@ fn main() {
                 let _ = field_str(&line, "js");
                 emit(&format!(
                     r#"{{"event":"eval","id":{id},"ok":false,"result":"eval requires LibWeb-linked host"}}"#
+                ));
+            }
+            continue;
+        }
+        if has_cmd(&line, "capabilities") {
+            if let Some(id) = field_int(&line, "id") {
+                emit(&format!(
+                    r#"{{"event":"capabilities","id":{id},"ok":false,"caps":null,"reason":"capabilities requires LibWeb-linked host"}}"#
                 ));
             }
             continue;

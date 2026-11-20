@@ -1,7 +1,8 @@
 //! Kakangkung MCP server — stdio JSON-RPC for AI agents.
 //!
 //! Spawns (or reuses) `kakangkung-ladybird-host` and exposes tools for tabs, navigation,
-//! screenshots, accessibility snapshots, print, and eval. No WebView2 / Chrome.
+//! screenshots, accessibility/DOM trees, console, print, eval, and capabilities.
+//! Requires a LibWeb-linked host (`engine=ladybird`). No WebView2 / Chrome.
 //!
 //! Transport: newline-delimited JSON-RPC 2.0 on stdin/stdout (MCP tools/list + tools/call).
 
@@ -17,12 +18,14 @@ struct Host {
     stdin: Mutex<ChildStdin>,
     stdout: Mutex<BufReader<ChildStdout>>,
     active: i32,
+    engine: String,
+    host_path: PathBuf,
 }
 
 impl Host {
     fn spawn() -> Result<Self, String> {
         let host = find_host().ok_or_else(|| {
-            "kakangkung-ladybird-host not found (build -p ladybird-host or set KAKANGKUNG_LADYBIRD_HOST)".to_string()
+            "kakangkung-ladybird-host not found (build engines/ladybird with HAVE_LADYBIRD or set KAKANGKUNG_LADYBIRD_HOST)".to_string()
         })?;
         let profile = std::env::temp_dir().join(format!("kakangkung-mcp-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&profile);
@@ -44,11 +47,26 @@ impl Host {
         if !line.contains("\"event\":\"ready\"") {
             return Err(format!("expected ready, got {line}"));
         }
+        let engine = if line.contains("\"engine\":\"ladybird\"") {
+            "ladybird".into()
+        } else if line.contains("\"engine\":\"stub\"") {
+            "stub".into()
+        } else {
+            "unknown".into()
+        };
+        if engine != "ladybird" {
+            let _ = child.kill();
+            return Err(format!(
+                "MCP requires LibWeb-linked host (got engine={engine}). Build with HAVE_LADYBIRD=1."
+            ));
+        }
         Ok(Self {
             child,
             stdin: Mutex::new(stdin),
             stdout: Mutex::new(reader),
             active: 0,
+            engine,
+            host_path: host,
         })
     }
 
@@ -66,7 +84,8 @@ impl Host {
     }
 
     fn wait_event(&self, event: &str, id: Option<i32>) -> Result<String, String> {
-        for _ in 0..48 {
+        // Screenshots wait for a presented LibWeb frame (up to ~15s); allow enough lines.
+        for _ in 0..128 {
             let line = self.read()?;
             if !line.contains(&format!("\"event\":\"{event}\"")) {
                 continue;
@@ -86,11 +105,15 @@ impl Host {
         let escaped = url.replace('\\', "\\\\").replace('"', "\\\"");
         self.send(&format!(r#"{{"cmd":"create","url":"{escaped}","x":0,"y":0,"w":1280,"h":800}}"#))?;
         let mut id = 0i32;
-        for _ in 0..32 {
+        for _ in 0..64 {
             let line = self.read()?;
             if line.contains("\"event\":\"created\"") {
                 if let Some(rest) = line.split("\"id\":").nth(1) {
-                    id = rest.trim().trim_matches(|c: char| !c.is_ascii_digit()).parse().unwrap_or(0);
+                    id = rest
+                        .trim()
+                        .trim_matches(|c: char| !c.is_ascii_digit())
+                        .parse()
+                        .unwrap_or(0);
                 }
             }
             if id > 0 && line.contains("\"event\":\"load\"") && line.contains("\"done\":true") {
@@ -132,16 +155,19 @@ fn find_host() -> Option<PathBuf> {
 
 fn tools() -> Value {
     json!([
-        {"name":"browser_open","description":"Create a Ladybird page view and navigate to a URL","inputSchema":{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}},
+        {"name":"browser_open","description":"Create a Ladybird LibWeb page view and navigate to a URL","inputSchema":{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}},
         {"name":"browser_navigate","description":"Navigate the active view","inputSchema":{"type":"object","properties":{"url":{"type":"string"},"id":{"type":"integer"}},"required":["url"]}},
         {"name":"browser_back","description":"Go back in history","inputSchema":{"type":"object","properties":{"id":{"type":"integer"}}}},
         {"name":"browser_forward","description":"Go forward in history","inputSchema":{"type":"object","properties":{"id":{"type":"integer"}}}},
         {"name":"browser_reload","description":"Reload the active view","inputSchema":{"type":"object","properties":{"id":{"type":"integer"}}}},
-        {"name":"browser_screenshot","description":"Capture the page surface to a PNG path","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"id":{"type":"integer"}},"required":["path"]}},
-        {"name":"browser_a11y","description":"Accessibility tree snapshot (document stub until LibWeb)","inputSchema":{"type":"object","properties":{"id":{"type":"integer"}}}},
-        {"name":"browser_print","description":"Request print (LibWeb when linked)","inputSchema":{"type":"object","properties":{"id":{"type":"integer"}}}},
-        {"name":"browser_eval","description":"Evaluate JavaScript in the page (requires LibWeb host)","inputSchema":{"type":"object","properties":{"js":{"type":"string"},"id":{"type":"integer"}},"required":["js"]}},
-        {"name":"browser_info","description":"Active view id and engine status","inputSchema":{"type":"object","properties":{}}}
+        {"name":"browser_screenshot","description":"Wait for a presented LibWeb frame, then capture PNG to path","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"id":{"type":"integer"}},"required":["path"]}},
+        {"name":"browser_a11y","description":"LibWeb accessibility tree snapshot (inspect_accessibility_tree)","inputSchema":{"type":"object","properties":{"id":{"type":"integer"}}}},
+        {"name":"browser_dom","description":"LibWeb DOM tree snapshot (inspect_dom_tree)","inputSchema":{"type":"object","properties":{"id":{"type":"integer"}}}},
+        {"name":"browser_console","description":"Buffered page console messages from LibWeb","inputSchema":{"type":"object","properties":{"id":{"type":"integer"},"clear":{"type":"boolean"}}}},
+        {"name":"browser_print","description":"Request document print via window.print() in LibWeb","inputSchema":{"type":"object","properties":{"id":{"type":"integer"}}}},
+        {"name":"browser_eval","description":"Evaluate JavaScript in the page via LibWeb console","inputSchema":{"type":"object","properties":{"js":{"type":"string"},"id":{"type":"integer"}},"required":["js"]}},
+        {"name":"browser_capabilities","description":"Live LibWeb feature probe (CSS/JS/WASM/WebGL/WebGPU/media)","inputSchema":{"type":"object","properties":{"id":{"type":"integer"}}}},
+        {"name":"browser_info","description":"Active view id, host path, and engine id","inputSchema":{"type":"object","properties":{}}}
     ])
 }
 
@@ -211,6 +237,22 @@ fn call_tool(host: &mut Host, name: &str, args: &Value) -> Result<String, String
             let line = host.wait_event("a11y", Some(id))?;
             Ok(line.trim().to_string())
         }
+        "browser_dom" => {
+            let id = require_view(host, id_arg)?;
+            host.send(&format!(r#"{{"cmd":"dom","id":{id}}}"#))?;
+            let line = host.wait_event("dom", Some(id))?;
+            Ok(line.trim().to_string())
+        }
+        "browser_console" => {
+            let id = require_view(host, id_arg)?;
+            let clear = args.get("clear").and_then(|v| v.as_bool()).unwrap_or(false);
+            host.send(&format!(
+                r#"{{"cmd":"console","id":{id},"clear":{}}}"#,
+                if clear { "true" } else { "false" }
+            ))?;
+            let line = host.wait_event("console", Some(id))?;
+            Ok(line.trim().to_string())
+        }
         "browser_print" => {
             let id = require_view(host, id_arg)?;
             host.send(&format!(r#"{{"cmd":"print","id":{id}}}"#))?;
@@ -225,10 +267,17 @@ fn call_tool(host: &mut Host, name: &str, args: &Value) -> Result<String, String
             let line = host.wait_event("eval", Some(id))?;
             Ok(line.trim().to_string())
         }
+        "browser_capabilities" => {
+            let id = require_view(host, id_arg)?;
+            host.send(&format!(r#"{{"cmd":"capabilities","id":{id}}}"#))?;
+            let line = host.wait_event("capabilities", Some(id))?;
+            Ok(line.trim().to_string())
+        }
         "browser_info" => Ok(format!(
-            "active={} host={} engine=stub-or-ladybird",
+            "active={} host={} engine={}",
             host.active,
-            find_host().map(|p| p.display().to_string()).unwrap_or_else(|| "missing".into())
+            host.host_path.display(),
+            host.engine
         )),
         other => Err(format!("unknown tool: {other}")),
     }

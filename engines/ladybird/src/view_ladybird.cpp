@@ -14,6 +14,7 @@
 #endif
 
 #include <AK/ByteString.h>
+#include <AK/JsonArray.h>
 #include <AK/JsonObject.h>
 #include <AK/String.h>
 #include <LibCore/EventLoop.h>
@@ -23,6 +24,7 @@
 #include <LibGfx/ShareableBitmap.h>
 #include <LibGfx/SystemTheme.h>
 #include <LibURL/URL.h>
+#include <LibJS/ConsoleLogLevel.h>
 #include <LibWebCommon/WebView/ConsoleOutput.h>
 #include <LibWebCommon/WebView/Debugger.h>
 #include <LibWebView/Application.h>
@@ -33,7 +35,9 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
 #include <utility>
+#include <vector>
 
 #if defined(_WIN32)
 #    ifndef NOMINMAX
@@ -90,6 +94,36 @@ public:
         set_system_visibility_state(on ? Web::HTML::VisibilityState::Visible : Web::HTML::VisibilityState::Hidden);
     }
 
+    bool has_presented_frame() const { return m_has_presented_frame; }
+
+    bool wait_for_presented_frame(std::chrono::milliseconds budget)
+    {
+        if (m_has_presented_frame)
+            return true;
+        auto const deadline = std::chrono::steady_clock::now() + budget;
+        while (!m_has_presented_frame) {
+            Core::EventLoop::current().pump(Core::EventLoop::WaitMode::PollForEvents);
+            if (std::chrono::steady_clock::now() >= deadline)
+                return false;
+        }
+        return true;
+    }
+
+    std::string take_console_json(bool clear)
+    {
+        std::lock_guard lock(m_console_mutex);
+        std::string out = "[";
+        for (size_t i = 0; i < m_console.size(); ++i) {
+            if (i)
+                out += ',';
+            out += m_console[i];
+        }
+        out += ']';
+        if (clear)
+            m_console.clear();
+        return out;
+    }
+
     ~LibWebSurface() override
     {
 #if defined(_WIN32)
@@ -129,6 +163,7 @@ private:
                 m_cb.on_url(m_cb.user, text.characters());
         };
         on_load_start = [this] {
+            m_has_presented_frame = false;
             if (m_cb.on_load)
                 m_cb.on_load(m_cb.user, 0);
         };
@@ -138,22 +173,94 @@ private:
                 m_cb.on_load(m_cb.user, 1);
         };
         on_console_message = [this](WebView::ConsoleOutput const& output) {
+            append_console(output);
             // chrome.runtime.sendMessage bridge: content scripts log kk-ext:{...}
             output.output.visit(
-                [this](WebView::ConsoleLog const& log) {
+                [](WebView::ConsoleLog const& log) {
                     for (auto const& arg : log.arguments) {
                         if (!arg.is_string())
                             continue;
                         auto const& msg = arg.as_string();
                         if (!msg.starts_with_bytes("kk-ext:"sv))
                             continue;
-                        // Host-side extension message bus can pick this up later (MCP / DevTools).
-                        (void)this;
                         (void)msg;
                     }
                 },
                 [](auto const&) {});
         };
+    }
+
+    static char const* console_level_name(JS::ConsoleLogLevel level)
+    {
+        using JS::ConsoleLogLevel;
+        switch (level) {
+        case ConsoleLogLevel::Assert:
+            return "assert";
+        case ConsoleLogLevel::Count:
+            return "count";
+        case ConsoleLogLevel::CountReset:
+            return "countReset";
+        case ConsoleLogLevel::Debug:
+            return "debug";
+        case ConsoleLogLevel::Dir:
+            return "dir";
+        case ConsoleLogLevel::DirXML:
+            return "dirxml";
+        case ConsoleLogLevel::Error:
+            return "error";
+        case ConsoleLogLevel::Group:
+            return "group";
+        case ConsoleLogLevel::GroupCollapsed:
+            return "groupCollapsed";
+        case ConsoleLogLevel::Info:
+            return "info";
+        case ConsoleLogLevel::Log:
+            return "log";
+        case ConsoleLogLevel::TimeEnd:
+            return "timeEnd";
+        case ConsoleLogLevel::TimeLog:
+            return "timeLog";
+        case ConsoleLogLevel::Table:
+            return "table";
+        case ConsoleLogLevel::Trace:
+            return "trace";
+        case ConsoleLogLevel::Warn:
+            return "warn";
+        }
+        return "log";
+    }
+
+    void append_console(WebView::ConsoleOutput const& output)
+    {
+        JsonObject entry;
+        entry.set("ts"sv, output.timestamp.milliseconds_since_epoch());
+        output.output.visit(
+            [&](WebView::ConsoleLog const& log) {
+                entry.set("kind"sv, "log");
+                entry.set("level"sv, console_level_name(log.level));
+                JsonArray args;
+                for (auto const& arg : log.arguments)
+                    args.must_append(arg);
+                entry.set("args"sv, move(args));
+            },
+            [&](WebView::ConsoleError const& err) {
+                entry.set("kind"sv, "error");
+                entry.set("name"sv, err.name);
+                entry.set("message"sv, err.message);
+                entry.set("inside_promise"sv, err.inside_promise);
+            },
+            [&](WebView::ConsoleTrace const& trace) {
+                entry.set("kind"sv, "trace");
+                entry.set("label"sv, trace.label);
+            },
+            [&](WebView::ConsoleGroupEnd const&) {
+                entry.set("kind"sv, "groupEnd");
+            });
+        auto serialized = entry.serialized().to_byte_string();
+        std::lock_guard lock(m_console_mutex);
+        if (m_console.size() >= 256)
+            m_console.erase(m_console.begin());
+        m_console.emplace_back(serialized.characters());
     }
 
     void inject_content_scripts()
@@ -197,6 +304,7 @@ private:
         auto bitmap = frame->shared_image_buffer->bitmap_if_present();
         if (!bitmap)
             return;
+        m_has_presented_frame = true;
         blit_bitmap(*bitmap);
     }
 
@@ -247,6 +355,9 @@ private:
     std::string m_profile_dir;
     std::string m_url;
     int m_x {}, m_y {}, m_w { 800 }, m_h { 600 };
+    bool m_has_presented_frame { false };
+    std::mutex m_console_mutex;
+    std::vector<std::string> m_console;
 #if defined(_WIN32)
     HWND m_hwnd { nullptr };
 #else
@@ -436,6 +547,11 @@ bool View::screenshot_png(std::string const& path)
         return !file_or_error.value()->write_until_depleted(encoded.value()).is_error();
     };
 
+    // Wait until LibWeb presents a CPU frame (blit path) before capturing.
+    if (!m_libweb->surface->wait_for_presented_frame(std::chrono::seconds(15))) {
+        // Still try snapshot / displayed_frame — some pages paint once then settle.
+    }
+
     // Prefer a compositor snapshot; fall back to the CPU-presented frame we already blit.
     bool done = false;
     bool ok = false;
@@ -482,6 +598,35 @@ bool View::a11y_json(std::string& out_json)
         return false;
     }
     return ok;
+}
+
+bool View::dom_json(std::string& out_json)
+{
+    if (!m_libweb || !m_libweb->surface)
+        return false;
+
+    bool done = false;
+    bool ok = false;
+    m_libweb->surface->on_received_dom_tree = [&](JsonObject tree) {
+        out_json = std::string { tree.serialized().to_byte_string().characters() };
+        ok = true;
+        done = true;
+        m_libweb->surface->on_received_dom_tree = nullptr;
+    };
+    m_libweb->surface->inspect_dom_tree();
+    if (!pump_until(done, std::chrono::seconds(10))) {
+        m_libweb->surface->on_received_dom_tree = nullptr;
+        return false;
+    }
+    return ok;
+}
+
+bool View::console_json(std::string& out_json, bool clear)
+{
+    if (!m_libweb || !m_libweb->surface)
+        return false;
+    out_json = m_libweb->surface->take_console_json(clear);
+    return true;
 }
 
 bool View::eval_js(std::string const& js, std::string& out_result)

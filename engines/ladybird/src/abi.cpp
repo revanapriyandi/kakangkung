@@ -125,6 +125,34 @@ int kk_lb_view_a11y_json(kk_lb_view* view, char** out_utf8)
     return 1;
 }
 
+int kk_lb_view_dom_json(kk_lb_view* view, char** out_utf8)
+{
+    if (!view || !out_utf8)
+        return 0;
+    std::string json;
+    if (!reinterpret_cast<View*>(view)->dom_json(json))
+        return 0;
+    *out_utf8 = static_cast<char*>(std::malloc(json.size() + 1));
+    if (!*out_utf8)
+        return 0;
+    std::memcpy(*out_utf8, json.c_str(), json.size() + 1);
+    return 1;
+}
+
+int kk_lb_view_console_json(kk_lb_view* view, char** out_utf8, int clear_after)
+{
+    if (!view || !out_utf8)
+        return 0;
+    std::string json;
+    if (!reinterpret_cast<View*>(view)->console_json(json, clear_after != 0))
+        return 0;
+    *out_utf8 = static_cast<char*>(std::malloc(json.size() + 1));
+    if (!*out_utf8)
+        return 0;
+    std::memcpy(*out_utf8, json.c_str(), json.size() + 1);
+    return 1;
+}
+
 int kk_lb_view_eval(kk_lb_view* view, char const* js_utf8, char** out_utf8)
 {
     if (!view || !js_utf8)
