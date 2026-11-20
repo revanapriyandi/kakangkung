@@ -568,20 +568,23 @@ impl Browser {
             }
         }
         let old = std::mem::replace(&mut self.settings, settings);
-        let new = &self.settings;
+        let zoom = self.settings.zoom;
+        let focus = self.settings.focus_highlight;
+        let groups_on = self.settings.groups;
+        let adblock_changed =
+            self.settings.protection.adblock != old.protection.adblock || self.settings.adblock_allowlist != old.adblock_allowlist;
         for wv in self.tabs.iter().filter_map(|t| t.webview.as_ref()) {
-            if new.zoom != old.zoom {
-                set_default_zoom(wv, new.zoom);
+            if zoom != old.zoom {
+                set_default_zoom(wv, zoom);
             }
-            if new.focus_highlight != old.focus_highlight {
-                let _ = wv.evaluate_script(&focus_script(new.focus_highlight));
+            if focus != old.focus_highlight {
+                let _ = wv.evaluate_script(&focus_script(focus));
             }
         }
-        if new.zoom != old.zoom {
-            let z = new.zoom;
+        if zoom != old.zoom {
             for i in 0..self.tabs.len() {
                 let Some(vid) = self.tabs[i].ladybird_view else { continue };
-                let result = self.ladybird.as_ref().map(|host| host.zoom_absolute(vid, z));
+                let result = self.ladybird.as_ref().map(|host| host.zoom_absolute(vid, zoom));
                 match result {
                     Some(Ok(applied)) => self.tabs[i].ladybird_zoom = applied,
                     Some(Err(e)) => eprintln!("ladybird settings zoom failed: {e}"),
@@ -590,7 +593,7 @@ impl Browser {
             }
         }
         // Features switched off in Settings leave nothing behind.
-        if !new.groups {
+        if !groups_on {
             self.tabs.iter_mut().for_each(|t| t.view.group = 0);
             self.groups.clear();
         }
@@ -598,7 +601,7 @@ impl Browser {
             let a = self.active;
             self.tab_action(&format!("unsplit:{a}"));
         }
-        if new.protection.adblock != old.protection.adblock || new.adblock_allowlist != old.adblock_allowlist {
+        if adblock_changed {
             self.sync_ladybird_adblock();
         }
         for i in 0..self.tabs.len() {
