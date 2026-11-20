@@ -139,7 +139,11 @@ impl Browser {
                 next = Some(next.map_or(due, |n| n.min(due)));
             }
             if now >= since + after {
-                self.apply(i, TabEvent::SuspendDue);
+                // Ladybird has no TrySuspend: Memory Saver discards the host view (DropWebview)
+                // and keeps URL for recreate — claiming Suspended while the view lived was a no-op.
+                let ladybird_tab = self.tabs[i].ladybird_view.is_some()
+                    || (self.ladybird.is_some() && self.tabs[i].webview.is_none());
+                self.apply(i, if ladybird_tab { TabEvent::DiscardDue } else { TabEvent::SuspendDue });
                 // An immediate platform error leaves the tab idle. Retry later.
                 if self.tabs[i].state == Lifecycle::Idle {
                     self.tabs[i].hidden_since = Some(now);
@@ -336,6 +340,17 @@ impl Browser {
             return Ok(());
         }
         if let Some(vid) = self.tabs[i].ladybird_view {
+            // Memory Saver on Ladybird is discard (DropWebview), not fake Suspend.
+            // TrySuspend should not arrive after memory_tick maps to DiscardDue; if it does,
+            // destroy the view so we never claim Suspended while LibWeb still lives.
+            if cmd == Command::TrySuspend {
+                if let Some(host) = self.ladybird.as_ref() {
+                    let _ = host.destroy_view(vid);
+                }
+                self.tabs[i].ladybird_view = None;
+                self.tabs[i].view.discarded = true;
+                return Ok(());
+            }
             let host = self.ladybird.as_ref().ok_or("no Ladybird host")?;
             match cmd {
                 Command::Show => {
@@ -350,8 +365,7 @@ impl Browser {
                     Ok(())
                 }
                 Command::Hide => host.set_visible(vid, false),
-                // Memory Saver / WebView2-only commands are no-ops on Ladybird for now.
-                Command::TrySuspend | Command::Resume | Command::SetLevelLow | Command::SetLevelNormal => Ok(()),
+                Command::Resume | Command::SetLevelLow | Command::SetLevelNormal => Ok(()),
                 _ => Err(format!("Ladybird: unsupported command {cmd:?}")),
             }
         } else {
