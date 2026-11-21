@@ -68,6 +68,13 @@ jobs:
           arch: x86_64
           toolchain: ClangCL
 
+      # windows-2022 lacks ccache and ninja on PATH (the 2025 image Ladybird targets has them).
+      - name: Install ccache and ninja
+        run: |
+          choco install -y ccache ninja --no-progress
+          if ($LASTEXITCODE) { throw "choco install failed ($LASTEXITCODE)" }
+          ccache --version | Select-Object -First 1; ninja --version
+
       - name: Restore caches (Ladybird)
         id: cache-restore
         uses: ./.github/actions/cache-restore
