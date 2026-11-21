@@ -196,7 +196,7 @@ jobs:
         run: cargo build --release --locked -p app -p ladybird-host
 
       - name: Install ladybird-runtime
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ladybird-runtime-windows-x64
 
