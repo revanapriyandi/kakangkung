@@ -18,7 +18,11 @@ on:
         required: false
         default: 48d36b1709f6fbac372f4282c1dc5c67c12e238f
   push:
-    branches: [ci/ladybird-windows]
+    branches: [main]
+    paths:
+      - engines/ladybird/**
+      - crates/engine/**
+      - .github/workflows/ladybird-windows.yml
 
 permissions:
   contents: read
@@ -144,3 +148,93 @@ jobs:
           sccache_primary_key: ${{ steps.cache-restore.outputs.sccache_primary_key }}
           vcpkg_cache_path: ${{ github.workspace }}/Build/caches/vcpkg-binary-cache
           vcpkg_cache_primary_key: ${{ steps.cache-restore.outputs.vcpkg_cache_primary_key }}
+
+  # Runs Kakangkung with that runtime: the self-test drives the real browser, any console window
+  # that opens fails the job, and the screenshots show whether LibWeb really draws the pages.
+  smoke:
+    name: Kakangkung + LibWeb smoke test (Windows x64)
+    needs: runtime
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build Kakangkung
+        run: cargo build --release --locked -p app -p ladybird-host
+
+      - name: Install ladybird-runtime
+        uses: actions/download-artifact@v4
+        with:
+          name: ladybird-runtime-windows-x64
+
+      - name: Unpack runtime beside kakangkung.exe
+        run: |
+          Expand-Archive ladybird-runtime-windows-x64.zip -DestinationPath target\release\ladybird-runtime -Force
+          Get-Item target\release\ladybird-runtime\bin\kakangkung-ladybird-host.exe
+
+      - name: Self-test with LibWeb (no console windows allowed)
+        timeout-minutes: 10
+        run: |
+          Add-Type @'
+          using System; using System.Text; using System.Collections.Generic; using System.Runtime.InteropServices;
+          public static class Wins {
+            delegate bool EnumProc(IntPtr h, IntPtr l);
+            [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc f, IntPtr l);
+            [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+            [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+            public static List<string> Consoles() {
+              var found = new List<string>();
+              EnumWindows((h, l) => {
+                if (!IsWindowVisible(h)) return true;
+                var c = new StringBuilder(256); GetClassName(h, c, 256);
+                var cls = c.ToString();
+                if (cls == "ConsoleWindowClass" || cls == "CASCADIA_HOSTING_WINDOW_CLASS" || cls == "PseudoConsoleWindow") {
+                  var t = new StringBuilder(512); GetWindowText(h, t, 512); uint pid; GetWindowThreadProcessId(h, out pid);
+                  found.Add(cls + " pid=" + pid + " '" + t + "'");
+                }
+                return true;
+              }, IntPtr.Zero);
+              return found;
+            }
+          }
+          '@
+          $before = [Wins]::Consoles()
+          "console windows before start: $($before.Count)"
+          $out = Join-Path $env:RUNNER_TEMP 'selftest.json'
+          $env:KAKANGKUNG_SHOT_DIR = Join-Path $env:RUNNER_TEMP 'shots'
+          New-Item -ItemType Directory -Force $env:KAKANGKUNG_SHOT_DIR | Out-Null
+          $p = Start-Process -FilePath target\release\kakangkung.exe -ArgumentList "--self-test `"$out`"" -PassThru `
+            -RedirectStandardError (Join-Path $env:RUNNER_TEMP 'kakangkung-stderr.log')
+          $seen = @{}
+          $deadline = (Get-Date).AddSeconds(240)
+          while (-not $p.HasExited -and (Get-Date) -lt $deadline) {
+            foreach ($w in [Wins]::Consoles()) { if ($before -notcontains $w) { $seen[$w] = $true } }
+            Start-Sleep -Milliseconds 250
+          }
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force; Get-Process | Where-Object Name -match 'kakangkung|WebContent|RequestServer|ImageDecoder' | Stop-Process -Force -ErrorAction SilentlyContinue; throw 'self-test exceeded 240 s' }
+          'kakangkung stderr:'; Get-Content (Join-Path $env:RUNNER_TEMP 'kakangkung-stderr.log')
+          if ($seen.Count) { $seen.Keys | ForEach-Object { "CONSOLE WINDOW: $_" }; throw "$($seen.Count) console window(s) opened while Kakangkung ran" }
+          'no console window opened'
+          if (-not (Test-Path $out)) { throw "self-test wrote no result (exit $($p.ExitCode))" }
+          $r = Get-Content $out -Raw | ConvertFrom-Json
+          $r.steps | ForEach-Object { '{0,-5} {1}: {2}' -f ($(if ($_.passed) { 'PASS' } else { 'FAIL' })), $_.step, $_.detail }
+          $engine = $r.steps | Where-Object step -eq 'ladybird' | ForEach-Object detail
+          if ($engine -notmatch 'engine=ladybird') { throw "the LibWeb host was not used: $engine" }
+          $failed = @($r.steps | Where-Object { -not $_.passed })
+          if ($failed.Count) { throw "$($failed.Count) self-test step(s) failed" }
+
+      - name: Screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: libweb-smoke-screenshots
+          path: |
+            ${{ runner.temp }}/shots
+            ${{ runner.temp }}/kakangkung-stderr.log
+          if-no-files-found: ignore
