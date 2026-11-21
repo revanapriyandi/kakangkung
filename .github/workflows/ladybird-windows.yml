@@ -34,7 +34,9 @@ concurrency:
 jobs:
   runtime:
     name: Build LibWeb + host (Windows x64)
-    runs-on: windows-latest
+    # Not windows-latest: its Visual Studio 18 STL (MSVC 14.52) refuses clang-cl < 22, and
+    # Ladybird's setup action installs LLVM 20. VS 2022's STL accepts it.
+    runs-on: windows-2022
     # GitHub-hosted jobs stop at 6 h; a cold Ladybird build takes about 2 h.
     timeout-minutes: 355
     defaults:
