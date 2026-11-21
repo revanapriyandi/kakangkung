@@ -109,12 +109,14 @@ impl Browser {
             // A one-line field of the pop-up was confirmed: input, kind, text.
             "input" => {
                 let text = msg.splitn(3, '\t').nth(2).unwrap_or("").to_string();
+                // The find bar stays open: Enter = next match, Shift+Enter = previous.
+                if arg == "find" || arg == "find:back" {
+                    self.find_in_page(&text, arg == "find");
+                    return true;
+                }
                 self.hide_overlay();
                 if let Some(gid) = arg.strip_prefix("grouprename:") {
                     return self.on_ipc(&format!("groupname\t{gid}\t{text}"));
-                }
-                if arg == "find" {
-                    self.find_in_page(&text);
                 }
             }
             "groupcollapse" => {
@@ -124,6 +126,7 @@ impl Browser {
                 self.render();
             }
             "bookmark" => return self.act(Action::Bookmark),
+            "zoomreset" => return self.act(Action::MenuCommand("zoomreset")),
             "hover" if arg == "menu" && self.overlay_open && self.overlay_kind.starts_with("menu@") => {
                 let id = parts.next().unwrap_or("").to_string();
                 self.menu_hover(&id);

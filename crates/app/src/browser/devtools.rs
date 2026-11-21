@@ -53,7 +53,8 @@ impl Browser {
     /// WebView2 now, so the page the person is about to open does not wait about two seconds
     /// for its browser process. Not at start-up, which would cost memory before any browsing.
     pub(crate) fn prewarm_webview2(&mut self) {
-        if self.env.is_none() {
+        // Ladybird tabs never use WebView2: prewarming would start an unused browser process.
+        if self.env.is_none() && self.ladybird.is_none() {
             if let Some(dir) = self.ctx.data_directory() {
                 platform::prewarm_environment(dir, &self.browser_args);
             }

@@ -106,6 +106,9 @@ pub struct FrameState {
     /// The password manager's key in the address bar: the page has saved logins, or a login
     /// waits to be saved.
     pub key: bool,
+    /// Page zoom in percent when it is not 100 % (0 = hidden): a magnifier in the address
+    /// bar, like Chrome's; clicking it resets to 100 %.
+    pub zoom: u16,
     pub show_home: bool,
     pub show_extensions: bool,
     pub show_tab_search: bool,

@@ -144,6 +144,7 @@ impl Browser {
                 }
                 if let Some(i) = self.index(id) {
                     if !done {
+                        self.tabs[i].ladybird_title_seen = false;
                         self.tabs[i].document_ready = false;
                         self.tabs[i].web_app = None;
                         self.tabs[i].connection = Default::default();
@@ -171,6 +172,8 @@ impl Browser {
                         // A native page is called by its own name, not by the built-in host.
                         self.tabs[i].view.title = match crate::native::page_of(&self.tabs[i].view.url) {
                             Some(page) => crate::native::title(page),
+                            // Ladybird has no webview to ask: keep the title the host sent.
+                            None if self.tabs[i].ladybird_title_seen => self.tabs[i].view.title.clone(),
                             None => {
                                 let t = self.tabs[i].webview.as_ref().and_then(platform::document_title).unwrap_or_default();
                                 tab_title(&self.tabs[i].view.url, t)
@@ -204,6 +207,7 @@ impl Browser {
                     let t = title.clone();
                     self.db(move |s| s.set_title(&url, &t));
                     self.tabs[i].view.title = title;
+                    self.tabs[i].ladybird_title_seen = true;
                 }
                 self.render();
             }
@@ -254,5 +258,41 @@ impl Browser {
             Msg::Suspended { .. } | Msg::Script(_) => {}
         }
         true
+    }
+
+    /// Apply Ladybird navigation events that arrived outside a blocking call (link clicks,
+    /// redirects, in-page navigations): the omnibox, tab title, Back/Forward, history and the
+    /// saved session follow the page instead of keeping the address that was typed.
+    pub(crate) fn drain_ladybird_nav(&mut self) {
+        use platform::LadybirdEvent as Ev;
+        for ev in platform::take_nav_events() {
+            let view = match &ev {
+                Ev::Url { view, .. } | Ev::Title { view, .. } | Ev::History { view, .. } | Ev::Load { view, .. } => *view,
+            };
+            let Some(i) = self.tabs.iter().position(|t| t.ladybird_view == Some(view)) else { continue };
+            let id = self.tabs[i].view.id;
+            match ev {
+                // Mid-load the address is committed by load-done; a same-document change
+                // (#hash, pushState) has no load, so it completes on its own.
+                Ev::Url { url, .. } if self.tabs[i].view.loading => self.tabs[i].view.url = url,
+                Ev::Url { url, .. } => {
+                    if url != self.tabs[i].view.url {
+                        self.on_msg(Msg::Load { id, url, done: true });
+                    }
+                }
+                Ev::Title { title, .. } => {
+                    self.on_msg(Msg::Title { id, title });
+                }
+                Ev::History { back, forward, .. } => {
+                    self.tabs[i].ladybird_can_back = back;
+                    self.tabs[i].ladybird_can_forward = forward;
+                    self.render();
+                }
+                Ev::Load { done, .. } => {
+                    let url = self.tabs[i].view.url.clone();
+                    self.on_msg(Msg::Load { id, url, done });
+                }
+            }
+        }
     }
 }

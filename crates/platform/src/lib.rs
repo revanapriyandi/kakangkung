@@ -38,7 +38,7 @@ mod webview;
 mod window;
 pub use ladybird::{
     host_path, resolve_page_engine, status_line as ladybird_status, take_ext_messages, take_page_ipc,
-    take_web_crashes, ExtMessage, Host as LadybirdHost,
+    take_nav_events, take_web_crashes, ExtMessage, Host as LadybirdHost, NavEvent as LadybirdEvent,
     NavResult as LadybirdNav,
 };
 pub mod frame;

@@ -398,6 +398,17 @@ impl Popup {
         }
     }
 
+    /// Replace the right-hand hint of an input pop-up ("Enter", "2/5", "No results").
+    pub fn set_hint(&self, hint: &str) {
+        let Some(cell) = self.inner() else { return };
+        let mut i = cell.borrow_mut();
+        i.hint = hint.into();
+        // SAFETY: repaint request for the live pop-up.
+        unsafe {
+            let _ = InvalidateRect(Some(i.hwnd), None, false);
+        }
+    }
+
     /// Mark row `index` as selected (keyboard selection in the address bar).
     pub fn highlight(&self, index: Option<usize>) {
         let Some(cell) = self.inner() else { return };

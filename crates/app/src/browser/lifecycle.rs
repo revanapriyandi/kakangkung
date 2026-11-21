@@ -264,6 +264,10 @@ impl Browser {
         for cmd in cmds {
             if let Err(e) = self.exec(i, cmd) {
                 eprintln!("tab {}: {cmd:?} failed: {e}", self.tabs[i].view.id);
+                // Any failed step (Show, Create, …) ends the launch logo: nothing will cover it.
+                if self.native.tab == 0 && self.page.is_visible() {
+                    self.page.set_visible(false);
+                }
                 // Without a Ladybird host, CreateWebview fails and used to leave the tab
                 // spinning forever (loading=true) under the purple-K launch splash.
                 if cmd == Command::CreateWebview {
@@ -443,6 +447,43 @@ impl Browser {
 
     /// The tab's address switched between a native page and a web page (or to another section
     /// of the same native page): rebuild what shows it.
+    /// The Ladybird host process died: start a new one and bring the tabs back without
+    /// restarting the browser. Background tabs come back when selected (like Memory Saver).
+    pub(crate) fn recover_ladybird_host(&mut self) {
+        // ponytail: at most 3 respawns per run, so a host that dies at start-up cannot spin.
+        thread_local!(static RESPAWNS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) });
+        self.ladybird = None;
+        if RESPAWNS.with(|n| n.replace(n.get() + 1)) >= 3 {
+            eprintln!("Ladybird host died again; not restarting it (3 restarts this run)");
+            return;
+        }
+        let (Some(host_path), Some(profile)) = (platform::host_path(), self.ctx.data_directory().map(std::path::Path::to_path_buf)) else {
+            return;
+        };
+        match platform::LadybirdHost::spawn(&host_path, &profile, tao::platform::windows::WindowExtWindows::hwnd(&self.window) as usize) {
+            Ok(host) => {
+                eprintln!("Ladybird host restarted (engine={})", host.engine_id);
+                self.ladybird = Some(host);
+            }
+            Err(e) => {
+                eprintln!("Ladybird host restart failed: {e}");
+                return;
+            }
+        }
+        self.sync_ladybird_adblock();
+        self.sync_ladybird_permissions();
+        for tab in &mut self.tabs {
+            // The old host's views are gone with it; nothing to destroy.
+            if tab.ladybird_view.take().is_some() {
+                tab.state = Lifecycle::Discarded;
+            }
+        }
+        if let Some(i) = self.index(self.active) {
+            self.reload_kind(i);
+        }
+        self.render();
+    }
+
     pub(crate) fn reload_kind(&mut self, i: usize) {
         let id = self.tabs[i].view.id;
         if self.page_fullscreen.is_some_and(|(tab, _)| tab == id) { self.end_page_fullscreen(); }

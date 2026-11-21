@@ -216,7 +216,7 @@ impl Browser {
     pub(crate) fn show_find_bar(&mut self) {
         let dark = self.dark_ui();
         self.overlay_open = true;
-        self.overlay_kind = "input".into();
+        self.overlay_kind = "find".into();
         let text = self.find_query.clone();
         self.popup.show_input(
             "find",
@@ -297,25 +297,34 @@ impl Browser {
         }
     }
 
-    /// Run find for the active Ladybird tab; Enter from the find bar.
-    pub(crate) fn find_in_page(&mut self, query: &str) {
+    /// Run find for the active Ladybird tab (Enter / Shift+Enter in the find bar) and show
+    /// "2/5" or "No results" in the bar. The same query again moves to the next match.
+    pub(crate) fn find_in_page(&mut self, query: &str, forward: bool) {
         self.find_query = query.to_string();
         let Some(i) = self.index(self.active) else { return };
         let Some(vid) = self.tabs[i].ladybird_view else { return };
         let Some(host) = self.ladybird.as_ref() else { return };
         if query.is_empty() {
             let _ = host.find(vid, "", false, true, true);
+            self.popup.set_hint("Enter");
             return;
         }
-        match host.find(vid, query, false, true, false) {
-            Ok((active, count)) => {
-                if count == 0 {
-                    eprintln!("find: no matches");
-                } else {
-                    eprintln!("find: {active}/{count}");
-                }
+        let hint = match host.find(vid, query, false, forward, false) {
+            Ok((_, 0)) => "No results".to_string(),
+            Ok((active, count)) => format!("{active}/{count}"),
+            Err(e) => {
+                eprintln!("find: {e}");
+                "Enter".to_string()
             }
-            Err(e) => eprintln!("find: {e}"),
+        };
+        self.popup.set_hint(&hint);
+    }
+
+    /// The find bar closed: drop the match highlights (the query is kept for Ctrl+F again).
+    pub(crate) fn end_find(&mut self) {
+        let Some(vid) = self.index(self.active).and_then(|i| self.tabs[i].ladybird_view) else { return };
+        if let Some(host) = self.ladybird.as_ref() {
+            let _ = host.find(vid, "", false, true, true);
         }
     }
 }

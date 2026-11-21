@@ -26,6 +26,52 @@ thread_local! {
     static WEB_CRASHES: RefCell<Vec<(i32, String)>> = const { RefCell::new(Vec::new()) };
     /// Content-script `chrome.runtime.sendMessage` → host (no MV3 SW yet).
     static EXT_MESSAGES: RefCell<Vec<ExtMessage>> = const { RefCell::new(Vec::new()) };
+    /// `url` / `title` / `history` / `load` events that arrived outside a blocking wait
+    /// (link clicks, redirects, in-page navigations, other views).
+    static NAV_EVENTS: RefCell<Vec<NavEvent>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A navigation-state event for one view that no blocking call was waiting for.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NavEvent {
+    Url { view: i32, url: String },
+    Title { view: i32, title: String },
+    History { view: i32, back: bool, forward: bool },
+    Load { view: i32, done: bool },
+}
+
+/// Take queued navigation-state events, oldest first.
+pub fn take_nav_events() -> Vec<NavEvent> {
+    NAV_EVENTS.with(|q| std::mem::take(&mut *q.borrow_mut()))
+}
+
+fn parse_nav_event(line: &str) -> Option<NavEvent> {
+    let view = json_i64_field(line, "id")? as i32;
+    if line.contains("\"event\":\"url\"") {
+        return json_str_field(line, "url").map(|url| NavEvent::Url { view, url });
+    }
+    if line.contains("\"event\":\"title\"") {
+        return json_str_field(line, "title").map(|title| NavEvent::Title { view, title });
+    }
+    if line.contains("\"event\":\"history\"") {
+        return Some(NavEvent::History {
+            view,
+            back: line.contains("\"back\":true"),
+            forward: line.contains("\"forward\":true"),
+        });
+    }
+    if line.contains("\"event\":\"load\"") {
+        return Some(NavEvent::Load { view, done: line.contains("\"done\":true") });
+    }
+    None
+}
+
+/// Keep a navigation event the current reader is not interested in, instead of dropping it.
+/// Returns true when `line` was one.
+fn queue_nav_event(line: &str) -> bool {
+    let Some(ev) = parse_nav_event(line) else { return false };
+    NAV_EVENTS.with(|q| q.borrow_mut().push(ev));
+    true
 }
 
 /// A pending `chrome.runtime.sendMessage` from a content script.
@@ -99,6 +145,11 @@ impl Host {
     /// OS process id of the Ladybird host (for task manager / memory diagnostics).
     pub fn pid(&self) -> u32 {
         self.child.id()
+    }
+
+    /// True once the host process has exited (crash, kill, OOM). Every later call would fail.
+    pub fn exited(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(Some(_)))
     }
 
     /// Spawn the host for `profile_dir`. `parent_hwnd` is the HWND to parent page surfaces into (0 = none).
@@ -218,6 +269,8 @@ impl Host {
                 Ok(line) => {
                     if Self::apply_side_effect(&line) {
                         any = true;
+                    } else {
+                        queue_nav_event(&line);
                     }
                 }
                 Err(TryRecvError::Empty) => break,
@@ -262,6 +315,8 @@ impl Host {
             }
             if let Some(id) = want_id {
                 if !(line.contains(&format!("\"id\":{id}")) || line.contains(&format!("\"id\": {id}"))) {
+                    // Another view's progress: keep it for the idle drain.
+                    queue_nav_event(&line);
                     continue;
                 }
             }
@@ -306,6 +361,13 @@ impl Host {
             }
             if id > 0 && line.contains("\"event\":\"load\"") && line.contains("\"done\":true") {
                 return Ok(id);
+            }
+            // url/title of the new view (and anything from other views) reach the tab via the
+            // idle drain. Our own `load` lines are settled here, so they are not replayed.
+            if let Some(ev) = parse_nav_event(&line) {
+                if !matches!(ev, NavEvent::Load { view, .. } if view == id) {
+                    NAV_EVENTS.with(|q| q.borrow_mut().push(ev));
+                }
             }
         }
         if id > 0 {
@@ -354,7 +416,7 @@ impl Host {
         while Instant::now() < deadline {
             let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
             let line = self.read_line_timeout(remain)?;
-            if Self::apply_side_effect(&line) {
+            if Self::apply_side_effect(&line) || queue_nav_event(&line) {
                 continue;
             }
             if line.contains("\"event\":\"screenshot\"")
@@ -376,7 +438,7 @@ impl Host {
         while Instant::now() < deadline {
             let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
             let line = self.read_line_timeout(remain)?;
-            if Self::apply_side_effect(&line) {
+            if Self::apply_side_effect(&line) || queue_nav_event(&line) {
                 continue;
             }
             if line.contains("\"event\":\"print\"") {
@@ -399,7 +461,7 @@ impl Host {
         while Instant::now() < deadline {
             let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
             let line = self.read_line_timeout(remain)?;
-            if Self::apply_side_effect(&line) {
+            if Self::apply_side_effect(&line) || queue_nav_event(&line) {
                 continue;
             }
             if line.contains("\"event\":\"eval\"")
@@ -435,7 +497,7 @@ window.ipc=window.ipc||{{postMessage:function(m){{try{{console.log('kk-pw:'+m)}}
         while Instant::now() < deadline {
             let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
             let line = self.read_line_timeout(remain)?;
-            if Self::apply_side_effect(&line) {
+            if Self::apply_side_effect(&line) || queue_nav_event(&line) {
                 continue;
             }
             if line.contains("\"event\":\"permissions_defaults\"") {
@@ -456,7 +518,7 @@ window.ipc=window.ipc||{{postMessage:function(m){{try{{console.log('kk-pw:'+m)}}
         while Instant::now() < deadline {
             let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
             let line = self.read_line_timeout(remain)?;
-            if Self::apply_side_effect(&line) {
+            if Self::apply_side_effect(&line) || queue_nav_event(&line) {
                 continue;
             }
             if line.contains("\"event\":\"processes\"") {
@@ -495,7 +557,7 @@ window.ipc=window.ipc||{{postMessage:function(m){{try{{console.log('kk-pw:'+m)}}
         while Instant::now() < deadline {
             let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
             let line = self.read_line_timeout(remain)?;
-            if Self::apply_side_effect(&line) {
+            if Self::apply_side_effect(&line) || queue_nav_event(&line) {
                 continue;
             }
             if line.contains("\"event\":\"permissions_list\"") {
@@ -537,7 +599,7 @@ window.ipc=window.ipc||{{postMessage:function(m){{try{{console.log('kk-pw:'+m)}}
         while Instant::now() < deadline {
             let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
             let line = self.read_line_timeout(remain)?;
-            if Self::apply_side_effect(&line) {
+            if Self::apply_side_effect(&line) || queue_nav_event(&line) {
                 continue;
             }
             if line.contains("\"event\":\"permissions_reset\"") {
@@ -572,7 +634,7 @@ window.ipc=window.ipc||{{postMessage:function(m){{try{{console.log('kk-pw:'+m)}}
         while Instant::now() < deadline {
             let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
             let line = self.read_line_timeout(remain)?;
-            if Self::apply_side_effect(&line) {
+            if Self::apply_side_effect(&line) || queue_nav_event(&line) {
                 continue;
             }
             if line.contains("\"event\":\"find\"")
@@ -600,7 +662,7 @@ window.ipc=window.ipc||{{postMessage:function(m){{try{{console.log('kk-pw:'+m)}}
         while Instant::now() < deadline {
             let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
             let line = self.read_line_timeout(remain)?;
-            if Self::apply_side_effect(&line) {
+            if Self::apply_side_effect(&line) || queue_nav_event(&line) {
                 continue;
             }
             if line.contains("\"event\":\"clear_data\"") {
@@ -625,7 +687,7 @@ window.ipc=window.ipc||{{postMessage:function(m){{try{{console.log('kk-pw:'+m)}}
         while Instant::now() < deadline {
             let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
             let line = self.read_line_timeout(remain)?;
-            if Self::apply_side_effect(&line) {
+            if Self::apply_side_effect(&line) || queue_nav_event(&line) {
                 continue;
             }
             if line.contains("\"event\":\"adblock\"") {
@@ -651,7 +713,7 @@ window.ipc=window.ipc||{{postMessage:function(m){{try{{console.log('kk-pw:'+m)}}
         while Instant::now() < deadline {
             let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
             let line = self.read_line_timeout(remain)?;
-            if Self::apply_side_effect(&line) {
+            if Self::apply_side_effect(&line) || queue_nav_event(&line) {
                 continue;
             }
             if line.contains("\"event\":\"zoom\"")
@@ -673,7 +735,7 @@ window.ipc=window.ipc||{{postMessage:function(m){{try{{console.log('kk-pw:'+m)}}
         while Instant::now() < deadline {
             let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
             let line = self.read_line_timeout(remain)?;
-            if Self::apply_side_effect(&line) {
+            if Self::apply_side_effect(&line) || queue_nav_event(&line) {
                 continue;
             }
             if line.contains("\"event\":\"zoom\"")
@@ -694,7 +756,7 @@ window.ipc=window.ipc||{{postMessage:function(m){{try{{console.log('kk-pw:'+m)}}
         while Instant::now() < deadline {
             let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
             let line = self.read_line_timeout(remain)?;
-            if Self::apply_side_effect(&line) {
+            if Self::apply_side_effect(&line) || queue_nav_event(&line) {
                 continue;
             }
             if line.contains("\"event\":\"a11y\"") {
@@ -721,7 +783,7 @@ window.ipc=window.ipc||{{postMessage:function(m){{try{{console.log('kk-pw:'+m)}}
         while Instant::now() < deadline {
             let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
             let line = self.read_line_timeout(remain)?;
-            if Self::apply_side_effect(&line) {
+            if Self::apply_side_effect(&line) || queue_nav_event(&line) {
                 continue;
             }
             if line.contains("\"event\":\"download_started\"") {
@@ -758,7 +820,7 @@ window.ipc=window.ipc||{{postMessage:function(m){{try{{console.log('kk-pw:'+m)}}
         while Instant::now() < deadline {
             let remain = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(50));
             let line = self.read_line_timeout(remain)?;
-            if Self::apply_side_effect(&line) {
+            if Self::apply_side_effect(&line) || queue_nav_event(&line) {
                 continue;
             }
             if line.contains("\"event\":\"ext_reply\"")
@@ -936,6 +998,26 @@ pub fn status_line(resolution: &Resolution) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_nav_events_from_host_lines() {
+        assert_eq!(
+            parse_nav_event(r#"{"event":"url","id":2,"url":"https://ladybird.org/x"}"#),
+            Some(NavEvent::Url { view: 2, url: "https://ladybird.org/x".into() })
+        );
+        assert_eq!(
+            parse_nav_event(r#"{"event":"title","id":2,"title":"Ladybird"}"#),
+            Some(NavEvent::Title { view: 2, title: "Ladybird".into() })
+        );
+        assert_eq!(
+            parse_nav_event(r#"{"event":"history","id":3,"back":true,"forward":false}"#),
+            Some(NavEvent::History { view: 3, back: true, forward: false })
+        );
+        assert_eq!(parse_nav_event(r#"{"event":"load","id":1,"done":false}"#), Some(NavEvent::Load { view: 1, done: false }));
+        assert_eq!(parse_nav_event(r#"{"event":"load","id":1,"done":true}"#), Some(NavEvent::Load { view: 1, done: true }));
+        assert_eq!(parse_nav_event(r#"{"event":"zoom","id":1,"ok":true,"factor":1.1}"#), None);
+        assert_eq!(parse_nav_event(r#"{"event":"ready","engine":"ladybird"}"#), None);
+    }
 
     #[test]
     fn parse_download_progress_line() {

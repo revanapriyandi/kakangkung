@@ -29,6 +29,7 @@ pub(super) enum Hit {
     InstallApp,
     Star,
     Key,
+    Zoom,
     Extensions,
     Profile,
     Menu,
