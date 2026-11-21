@@ -38,7 +38,7 @@ if(HAVE_LADYBIRD AND TARGET LibWebView)
     message(STATUS "Kakangkung host: linking in-tree Ladybird targets")
     target_compile_definitions(kakangkung-ladybird-host PRIVATE HAVE_LADYBIRD=1)
     target_link_libraries(kakangkung-ladybird-host PRIVATE
-        AK LibCore LibFileSystem LibGfx LibIPC LibJS LibURL LibWeb LibWebCommon LibWebView)
+        AK LibCore LibFileSystem LibGC LibGfx LibIPC LibJS LibURL LibWeb LibWebCommon LibWebView)
 elseif(HAVE_LADYBIRD)
     if(NOT LADYBIRD_SOURCE_DIR OR NOT LADYBIRD_BUILD_DIR)
         message(FATAL_ERROR "HAVE_LADYBIRD=ON requires LADYBIRD_SOURCE_DIR and LADYBIRD_BUILD_DIR")
