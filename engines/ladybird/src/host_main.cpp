@@ -6,15 +6,59 @@
 
 #include "kakangkung_ladybird.h"
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <iostream>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 
+#if defined(_WIN32)
+#    include <windows.h>
+#endif
+
 namespace {
+
+// stdin is read on its own thread so the main thread never blocks on it: LibWeb's event loop
+// (JS timers, animations, IPC from WebContent, paints) and the page HWND's Win32 messages
+// (input, scroll, repaint) must keep running between Kakangkung's commands. Before, the main
+// thread sat in getline and the page only advanced when the next command arrived.
+std::mutex g_lines_mutex;
+std::deque<std::string> g_lines;
+std::atomic<bool> g_stdin_closed { false };
+
+void start_stdin_reader()
+{
+    std::thread([] {
+        std::string line;
+        while (std::getline(std::cin, line)) {
+            std::lock_guard lock(g_lines_mutex);
+            g_lines.push_back(std::move(line));
+        }
+        g_stdin_closed = true;
+    }).detach();
+}
+
+void pump_platform()
+{
+#if defined(_WIN32)
+    MSG msg;
+    while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+    // Sleep until window input arrives or ~8 ms pass (keeps idle CPU low, input responsive).
+    MsgWaitForMultipleObjects(0, nullptr, FALSE, 8, QS_ALLINPUT);
+#else
+    std::this_thread::sleep_for(std::chrono::milliseconds(8));
+#endif
+}
 
 struct HostView {
     kk_lb_view* view {};
@@ -219,6 +263,26 @@ std::string extract_raw_json_field(std::string const& line, char const* key)
     return line.substr(pos, end - pos);
 }
 
+/// The next command line; keeps LibWeb and the page windows running while it waits.
+/// False once stdin is closed and every line is handled.
+bool next_line(Host& host, std::string& line)
+{
+    for (;;) {
+        {
+            std::lock_guard lock(g_lines_mutex);
+            if (!g_lines.empty()) {
+                line = std::move(g_lines.front());
+                g_lines.pop_front();
+                return true;
+            }
+            if (g_stdin_closed)
+                return false;
+        }
+        kk_lb_session_pump(host.session);
+        pump_platform();
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -244,8 +308,9 @@ int main(int argc, char** argv)
     });
     emit(std::string("{\"event\":\"ready\",\"engine\":\"") + kk_lb_engine_id() + "\"}");
 
+    start_stdin_reader();
     std::string line;
-    while (std::getline(std::cin, line)) {
+    while (next_line(host, line)) {
         if (line.empty())
             continue;
         if (has_cmd(line, "quit"))

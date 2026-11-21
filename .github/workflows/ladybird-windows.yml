@@ -124,6 +124,15 @@ jobs:
           if (Test-Path Install/share) { Copy-Item Install/share "$rt/share" -Recurse -Force }
           # Ladybird's own browser UI is not part of Kakangkung.
           Remove-Item "$rt/bin/Ladybird.exe" -ErrorAction SilentlyContinue
+          # clang-cl /MD links the Visual C++ runtime. Ship it app-local (Microsoft's documented
+          # redistribution) so the host also starts on PCs without the VC++ Redistributable.
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $crt = Get-ChildItem "$vs\VC\Redist\MSVC" -Recurse -Directory -Filter 'Microsoft.VC*.CRT' |
+            Where-Object { $_.FullName -match '\\x64\\' -and $_.FullName -notmatch 'onecore|debug' } |
+            Select-Object -First 1
+          if (-not $crt) { throw 'Visual C++ runtime (x64 CRT redist) not found' }
+          Copy-Item "$($crt.FullName)\*.dll" "$rt/bin" -Force
+          "VC++ runtime from $($crt.FullName):"; Get-ChildItem $crt.FullName -Filter *.dll | ForEach-Object Name
           $host_exe = "$rt/bin/kakangkung-ladybird-host.exe"
           if (-not (Test-Path $host_exe)) {
             $built = Get-ChildItem -Recurse Build -Filter kakangkung-ladybird-host.exe | Select-Object -First 1
@@ -207,56 +216,7 @@ jobs:
 
       - name: Self-test with LibWeb (no console windows allowed)
         timeout-minutes: 10
-        run: |
-          Add-Type @'
-          using System; using System.Text; using System.Collections.Generic; using System.Runtime.InteropServices;
-          public static class Wins {
-            delegate bool EnumProc(IntPtr h, IntPtr l);
-            [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc f, IntPtr l);
-            [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
-            [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder s, int n);
-            [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
-            [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
-            public static List<string> Consoles() {
-              var found = new List<string>();
-              EnumWindows((h, l) => {
-                if (!IsWindowVisible(h)) return true;
-                var c = new StringBuilder(256); GetClassName(h, c, 256);
-                var cls = c.ToString();
-                if (cls == "ConsoleWindowClass" || cls == "CASCADIA_HOSTING_WINDOW_CLASS" || cls == "PseudoConsoleWindow") {
-                  var t = new StringBuilder(512); GetWindowText(h, t, 512); uint pid; GetWindowThreadProcessId(h, out pid);
-                  found.Add(cls + " pid=" + pid + " '" + t + "'");
-                }
-                return true;
-              }, IntPtr.Zero);
-              return found;
-            }
-          }
-          '@
-          $before = [Wins]::Consoles()
-          "console windows before start: $($before.Count)"
-          $out = Join-Path $env:RUNNER_TEMP 'selftest.json'
-          $env:KAKANGKUNG_SHOT_DIR = Join-Path $env:RUNNER_TEMP 'shots'
-          New-Item -ItemType Directory -Force $env:KAKANGKUNG_SHOT_DIR | Out-Null
-          $p = Start-Process -FilePath target\release\kakangkung.exe -ArgumentList "--self-test `"$out`"" -PassThru `
-            -RedirectStandardError (Join-Path $env:RUNNER_TEMP 'kakangkung-stderr.log')
-          $seen = @{}
-          $deadline = (Get-Date).AddSeconds(240)
-          while (-not $p.HasExited -and (Get-Date) -lt $deadline) {
-            foreach ($w in [Wins]::Consoles()) { if ($before -notcontains $w) { $seen[$w] = $true } }
-            Start-Sleep -Milliseconds 250
-          }
-          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force; Get-Process | Where-Object Name -match 'kakangkung|WebContent|RequestServer|ImageDecoder' | Stop-Process -Force -ErrorAction SilentlyContinue; throw 'self-test exceeded 240 s' }
-          'kakangkung stderr:'; Get-Content (Join-Path $env:RUNNER_TEMP 'kakangkung-stderr.log')
-          if ($seen.Count) { $seen.Keys | ForEach-Object { "CONSOLE WINDOW: $_" }; throw "$($seen.Count) console window(s) opened while Kakangkung ran" }
-          'no console window opened'
-          if (-not (Test-Path $out)) { throw "self-test wrote no result (exit $($p.ExitCode))" }
-          $r = Get-Content $out -Raw | ConvertFrom-Json
-          $r.steps | ForEach-Object { '{0,-5} {1}: {2}' -f ($(if ($_.passed) { 'PASS' } else { 'FAIL' })), $_.step, $_.detail }
-          $engine = $r.steps | Where-Object step -eq 'ladybird' | ForEach-Object detail
-          if ($engine -notmatch 'engine=ladybird') { throw "the LibWeb host was not used: $engine" }
-          $failed = @($r.steps | Where-Object { -not $_.passed })
-          if ($failed.Count) { throw "$($failed.Count) self-test step(s) failed" }
+        run: ./installer/libweb-smoke.ps1 -Exe target/release/kakangkung.exe
 
       - name: Screenshots
         if: always()
