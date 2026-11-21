@@ -473,17 +473,50 @@ fn main() {
         let mut wake = browser.memory_tick();
         // Drain Ladybird host stdout so spontaneous download / page_ipc events reach the UI
         // even when no navigate/create wait is active.
+        // Safety net for the launch logo (page area shown, no native page in it): once the
+        // active tab is no longer loading, or after 10 s, the logo goes — never a stuck splash.
+        thread_local!(static LAUNCH_SEEN: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) });
+        if browser.native.tab == 0 && browser.page.is_visible() {
+            let since = LAUNCH_SEEN.with(|c| *c.get().get_or_insert_with(Instant::now));
+            let loading = browser.index(browser.active).is_some_and(|i| browser.tabs[i].view.loading);
+            if !loading && since.elapsed() >= Duration::from_secs(1) || since.elapsed() >= Duration::from_secs(10) {
+                browser.page.set_visible(false);
+                LAUNCH_SEEN.with(|c| c.set(None));
+            } else {
+                let next = Instant::now() + Duration::from_millis(250);
+                wake = Some(wake.map_or(next, |w| w.min(next)));
+            }
+        } else {
+            LAUNCH_SEEN.with(|c| c.set(None));
+        }
+        if browser.ladybird.as_mut().is_some_and(|h| h.exited()) {
+            eprintln!("Ladybird host exited; restarting it");
+            browser.recover_ladybird_host();
+        }
         if browser.ladybird.is_some() {
             // Pull console-missed kk-ext queue entries from the active view, then drain stdout.
-            if let Some(vid) = browser.index(browser.active).and_then(|i| browser.tabs[i].ladybird_view) {
-                if let Some(host) = browser.ladybird.as_ref() {
-                    let _ = host.ext_drain(vid);
+            // ponytail: once a second, not every 100 ms tick — the host keeps the queue meanwhile.
+            // Upgrade: skip when no extension is installed (needs a cached installed list).
+            thread_local!(static LAST_EXT_DRAIN: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) });
+            let drain_due = LAST_EXT_DRAIN.with(|c| {
+                let due = c.get().is_none_or(|t| t.elapsed() >= Duration::from_secs(1));
+                if due {
+                    c.set(Some(Instant::now()));
+                }
+                due
+            });
+            if drain_due {
+                if let Some(vid) = browser.index(browser.active).and_then(|i| browser.tabs[i].ladybird_view) {
+                    if let Some(host) = browser.ladybird.as_ref() {
+                        let _ = host.ext_drain(vid);
+                    }
                 }
             }
             let drained = browser.ladybird.as_ref().is_some_and(|h| h.poll_events());
             if drained {
                 let _ = browser.proxy.send_event(Msg::DownloadsChanged);
             }
+            browser.drain_ladybird_nav();
             for (vid, message) in platform::take_page_ipc() {
                 if let Some(what) = message.strip_prefix("kk:pw:") {
                     if let Some(i) = browser.tabs.iter().position(|t| t.ladybird_view == Some(vid)) {

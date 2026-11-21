@@ -511,7 +511,16 @@ impl Inner {
                 glow(key, 14.0, Hit::Key, 1.0);
                 ico(glyph::KEY, key, BIG, p.muted, 1.0);
                 hits.push((key, Hit::Key));
+                right = key.left;
                 edit_right = key.left - 4.0;
+            }
+            if s.zoom != 0 && s.zoom != 100 {
+                let zoom = rect(right - 28.0, omni.top + 3.0, 28.0, 28.0);
+                glow(zoom, 14.0, Hit::Zoom, 1.0);
+                // Segoe Fluent ZoomIn / ZoomOut.
+                ico(if s.zoom > 100 { "\u{E8A3}" } else { "\u{E71F}" }, zoom, BIG, p.muted, 1.0);
+                hits.push((zoom, Hit::Zoom));
+                edit_right = zoom.left - 4.0;
             }
             // The EDIT control sits inside the pill, vertically centred.
             let scale = scale_of(self.hwnd);

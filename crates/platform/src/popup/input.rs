@@ -522,7 +522,11 @@ pub(super) unsafe extern "system" fn filter_proc(hwnd: HWND, msg: u32, wp: WPARA
                 let key = wp.0 as u16;
                 if key == VK_RETURN.0 {
                     if i.input_mode {
-                        let cmd = format!("input\t{}\t{}", i.kind, edit_text(hwnd));
+                        // Shift+Enter in the find bar goes to the previous match.
+                        let back = i.kind == "find"
+                            && windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState(windows::Win32::UI::Input::KeyboardAndMouse::VK_SHIFT.0 as i32) < 0;
+                        let kind = if back { "find:back" } else { i.kind.as_str() };
+                        let cmd = format!("input\t{kind}\t{}", edit_text(hwnd));
                         i.send(cmd);
                     } else if let Some(index) = i.selected {
                         i.pick(index, false);

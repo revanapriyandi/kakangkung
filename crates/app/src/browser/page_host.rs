@@ -129,7 +129,9 @@ impl Browser {
     /// Draw the page on show from the data at hand (also after a theme change).
     pub(crate) fn draw_native(&mut self) {
         let Some(page) = self.native_page() else { return };
-        if self.native.data.is_null() && native::data_path(page).is_some() {
+        // New Tab draws at once with the starter tiles (the bouncing launch logo used to stay
+        // until the top-sites answer arrived); the answer redraws it with the visited sites.
+        if self.native.data.is_null() && native::data_path(page).is_some() && page != "newtab" {
             return;
         }
         let data = &self.native.data;

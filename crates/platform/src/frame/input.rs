@@ -102,6 +102,7 @@ impl Inner {
             Hit::Home => "home".into(),
             Hit::Star => "bookmark".into(),
             Hit::InstallApp => format!("installapp\t{}\t{}", place.0.round(), (place.1 + 6.0).round()),
+            Hit::Zoom => "zoomreset".into(),
             Hit::Key => format!("pwkey\t{}\t{}", place.0.round(), (place.1 + 6.0).round()),
             Hit::Extensions => format!("extensions\t{}\t{}", place.0.round(), (place.1 + 2.0).round()),
             Hit::Profile => format!("profile\t{}\t{}", place.0.round(), (place.1 + 2.0).round()),

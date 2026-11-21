@@ -64,6 +64,9 @@ impl Browser {
             if self.overlay_kind == "extinstall" && self.pending_install.is_some() {
                 self.finish_install(false);
             }
+            if self.overlay_kind == "find" {
+                self.end_find();
+            }
 
         }
     }

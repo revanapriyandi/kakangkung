@@ -56,6 +56,8 @@ pub(crate) struct Tab {
     pub(crate) webview: Option<WebView>,
     /// Ladybird host view id when `page_engine` is Ladybird (mutually exclusive with `webview`).
     pub(crate) ladybird_view: Option<i32>,
+    /// The host sent a title for the current Ladybird document (so load-done keeps it).
+    pub(crate) ladybird_title_seen: bool,
     pub(crate) hooks: platform::Hooks,
     pub(crate) state: Lifecycle,
     /// When the tab stopped being visible (memory saver clock).
@@ -83,6 +85,7 @@ impl Tab {
             view,
             webview: None,
             ladybird_view: None,
+            ladybird_title_seen: false,
             hooks: platform::Hooks::default(),
             state: Lifecycle::Discarded,
             hidden_since: None,
@@ -106,6 +109,7 @@ impl Tab {
         if let Some(title) = nav.title.as_ref() {
             self.view.title = title.clone();
         }
+        self.ladybird_title_seen = nav.title.as_deref().is_some_and(|t| !t.is_empty());
         self.ladybird_can_back = nav.can_back;
         self.ladybird_can_forward = nav.can_forward;
         self.view.loading = false;
@@ -1024,6 +1028,7 @@ impl Browser {
             installable: self.tabs.iter().any(|t| t.view.id == self.active && t.web_app.is_some() && !t.view.private),
             show_star: set.bookmark_star && storage::storable(url),
             key: self.key_shown(),
+            zoom: self.index(self.active).filter(|&i| self.tabs[i].ladybird_view.is_some()).map_or(0, |i| (self.tabs[i].ladybird_zoom * 100.0).round() as u16),
             show_home: set.home_button,
             show_extensions: set.extensions_button && !self.incognito,
             show_tab_search: set.tab_search_button,
