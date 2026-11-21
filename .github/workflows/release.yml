@@ -125,6 +125,10 @@ jobs:
   linux-host:
     name: Linux ladybird-host (x64)
     runs-on: ubuntu-latest
+    env:
+      # rust-toolchain.toml pins stable-x86_64-pc-windows-msvc for the Windows app; on Linux
+      # that channel name fails `rustc -vV`. Use the runner's native stable instead.
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v7
 
