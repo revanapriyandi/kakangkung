@@ -1,0 +1,146 @@
+name: Ladybird runtime (Windows)
+
+# Builds upstream Ladybird / LibWeb natively on Windows (clang-cl, with Ladybird's own setup and
+# cache actions, as its Windows CI does), builds kakangkung-ladybird-host inside that CMake tree
+# (engines/ladybird, HAVE_LADYBIRD=ON) and uploads ladybird-runtime-windows-x64.zip:
+#
+#   bin/    kakangkung-ladybird-host.exe, Lagom DLLs, helper processes (WebContent, …), vcpkg DLLs
+#   share/  Lagom resources
+#
+# The app prefers <install dir>\ladybird-runtime\bin\kakangkung-ladybird-host.exe over the stub.
+# Upstream's Windows port is experimental: a build that links can still crash at run time.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ladybird_ref:
+        description: LadybirdBrowser/ladybird commit (pinned; LibWebView's API moves fast)
+        required: false
+        default: 48d36b1709f6fbac372f4282c1dc5c67c12e238f
+  push:
+    branches: [ci/ladybird-windows]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ladybird-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runtime:
+    name: Build LibWeb + host (Windows x64)
+    runs-on: windows-latest
+    # GitHub-hosted jobs stop at 6 h; a cold Ladybird build takes about 2 h.
+    timeout-minutes: 355
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      LADYBIRD_REF: ${{ inputs.ladybird_ref || '48d36b1709f6fbac372f4282c1dc5c67c12e238f' }}
+      LADYBIRD_SOURCE_DIR: ${{ github.workspace }}
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      VCPKG_ROOT: ${{ github.workspace }}/Build/vcpkg-release
+      CCACHE_COMPILERCHECK: "%compiler% -v"
+    steps:
+      # Ladybird at the workspace root: its setup / cache actions expect that.
+      - name: Checkout Ladybird
+        uses: actions/checkout@v4
+        with:
+          repository: LadybirdBrowser/ladybird
+          ref: ${{ env.LADYBIRD_REF }}
+
+      - name: Checkout Kakangkung
+        uses: actions/checkout@v4
+        with:
+          path: kakangkung
+
+      - name: Set up environment (Ladybird)
+        uses: ./.github/actions/setup
+        with:
+          os: Windows
+          arch: x86_64
+          toolchain: ClangCL
+
+      - name: Restore caches (Ladybird)
+        id: cache-restore
+        uses: ./.github/actions/cache-restore
+        with:
+          os: Windows
+          arch: x86_64
+          toolchain: ClangCL
+          cache_key_extra: Kakangkung_Windows
+          ccache_path: ${{ env.CCACHE_DIR }}
+          sccache_path: ${{ github.workspace }}/.sccache
+          vcpkg_cache_path: ${{ github.workspace }}/Build/caches/vcpkg-binary-cache
+
+      - name: Add the Kakangkung host to Ladybird's CMake tree
+        run: |
+          $lines = @(
+            '',
+            '# Kakangkung: build kakangkung-ladybird-host against the in-tree LibWebView.',
+            'set(HAVE_LADYBIRD ON CACHE BOOL "" FORCE)',
+            'add_subdirectory("${CMAKE_SOURCE_DIR}/kakangkung/engines/ladybird" kakangkung-host)'
+          )
+          Add-Content -Path CMakeLists.txt -Value $lines
+          Get-Content CMakeLists.txt -Tail 5
+
+      - name: Configure
+        run: |
+          cmake --preset Release -B Build `
+            -DENABLE_CI_BASELINE_CPU=ON `
+            -DENABLE_TESTS=OFF `
+            -DBUILD_TESTING=OFF `
+            -DENABLE_LAGOM_TESTS=OFF
+
+      # -k 0: keep building Ladybird when the host fails, so the compiler cache holds all of
+      # Ladybird and the next run only rebuilds the host.
+      - name: Build
+        run: |
+          cmake --build Build -- -k 0
+          if ($LASTEXITCODE) { throw "build failed ($LASTEXITCODE)" }
+          cmake --install Build --strip --prefix Install
+
+      - name: Package ladybird-runtime
+        run: |
+          $rt = Join-Path $env:RUNNER_TEMP 'ladybird-runtime'
+          New-Item -ItemType Directory -Force "$rt/bin" | Out-Null
+          Copy-Item Install/bin/* "$rt/bin" -Recurse -Force
+          if (Test-Path Install/libexec) { Copy-Item Install/libexec/* "$rt/bin" -Force }
+          Copy-Item Build/vcpkg_installed/x64-windows/bin/*.dll "$rt/bin" -Force -ErrorAction SilentlyContinue
+          if (Test-Path Install/share) { Copy-Item Install/share "$rt/share" -Recurse -Force }
+          # Ladybird's own browser UI is not part of Kakangkung.
+          Remove-Item "$rt/bin/Ladybird.exe" -ErrorAction SilentlyContinue
+          $host_exe = "$rt/bin/kakangkung-ladybird-host.exe"
+          if (-not (Test-Path $host_exe)) {
+            $built = Get-ChildItem -Recurse Build -Filter kakangkung-ladybird-host.exe | Select-Object -First 1
+            if (-not $built) { throw 'kakangkung-ladybird-host.exe was not built' }
+            Copy-Item $built.FullName $host_exe
+          }
+          # Loads every DLL the host links: fails here, not on a user's machine.
+          & $host_exe --version
+          if ($LASTEXITCODE) { throw "host --version exited $LASTEXITCODE" }
+          Get-ChildItem "$rt/bin" -Filter *.exe | ForEach-Object Name
+          Compress-Archive -Path "$rt/*" -DestinationPath ladybird-runtime-windows-x64.zip -Force
+          $mb = [math]::Round((Get-Item ladybird-runtime-windows-x64.zip).Length / 1MB, 1)
+          "ladybird-runtime-windows-x64.zip: $mb MB (Ladybird $env:LADYBIRD_REF)"
+
+      - name: Upload ladybird-runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: ladybird-runtime-windows-x64
+          path: ladybird-runtime-windows-x64.zip
+          if-no-files-found: error
+
+      # Also after a failed host build: the next run reuses the compiled Ladybird.
+      - name: Save caches (Ladybird)
+        if: always() && steps.cache-restore.outcome == 'success'
+        uses: ./.github/actions/cache-save
+        with:
+          arch: x86_64
+          ccache_path: ${{ env.CCACHE_DIR }}
+          ccache_primary_key: ${{ steps.cache-restore.outputs.ccache_primary_key }}
+          sccache_path: ${{ github.workspace }}/.sccache
+          sccache_primary_key: ${{ steps.cache-restore.outputs.sccache_primary_key }}
+          vcpkg_cache_path: ${{ github.workspace }}/Build/caches/vcpkg-binary-cache
+          vcpkg_cache_primary_key: ${{ steps.cache-restore.outputs.vcpkg_cache_primary_key }}

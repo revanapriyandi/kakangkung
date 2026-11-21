@@ -76,13 +76,19 @@ pub fn find_ladybird_host(exe_dir: Option<&Path>) -> Option<PathBuf> {
             return Some(path);
         }
     }
-    if let Some(dir) = exe_dir {
-        let candidate = dir.join(host_file_name());
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    which(host_file_name())
+    exe_dir.and_then(host_in).or_else(|| which(host_file_name()))
+}
+
+/// The host shipped with the app in `exe_dir`. The LibWeb-linked host lives with its DLLs,
+/// helper processes (WebContent, …) and share/Lagom in ladybird-runtime\bin, and wins over
+/// the stub beside the exe.
+fn host_in(exe_dir: &Path) -> Option<PathBuf> {
+    [runtime_host(exe_dir), exe_dir.join(host_file_name())].into_iter().find(|p| p.is_file())
+}
+
+/// Where a packaged LibWeb runtime keeps its host: `<exe dir>/ladybird-runtime/bin/<host>`.
+pub fn runtime_host(exe_dir: &Path) -> PathBuf {
+    exe_dir.join("ladybird-runtime").join("bin").join(host_file_name())
 }
 
 fn which(name: &str) -> Option<PathBuf> {
@@ -155,5 +161,17 @@ mod tests {
         assert_eq!(r.active, Kind::Ladybird);
         assert_eq!(r.host.as_deref(), Some(host.as_path()));
         assert!(!r.host_missing());
+    }
+
+    #[test]
+    fn packaged_libweb_host_wins_over_the_stub() {
+        let dir = std::env::temp_dir().join(format!("kk-runtime-host-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("ladybird-runtime").join("bin")).unwrap();
+        assert_eq!(host_in(&dir), None);
+        std::fs::write(dir.join(host_file_name()), b"stub").unwrap();
+        assert_eq!(host_in(&dir), Some(dir.join(host_file_name())));
+        std::fs::write(runtime_host(&dir), b"libweb").unwrap();
+        assert_eq!(host_in(&dir), Some(runtime_host(&dir)));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
