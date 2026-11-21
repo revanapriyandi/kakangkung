@@ -32,7 +32,14 @@ target_include_directories(kakangkung-ladybird-host PRIVATE
 
 target_compile_definitions(kakangkung-ladybird-host PRIVATE KAKANGKUNG_LADYBIRD_BUILD)
 
-if(HAVE_LADYBIRD)
+if(HAVE_LADYBIRD AND TARGET LibWebView)
+    # Built inside Ladybird's own CMake tree (add_subdirectory from Ladybird, as the Windows CI
+    # does): its targets carry their include paths, definitions and vcpkg dependencies.
+    message(STATUS "Kakangkung host: linking in-tree Ladybird targets")
+    target_compile_definitions(kakangkung-ladybird-host PRIVATE HAVE_LADYBIRD=1)
+    target_link_libraries(kakangkung-ladybird-host PRIVATE
+        AK LibCore LibFileSystem LibGfx LibIPC LibJS LibURL LibWeb LibWebCommon LibWebView)
+elseif(HAVE_LADYBIRD)
     if(NOT LADYBIRD_SOURCE_DIR OR NOT LADYBIRD_BUILD_DIR)
         message(FATAL_ERROR "HAVE_LADYBIRD=ON requires LADYBIRD_SOURCE_DIR and LADYBIRD_BUILD_DIR")
     endif()
