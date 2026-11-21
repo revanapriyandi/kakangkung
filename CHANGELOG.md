@@ -4,6 +4,20 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-11-21
+
+### Fixed
+- No more black console window for the page-engine host in front of the browser.
+- The browser window appears in about a second again: start-up waited 16 seconds for the
+  bundled page-engine host to answer settings it does not support.
+- New tabs no longer open blank: an extension's New Tab page (which the Ladybird engine cannot
+  show) is no longer used, and tabs saved on such a page reopen as the New Tab page.
+- Release builds publish again when the Linux host is built (toolchain fix).
+
+### Known limitation
+- Windows packages still ship the stub page-engine host: web pages are not drawn until a
+  Windows build of the LibWeb/Lagom runtime can be bundled.
+
 ## [0.4.5] - 2026-11-21
 
 ### Fixed
