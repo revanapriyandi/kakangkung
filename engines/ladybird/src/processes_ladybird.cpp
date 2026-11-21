@@ -67,7 +67,8 @@ int kk_lb_processes_json(char** out_utf8)
         JsonObject o;
         o.set("pid"sv, JsonValue { static_cast<u64>(snap.pid) });
         o.set("child_id"sv, JsonValue { snap.child_id });
-        o.set("kind"sv, JsonValue { type_name(snap.type) });
+        auto const* kind = type_name(snap.type);
+        o.set("kind"sv, JsonValue { MUST(String::from_utf8(StringView { kind, std::strlen(kind) })) });
         o.set("ws"sv, JsonValue { snap.memory_usage_bytes });
         o.set("cpu"sv, JsonValue { snap.cpu_percent });
         if (snap.title.has_value())
@@ -81,10 +82,12 @@ int kk_lb_processes_json(char** out_utf8)
         arr.must_append(move(o));
     }
     auto json = arr.serialized();
-    *out_utf8 = static_cast<char*>(std::malloc(json.size() + 1));
+    auto bytes = json.bytes();
+    *out_utf8 = static_cast<char*>(std::malloc(bytes.size() + 1));
     if (!*out_utf8)
         return 0;
-    std::memcpy(*out_utf8, json.characters(), json.size() + 1);
+    std::memcpy(*out_utf8, bytes.data(), bytes.size());
+    (*out_utf8)[bytes.size()] = '\0';
     return 1;
 }
 

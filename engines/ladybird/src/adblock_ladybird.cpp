@@ -9,6 +9,7 @@
 
 #include <AK/ByteString.h>
 #include <AK/String.h>
+#include <AK/StringBuilder.h>
 #include <AK/StringView.h>
 #include <AK/Vector.h>
 #include <LibCore/File.h>
@@ -132,11 +133,12 @@ bool apply_locked()
 {
     ensure_domains_locked();
 #if defined(KK_HAS_CONTENT_BLOCKER)
-    ByteString rules;
+    StringBuilder builder;
     if (g_enabled) {
         for (auto const& d : g_domains)
-            rules.append(ByteString::formatted("||{}^\n", d));
+            builder.appendff("||{}^\n", StringView { d.data(), d.size() });
     }
+    auto rules = builder.to_byte_string();
     auto result = Web::ContentBlocker::the().set_rules_from_bytes(rules.bytes());
     if (result.is_error()) {
         warnln("Kakangkung adblock: ContentBlocker set_rules_from_bytes failed: {}", result.error());

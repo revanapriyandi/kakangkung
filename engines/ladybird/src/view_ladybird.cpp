@@ -394,7 +394,8 @@ private:
             wc.lpfnWndProc = DefWindowProcW;
             wc.hInstance = GetModuleHandleW(nullptr);
             wc.lpszClassName = L"KakangkungLibWebSurface";
-            wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+            // IDC_ARROW is the ANSI MAKEINTRESOURCE form here (UNICODE is not defined).
+            wc.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
             RegisterClassW(&wc);
             registered = true;
         }
