@@ -4,6 +4,34 @@ All notable changes are listed here. Versions follow [Semantic Versioning](https
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-11-21
+
+### Fixed
+- Installers and portable zips now ship `kakangkung-ladybird-host.exe` next to `kakangkung.exe`
+  (0.4.4 shipped only the app, so tabs spun forever under the launch logo). The smoke test
+  refuses a package without it.
+- After a link click, redirect or in-page navigation, the address bar, tab title, Back/Forward,
+  history and the saved session follow the page instead of keeping the typed address.
+- The launch logo no longer stays on screen: a failed tab step hides it, and it goes once the
+  page is ready or after 10 seconds. New Tab shows its tiles at once.
+- When the page-engine host process dies, it is restarted and the tabs come back without
+  restarting the browser.
+- A tab no longer loads forever when the page-engine host is missing.
+- Safe Browsing cannot be bypassed with `?`, `#`, `\` or a trailing dot after the host.
+
+### Added
+- Find in page keeps its bar open with the match count ("2/5", "No results"); Enter goes to
+  the next match, Shift+Enter to the previous one.
+- A zoom icon in the address bar when the page is not at 100 %; clicking it resets the zoom.
+- Safe Browsing for Ladybird pages: a bundled list of dangerous hosts blocks navigation.
+- Task Manager shows the sites of LibWeb's per-site WebContent processes.
+- Releases also publish a Linux x64 `kakangkung-ladybird-host` tarball (page engine only).
+
+### Changed
+- Extension service-worker APIs (`getBackgroundPage`, `getContexts`, `connect`) fail with a clear
+  error instead of doing nothing; casting and paginated print are documented as not offered.
+- Typing in the address bar no longer starts an unused WebView2 process.
+
 ## [0.4.4] - 2026-11-21
 
 ### Added
