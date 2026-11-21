@@ -145,18 +145,38 @@ jobs:
           path: ladybird-runtime-windows-x64.zip
           if-no-files-found: error
 
-      # Also after a failed host build: the next run reuses the compiled Ladybird.
-      - name: Save caches (Ladybird)
+      # Saved here, not with Ladybird's cache-save action: that one only saves on its own
+      # refs/heads/master, so on our main every run rebuilt everything (~2.5 h). Saved also after
+      # a failed host build, so the next run reuses the compiled Ladybird. Same paths and keys
+      # as Ladybird's cache-restore action reads.
+      - name: Stop compiler cache servers
         if: always() && steps.cache-restore.outcome == 'success'
-        uses: ./.github/actions/cache-save
+        run: |
+          ccache --evict-older-than=1d
+          ccache -s
+          sccache --stop-server 2>$null
+          exit 0
+
+      - name: Save ccache
+        if: always() && steps.cache-restore.outcome == 'success'
+        uses: actions/cache/save@v4
         with:
-          arch: x86_64
-          ccache_path: ${{ env.CCACHE_DIR }}
-          ccache_primary_key: ${{ steps.cache-restore.outputs.ccache_primary_key }}
-          sccache_path: ${{ github.workspace }}/.sccache
-          sccache_primary_key: ${{ steps.cache-restore.outputs.sccache_primary_key }}
-          vcpkg_cache_path: ${{ github.workspace }}/Build/caches/vcpkg-binary-cache
-          vcpkg_cache_primary_key: ${{ steps.cache-restore.outputs.vcpkg_cache_primary_key }}
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.cache-restore.outputs.ccache_primary_key }}
+
+      - name: Save sccache
+        if: always() && steps.cache-restore.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.sccache
+          key: ${{ steps.cache-restore.outputs.sccache_primary_key }}
+
+      - name: Save vcpkg binary cache
+        if: always() && steps.cache-restore.outcome == 'success' && steps.cache-restore.outputs.vcpkg_cache_primary_key != ''
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/Build/caches/vcpkg-binary-cache
+          key: ${{ steps.cache-restore.outputs.vcpkg_cache_primary_key }}
 
   # Runs Kakangkung with that runtime: the self-test drives the real browser, any console window
   # that opens fails the job, and the screenshots show whether LibWeb really draws the pages.
