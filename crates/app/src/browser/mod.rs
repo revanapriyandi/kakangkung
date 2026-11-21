@@ -644,9 +644,11 @@ impl Browser {
         if self.settings.new_tab_url != ui::NEWTAB_URL || self.incognito {
             return self.settings.new_tab_url.clone();
         }
-        let prefs = self.ctx.data_directory().map(|d| d.join("EBWebView").join("Default").join("Secure Preferences"));
-        self.new_tab_page = prefs.and_then(|p| crate::webstore::new_tab_override(&self.paths.extensions, &p));
-        self.new_tab_page.clone().unwrap_or_else(|| ui::NEWTAB_URL.into())
+        // ponytail: no extension New Tab override — Ladybird cannot load chrome-extension://
+        // pages, so the override opened every new tab blank. Bring it back with a host that
+        // serves extension pages.
+        self.new_tab_page = None;
+        ui::NEWTAB_URL.into()
     }
 
     /// A new tab as the settings ask: which page, and where in the strip.

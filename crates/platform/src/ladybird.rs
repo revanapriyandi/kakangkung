@@ -154,7 +154,16 @@ impl Host {
 
     /// Spawn the host for `profile_dir`. `parent_hwnd` is the HWND to parent page surfaces into (0 = none).
     pub fn spawn(host: &Path, profile_dir: &Path, parent_hwnd: usize) -> Result<Self, String> {
-        let mut child = Command::new(host)
+        let mut cmd = Command::new(host);
+        // The host is a console program: without this Windows opens a console window for it
+        // in front of the browser. Its stdio is piped, so nothing needs the console.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        let mut child = cmd
             .arg("--profile")
             .arg(profile_dir)
             .arg("--parent")

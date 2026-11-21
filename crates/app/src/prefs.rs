@@ -425,7 +425,13 @@ impl Prefs {
             startup: s.setting("startup").unwrap_or_else(|| "newtab".into()),
             startup_pages,
             downloads,
-            session: session.into_iter().filter(|u| storage::storable(u) || u.starts_with(ui::INTERNAL)).collect(),
+            session: session
+                .into_iter()
+                // Extension pages (an old New Tab override) cannot load in Ladybird: reopen as
+                // New Tab instead of a blank tab, keeping the tab order and the active index.
+                .map(|u| if u.starts_with("chrome-extension://") { ui::NEWTAB_URL.to_string() } else { u })
+                .filter(|u| storage::storable(u) || u.starts_with(ui::INTERNAL))
+                .collect(),
             session_active: s.setting("session.active").and_then(|v| v.parse().ok()).unwrap_or(0),
             settings: Settings::read(|k| s.setting(k)),
             account: account(s).map(|a| a.0).unwrap_or_default(),
