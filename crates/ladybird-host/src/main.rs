@@ -363,7 +363,22 @@ fn main() {
             }
             continue;
         }
+        // Anything else (adblock, permissions_*, zoom, find, processes, clear_data, download…)
+        // needs LibWeb. Answer at once: Kakangkung blocks its UI thread up to 8 s per unanswered
+        // command, which froze start-up for 16 s on adblock + permissions alone.
+        if let Some(reply) = unsupported_reply(&line) {
+            emit(&reply);
+        }
     }
+}
+
+/// The `ok:false` answer to a command the stub cannot do, named like the event Kakangkung waits
+/// for (the command name; `download` is answered by `download_started`).
+fn unsupported_reply(line: &str) -> Option<String> {
+    let cmd = field_str(line, "cmd")?;
+    let event = if cmd == "download" { "download_started".to_string() } else { json_escape(&cmd) };
+    let id = field_int(line, "id").map(|id| format!(r#","id":{id}"#)).unwrap_or_default();
+    Some(format!(r#"{{"event":"{event}"{id},"ok":false,"reason":"requires LibWeb-linked host"}}"#))
 }
 
 #[cfg(test)]
@@ -382,5 +397,19 @@ mod tests {
         assert!(has_cmd(line, "navigate"));
         assert_eq!(field_int(line, "id"), Some(3));
         assert_eq!(field_str(line, "url").as_deref(), Some("https://example.com/x"));
+    }
+
+    #[test]
+    fn unsupported_commands_are_answered_at_once() {
+        assert_eq!(
+            unsupported_reply(r#"{"cmd":"adblock","enabled":true}"#).as_deref(),
+            Some(r#"{"event":"adblock","ok":false,"reason":"requires LibWeb-linked host"}"#)
+        );
+        assert_eq!(
+            unsupported_reply(r#"{"cmd":"zoom","id":2,"factor":1.1}"#).as_deref(),
+            Some(r#"{"event":"zoom","id":2,"ok":false,"reason":"requires LibWeb-linked host"}"#)
+        );
+        assert!(unsupported_reply(r#"{"cmd":"download","url":"https://e/x"}"#).unwrap().starts_with(r#"{"event":"download_started""#));
+        assert_eq!(unsupported_reply("not json"), None);
     }
 }
