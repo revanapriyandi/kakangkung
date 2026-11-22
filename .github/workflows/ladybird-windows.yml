@@ -51,13 +51,13 @@ jobs:
     steps:
       # Ladybird at the workspace root: its setup / cache actions expect that.
       - name: Checkout Ladybird
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: LadybirdBrowser/ladybird
           ref: ${{ env.LADYBIRD_REF }}
 
       - name: Checkout Kakangkung
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: kakangkung
 
@@ -214,7 +214,7 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
 
       - name: Build Kakangkung
