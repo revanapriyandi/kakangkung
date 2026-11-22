@@ -521,6 +521,15 @@ static ErrorOr<Core::AnonymousBuffer> load_theme()
 
 } // namespace
 
+bool initialize_libweb()
+{
+    if (auto result = ensure_application(); result.is_error()) {
+        warnln("Kakangkung LibWeb Application failed: {}", result.error());
+        return false;
+    }
+    return true;
+}
+
 struct View::LibWeb {
     OwnPtr<LibWebSurface> surface;
 };

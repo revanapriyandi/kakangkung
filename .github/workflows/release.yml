@@ -15,6 +15,8 @@ on:
 
 permissions:
   contents: write
+  # Download the LibWeb runtime artifact of the Ladybird runtime workflow.
+  actions: read
 
 jobs:
   build:
@@ -58,23 +60,36 @@ jobs:
         # KB-38: page engine host must ship beside kakangkung.exe (v0.4.4 was ~5 MB exe-only).
         run: cargo build --release --locked --target ${{ matrix.target }} -p app -p ladybird-host
 
-      # Optional: Windows Lagom/LibWeb runtime archive (Boat or offline build). Without it the
-      # Rust host still ships so tabs are not host-missing; full LibWeb needs this URL.
-      - name: Fetch Ladybird runtime (optional)
+      # Required: the LibWeb runtime (host + Lagom DLLs + WebContent… + share/Lagom) from the
+      # latest green "Ladybird runtime (Windows)" run on main. No runtime, no release: a package
+      # with only the stub host installs a browser that cannot show web pages.
+      # The x64 runtime also goes into the arm64 package (Windows on ARM runs it emulated).
+      - name: Fetch LibWeb runtime
         shell: pwsh
         env:
+          GH_TOKEN: ${{ github.token }}
           LADYBIRD_RUNTIME_URL: ${{ secrets.LADYBIRD_RUNTIME_URL }}
         run: |
-          if (-not $env:LADYBIRD_RUNTIME_URL) {
-            'No LADYBIRD_RUNTIME_URL secret — packaging host only (see docs/RELEASING.md KB-38).'
-            return
-          }
-          $zip = Join-Path $env:RUNNER_TEMP 'ladybird-runtime.zip'
           $out = Join-Path $env:RUNNER_TEMP 'ladybird-runtime'
-          Invoke-WebRequest -Uri $env:LADYBIRD_RUNTIME_URL -OutFile $zip
+          $zip = Join-Path $env:RUNNER_TEMP 'ladybird-runtime-windows-x64.zip'
+          if ($env:LADYBIRD_RUNTIME_URL) {
+            Invoke-WebRequest -Uri $env:LADYBIRD_RUNTIME_URL -OutFile $zip
+          } else {
+            $run = gh run list --repo $env:GITHUB_REPOSITORY --workflow ladybird-windows.yml --branch main `
+              --status success --limit 1 --json databaseId --jq '.[0].databaseId'
+            if (-not $run) { throw 'No green "Ladybird runtime (Windows)" run on main: build the LibWeb runtime first.' }
+            "LibWeb runtime from run $run"
+            gh run download $run --repo $env:GITHUB_REPOSITORY --name ladybird-runtime-windows-x64 --dir $env:RUNNER_TEMP
+            if ($LASTEXITCODE) { throw "downloading the runtime of run $run failed" }
+          }
           Expand-Archive -Path $zip -DestinationPath $out -Force
+          $hostExe = Join-Path $out 'bin\kakangkung-ladybird-host.exe'
+          if (-not (Test-Path $hostExe)) { throw "runtime has no LibWeb host: $hostExe" }
+          if (-not (Test-Path (Join-Path $out 'bin\WebContent.exe'))) { throw 'runtime has no WebContent.exe' }
+          $mb = [math]::Round((Get-ChildItem -Recurse -File $out | Measure-Object Length -Sum).Sum / 1MB)
+          if ($mb -lt 50) { throw "runtime is only $mb MB: not a full LibWeb build" }
+          "LibWeb runtime: $mb MB"
           "LADYBIRD_RUNTIME_DIR=$out" | Out-File -Append $env:GITHUB_ENV
-          Get-ChildItem -Recurse $out | Select-Object -First 20 FullName
 
       - name: Bundle Ladybird into bin dir
         shell: pwsh
@@ -108,10 +123,32 @@ jobs:
           Get-Item "dist\Kakangkung-$env:VERSION-${{ matrix.arch }}.zip" |
             ForEach-Object { "$($_.Name)  $([math]::Round($_.Length / 1MB, 1)) MB" }
 
+      # A package without the LibWeb runtime is a few MB; refuse anything that small.
+      - name: Package sizes
+        shell: pwsh
+        run: |
+          foreach ($f in Get-ChildItem dist -File) {
+            $mb = [math]::Round($f.Length / 1MB, 1)
+            "$($f.Name)  $mb MB"
+            if ($f.Extension -in '.exe', '.zip' -and $mb -lt 50) { throw "$($f.Name) is only $mb MB: the LibWeb runtime is missing" }
+          }
+
+      # Installs the setup, runs the installed Kakangkung through the LibWeb smoke test (no console
+      # window, self-test green, LibWeb host used), then uninstalls it.
       - name: Installer smoke test
         if: matrix.arch == 'x64'
         shell: pwsh
-        run: ./installer/smoke-test.ps1 -Setup "dist\Kakangkung-Setup-$env:VERSION-x64.exe"
+        run: ./installer/smoke-test.ps1 -Setup "dist\Kakangkung-Setup-$env:VERSION-x64.exe" -RequireLibWeb
+
+      - name: Smoke test screenshots
+        if: always() && matrix.arch == 'x64'
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-smoke-x64
+          path: |
+            ${{ runner.temp }}/shots
+            ${{ runner.temp }}/kakangkung-stderr.log
+          if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v7
         with:

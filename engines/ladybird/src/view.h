@@ -11,6 +11,12 @@ namespace kakangkung::ladybird {
 
 class Session;
 
+/// Create LibWeb's Application (event loop, RequestServer, ImageDecoder, content blocker…).
+/// Called when the session starts, before the host reports `ready`: the first commands
+/// (adblock, permissions) need it, and before it there is no event loop to pump.
+/// Only defined with HAVE_LADYBIRD.
+bool initialize_libweb();
+
 /// Page view. With HAVE_LADYBIRD this wraps LibWeb (`HeadlessWebView` + native surface paint).
 /// Without it, stub_page.cpp paints an explanatory surface (build-only fallback, not product).
 class View {

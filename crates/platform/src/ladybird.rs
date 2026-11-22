@@ -201,7 +201,9 @@ impl Host {
             lines: rx,
             engine_id: String::new(),
         };
-        let line = this.read_line_timeout(HOST_WAIT)?;
+        // The LibWeb host starts its Application (RequestServer, ImageDecoder…) before `ready`;
+        // a cold first start on a slow PC can take longer than one command wait.
+        let line = this.read_line_timeout(Duration::from_secs(30))?;
         this.engine_id = if line.contains("\"engine\":\"ladybird\"") {
             "ladybird".into()
         } else if line.contains("\"engine\":\"stub\"") {
