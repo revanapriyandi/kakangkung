@@ -100,11 +100,27 @@ jobs:
 
       - name: Configure
         run: |
+          # LADYBIRD_BASELINE_CPU_TARGET: x86-64-v2 for C++ and Rust. Without it Ladybird builds
+          # with -march=native / -Ctarget-cpu=native, i.e. for the runner's CPU, and the runtime can
+          # die with "illegal instruction" on users' PCs. (ENABLE_CI_BASELINE_CPU is its old name.)
+          # No /Zi: ccache cannot cache compiles that write a PDB (all 2726 were uncacheable);
+          # Ladybird adds /Z7 itself.
           cmake --preset Release -B Build `
-            -DENABLE_CI_BASELINE_CPU=ON `
+            -DLADYBIRD_BASELINE_CPU_TARGET=ON `
+            -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded `
+            "-DCMAKE_C_FLAGS_RELWITHDEBINFO=/O2 /Ob1 /DNDEBUG" `
+            "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=/O2 /Ob1 /DNDEBUG" `
             -DENABLE_TESTS=OFF `
             -DBUILD_TESTING=OFF `
             -DENABLE_LAGOM_TESTS=OFF
+
+      # A runtime built for the runner's CPU must never ship: fail before the 2-hour build.
+      - name: Check CPU baseline
+        run: |
+          $cmds = ninja -C Build -t commands | Out-String
+          if ($cmds -match 'march=native|target-cpu=native') { throw 'build targets the runner CPU (-march=native): set LADYBIRD_BASELINE_CPU_TARGET' }
+          if ($cmds -notmatch 'march=x86-64-v2') { throw 'no -march=x86-64-v2 in the build commands' }
+          'CPU baseline: x86-64-v2'
 
       # -k 0: keep building Ladybird when the host fails, so the compiler cache holds all of
       # Ladybird and the next run only rebuilds the host.
