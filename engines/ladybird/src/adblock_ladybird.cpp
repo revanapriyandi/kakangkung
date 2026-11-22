@@ -13,6 +13,7 @@
 #include <AK/StringView.h>
 #include <AK/Vector.h>
 #include <LibCore/File.h>
+#include <LibWebView/Application.h>
 
 #if __has_include(<LibWeb/Loader/ContentBlocker.h>)
 #    include <LibWeb/Loader/ContentBlocker.h>
@@ -132,6 +133,10 @@ void ensure_domains_locked()
 bool apply_locked()
 {
     ensure_domains_locked();
+    // Before LibWeb is up there is no content blocker to talk to: keep the setting; it is
+    // applied when the Application starts (ensure_application).
+    if (!WebView::Application::is_initialized())
+        return true;
 #if defined(KK_HAS_CONTENT_BLOCKER)
     StringBuilder builder;
     if (g_enabled) {
