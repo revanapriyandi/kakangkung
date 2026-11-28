@@ -184,21 +184,21 @@ jobs:
 
       - name: Save ccache
         if: always() && steps.cache-restore.outcome == 'success'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ${{ steps.cache-restore.outputs.ccache_primary_key }}
 
       - name: Save sccache
         if: always() && steps.cache-restore.outcome == 'success'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: ${{ steps.cache-restore.outputs.sccache_primary_key }}
 
       - name: Save vcpkg binary cache
         if: always() && steps.cache-restore.outcome == 'success' && steps.cache-restore.outputs.vcpkg_cache_primary_key != ''
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ${{ github.workspace }}/Build/caches/vcpkg-binary-cache
           key: ${{ steps.cache-restore.outputs.vcpkg_cache_primary_key }}
